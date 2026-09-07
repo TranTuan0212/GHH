@@ -377,13 +377,59 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     groupedItems[idx].push(entry);
   });
 
-  // Chia bài vòng tuần tự từ thanh input trên cùng
+  // Nhóm đang được chọn / đang focus để nhập bài
+  const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
+
+  // Tính toán thông minh nhóm tiếp theo cần chia bài (không bao giờ trỏ vào nhóm đã xong/đã đủ 5 lá/đã dằn/quắc)
+  const computedNextGroup = (() => {
+    const maxInitial = gameMode === '3cards' ? 3 : 2;
+
+    // 1. Chia vòng ban đầu (Lá 1 cho N1..N, sau đó Lá 2 cho N1..N,...)
+    for (let round = 0; round < maxInitial; round++) {
+      for (let g = 1; g <= numGroups; g++) {
+        const count = (groupedItems[g] || []).length;
+        if (count === round) {
+          return g;
+        }
+      }
+    }
+
+    // 2. Giai đoạn Bọt (Sau khi mọi người đã có >= 2 lá trong Xì Lát):
+    // Tìm nhóm tiếp theo còn có thể rút bài (chưa đủ 5 lá, chưa Quắc, chưa Ngũ Linh, chưa Dằn)
+    for (let g = 1; g <= numGroups; g++) {
+      const count = (groupedItems[g] || []).length;
+      const isStoodPat = danGroups[g] || false;
+      if (count < 5 && !isStoodPat) {
+        if (gameMode === '2cards') {
+          const ev = evaluate2Cards(groupedItems[g] || [], isStoodPat);
+          // Nếu đã Xì Bàng, Xì Lát, Quắc, Ngũ Linh thì nhóm này đã chốt, bỏ qua
+          if (ev.status !== 'xibang' && ev.status !== 'xilat' && ev.status !== 'quac' && ev.status !== 'ngulinh') {
+            return g;
+          }
+        } else {
+          return g;
+        }
+      }
+    }
+
+    return 1;
+  })();
+
+  // Nhóm mục tiêu thực tế (Viền xanh đi theo chỗ nhập/focus của user, nếu không thì theo thứ tự chia bài thông minh)
+  const currentTargetGroup = activeGroupId !== null ? activeGroupId : computedNextGroup;
+  const targetGroupAll = groupedItems[currentTargetGroup] || [];
+  const maxInitialCards = gameMode === '3cards' ? 3 : 2;
+
+  // Chia bài từ thanh input trên cùng
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualInput.trim()) return;
-    onAddCard(manualInput.trim(), numGroups);
-    showToast(`✨ Đã chia lá "${manualInput.trim()}"`);
+    const target = currentTargetGroup;
+    onAddCard(manualInput.trim(), numGroups, target);
+    const gName = groupNames[target] || `Nhóm ${target}`;
+    showToast(`✨ Đã chia lá "${manualInput.trim()}" vào ${gName}`);
     setManualInput('');
+    setActiveGroupId(null);
   };
 
   // Thao tác Bọt riêng cho từng nhóm
@@ -397,6 +443,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     if (val === manualInput.trim()) {
       setManualInput('');
     }
+    setActiveGroupId(null);
   };
 
   // Toggle trạng thái Dằn bài của nhóm
@@ -477,12 +524,6 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       }
     });
   };
-
-  // Dự đoán lượt chia vòng kế tiếp
-  const nextSequenceOrder = entries.length + 1;
-  const nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
-  const targetGroupAll = groupedItems[nextGroupIndex] || [];
-  const maxInitialCards = gameMode === '3cards' ? 3 : 2;
 
   return (
     <div className="glass-panel rounded-2xl p-2.5 sm:p-3.5 border border-indigo-500/20 space-y-2.5 flex flex-col justify-between relative">
@@ -623,6 +664,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           <input
             type="text"
             value={manualInput}
+            onFocus={() => setActiveGroupId(null)}
             onChange={(e) => setManualInput(e.target.value)}
             placeholder="Nhập mã hoặc chọn lá: 8, 9, K, A, 10..."
             className="w-full bg-transparent text-white font-mono text-xs focus:outline-none placeholder:text-slate-500 truncate"
@@ -642,7 +684,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         <div className="flex items-center space-x-1 pl-1.5 pr-0.5 border-l border-white/10 text-[11px] flex-shrink-0 font-mono">
           <span className="text-slate-400 text-[10px] hidden sm:inline">Kế tiếp:</span>
           <span className="px-1.5 py-0.5 rounded font-bold border text-[10px] sm:text-[11px] flex items-center space-x-1 bg-indigo-600/40 text-indigo-200 border-indigo-500/40">
-            <span>N{nextGroupIndex}</span>
+            <span>N{currentTargetGroup}</span>
             <span className="text-[9px] font-normal opacity-90">
               (Lá {targetGroupAll.length + 1}/{maxInitialCards})
             </span>
@@ -702,7 +744,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           const groupNum = idx + 1;
           const allItemsInGroup = groupedItems[groupNum] || [];
           const customName = groupNames[groupNum] || `Nhóm ${groupNum}`;
-          const isNextTarget = groupNum === nextGroupIndex;
+          const isNextTarget = groupNum === currentTargetGroup;
           const isStoodPat = danGroups[groupNum] || false;
 
           // Mobile filter check
@@ -723,12 +765,13 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           return (
             <div
               key={groupNum}
-              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden ${
+              onClick={() => setActiveGroupId(groupNum)}
+              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden cursor-pointer ${
                 isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
-                  ? 'bg-indigo-950/45 border-indigo-500 shadow-indigo-500/10 ring-1 ring-indigo-500/30'
-                  : 'bg-slate-900/70 border-white/5 hover:border-white/10'
+                  ? 'bg-indigo-950/45 border-indigo-500 shadow-indigo-500/20 ring-2 ring-indigo-500/60'
+                  : 'bg-slate-900/70 border-white/5 hover:border-white/15'
               }`}
             >
               <div>
@@ -745,7 +788,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
                     {/* Inline Edit Group Name */}
                     {editingGroupId === groupNum ? (
-                      <div className="flex items-center space-x-1 min-w-0 flex-1">
+                      <div className="flex items-center space-x-1 min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="text"
                           value={tempGroupName}
@@ -767,11 +810,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                       </div>
                     ) : (
                       <div
-                        onClick={() => startEditGroupName(groupNum)}
-                        className="flex items-center space-x-1 cursor-pointer group min-w-0 truncate"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEditGroupName(groupNum);
+                        }}
+                        className="flex items-center space-x-1 cursor-pointer group min-w-0"
                         title="Bấm để đổi tên nhóm"
                       >
-                        <h3 className="font-bold text-xs text-slate-100 truncate group-hover:text-amber-300 transition-colors">
+                        <h3 className="font-bold text-xs text-slate-100 whitespace-nowrap group-hover:text-amber-300 transition-colors">
                           {customName}
                         </h3>
                         <Edit2 className="w-2.5 h-2.5 text-slate-500 group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
@@ -837,11 +883,24 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               {/* Action Bar riêng cho từng nhóm: Bố cục 2 hàng cực kỳ gọn gàng, không bao giờ tràn */}
               <div className="mt-2.5 pt-2 border-t border-white/10 space-y-1.5">
                 {/* Hàng 1: Ô Điền full-width */}
-                <div className="flex items-center bg-slate-950 px-2 py-1 rounded-xl border border-white/10 w-full focus-within:border-amber-400/60 transition-all">
-                  <span className="text-[11px] text-slate-400 mr-1.5 font-mono flex-shrink-0 font-bold">Điền:</span>
+                <div
+                  className={`flex items-center bg-slate-950 px-2.5 py-1.5 rounded-xl border w-full transition-all ${
+                    isNextTarget
+                      ? 'border-indigo-500 ring-2 ring-indigo-500/50 shadow-md shadow-indigo-500/20'
+                      : 'border-white/10 hover:border-white/20'
+                  }`}
+                >
+                  <span
+                    className={`text-[11px] mr-1.5 font-mono flex-shrink-0 font-bold ${
+                      isNextTarget ? 'text-indigo-300' : 'text-slate-400'
+                    }`}
+                  >
+                    Điền:
+                  </span>
                   <input
                     type="text"
                     value={groupBotInputs[groupNum] || ''}
+                    onFocus={() => setActiveGroupId(groupNum)}
                     onChange={(e) =>
                       setGroupBotInputs((prev) => ({ ...prev, [groupNum]: e.target.value }))
                     }
