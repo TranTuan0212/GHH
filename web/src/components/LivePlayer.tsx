@@ -22,7 +22,8 @@ import {
   RotateCw,
   Type,
   Plus,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -100,6 +101,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   });
   const [isTextOverlayOpen, setIsTextOverlayOpen] = useState(false);
+  const [newTextContent, setNewTextContent] = useState<string>('');
+  const [newTextColor, setNewTextColor] = useState<string>('#fbbf24');
+  const [newTextSize, setNewTextSize] = useState<number>(20);
 
   // Save overlays to localStorage
   useEffect(() => {
@@ -116,19 +120,24 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     } catch {}
   }, [roomId]);
 
-  // Add new text overlay
-  const handleAddTextOverlay = () => {
+  // Add new text overlay from input
+  const handleAddTextOverlay = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const textToAdd = newTextContent.trim();
+    if (!textToAdd) return;
+
     const newId = 'txt-' + Date.now();
     const newOverlay: TextOverlay = {
       id: newId,
-      text: 'CHỮ MỚI',
-      x: 10 + (textOverlays.length * 5) % 50,
-      y: 15 + (textOverlays.length * 8) % 60,
-      color: '#fbbf24', // Amber
-      fontSize: 18,
+      text: textToAdd,
+      x: 18 + (textOverlays.length * 6) % 50,
+      y: 18 + (textOverlays.length * 8) % 50,
+      color: newTextColor,
+      fontSize: newTextSize,
       bgColor: 'rgba(0,0,0,0.65)'
     };
     setTextOverlays((prev) => [...prev, newOverlay]);
+    setNewTextContent('');
   };
 
   const handleUpdateTextOverlay = (id: string, updates: Partial<TextOverlay>) => {
@@ -682,85 +691,134 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </div>
       </div>
 
-      {/* Text Overlay Drawer / Panel */}
+      {/* Modal Popup Chèn Chữ Lên Video */}
       {isTextOverlayOpen && (
-        <div className="p-3 bg-slate-950/95 border-t border-amber-500/30 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <Type className="w-4 h-4 text-amber-400" />
-              <span className="text-xs font-bold text-slate-200">Quản Lý Chữ Trên Video</span>
-              <span className="text-[11px] text-slate-400 italic">
-                (Kéo thả chữ trực tiếp trên khung hình video để di chuyển)
-              </span>
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 animate-fadeIn">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-4 space-y-3.5 shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+              <div className="flex items-center space-x-2">
+                <Type className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="font-bold text-sm text-white">Chèn Chữ Lên Video</h3>
+                  <p className="text-[11px] text-slate-400">Nhập chữ, chọn màu & kéo thả vị trí trên video</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTextOverlayOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onClick={handleAddTextOverlay}
-              className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center space-x-1 shadow-sm transition-all"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Thêm Chữ Mới</span>
-            </button>
-          </div>
 
-          {textOverlays.length === 0 ? (
-            <p className="text-xs text-slate-500 py-1">Chưa có chữ nào được chèn. Bấm "Thêm Chữ Mới" để tạo chữ chèn lên video.</p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {textOverlays.map((item, idx) => (
-                <div
-                  key={item.id}
-                  className="bg-slate-900 border border-white/10 p-2 rounded-xl flex flex-col space-y-1.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-slate-400 font-bold">Chữ #{idx + 1}</span>
+            {/* Input Form: Nhập chữ để thêm trực tiếp */}
+            <form onSubmit={handleAddTextOverlay} className="space-y-2.5 bg-slate-950/80 p-3 rounded-xl border border-white/10">
+              <div>
+                <label className="text-xs font-bold text-slate-200 block mb-1">
+                  Nội dung chữ muốn hiển thị:
+                </label>
+                <input
+                  type="text"
+                  value={newTextContent}
+                  onChange={(e) => setNewTextContent(e.target.value)}
+                  placeholder="Nhập chữ cần chèn (VD: BÀN 1, XÌ DÁCH, SLOW-MO...)"
+                  autoFocus
+                  className="w-full bg-slate-900 text-white font-mono text-sm px-3 py-2 rounded-xl border border-amber-500/40 focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {/* Color picker & Size */}
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <div className="flex items-center space-x-1.5">
+                  <span className="text-[11px] text-slate-400 font-medium">Màu:</span>
+                  {['#fbbf24', '#ef4444', '#22c55e', '#ffffff', '#38bdf8'].map((c) => (
                     <button
+                      key={c}
+                      type="button"
+                      onClick={() => setNewTextColor(c)}
+                      className={`w-6 h-6 rounded-full border transition-all ${
+                        newTextColor === c ? 'ring-2 ring-white scale-110' : 'border-black/50 hover:scale-105'
+                      }`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+
+                <div className="flex items-center space-x-1 font-mono text-xs text-slate-300">
+                  <span>Cỡ:</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewTextSize(Math.max(12, newTextSize - 2))}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded"
+                  >
+                    -
+                  </button>
+                  <span className="font-bold text-amber-300">{newTextSize}</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewTextSize(Math.min(48, newTextSize + 2))}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Submit button */}
+              <button
+                type="submit"
+                disabled={!newTextContent.trim()}
+                className="w-full py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-xs flex items-center justify-center space-x-1.5 shadow-md shadow-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-95"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>+ Thêm Chữ Này Lên Video</span>
+              </button>
+            </form>
+
+            {/* List of existing text overlays */}
+            <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                Chữ đang hiển thị ({textOverlays.length}):
+              </div>
+              {textOverlays.length === 0 ? (
+                <p className="text-xs text-slate-500 italic py-1">Chưa có chữ nào. Nhập chữ ở ô trên rồi bấm thêm.</p>
+              ) : (
+                textOverlays.map((item, idx) => (
+                  <div key={item.id} className="flex items-center justify-between bg-slate-950 px-2.5 py-1.5 rounded-lg border border-white/10 text-xs">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
+                      <span className="font-mono font-bold text-white truncate max-w-[180px]">{item.text}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">({item.fontSize}px)</span>
+                    </div>
+                    <button
+                      type="button"
                       onClick={() => handleDeleteTextOverlay(item.id)}
-                      className="text-red-400 hover:text-red-300 p-0.5"
-                      title="Xóa chữ"
+                      className="text-red-400 hover:text-red-300 p-1"
+                      title="Xóa chữ này"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <input
-                    type="text"
-                    value={item.text}
-                    onChange={(e) => handleUpdateTextOverlay(item.id, { text: e.target.value })}
-                    className="w-full bg-slate-950 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-400"
-                    placeholder="Nội dung chữ..."
-                  />
-                  <div className="flex items-center justify-between gap-1 text-[11px]">
-                    <div className="flex items-center space-x-1">
-                      {['#fbbf24', '#ef4444', '#22c55e', '#ffffff', '#38bdf8'].map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          onClick={() => handleUpdateTextOverlay(item.id, { color: c })}
-                          className={`w-4 h-4 rounded-full border ${item.color === c ? 'ring-2 ring-white scale-110' : 'border-black/50'}`}
-                          style={{ backgroundColor: c }}
-                        />
-                      ))}
-                    </div>
-                    <div className="flex items-center space-x-1 font-mono text-[10px] text-slate-300">
-                      <span>Cỡ:</span>
-                      <button
-                        onClick={() => handleUpdateTextOverlay(item.id, { fontSize: Math.max(12, item.fontSize - 2) })}
-                        className="px-1.5 py-0.5 bg-slate-800 rounded hover:bg-slate-700"
-                      >
-                        -
-                      </button>
-                      <span>{item.fontSize}</span>
-                      <button
-                        onClick={() => handleUpdateTextOverlay(item.id, { fontSize: Math.min(48, item.fontSize + 2) })}
-                        className="px-1.5 py-0.5 bg-slate-800 rounded hover:bg-slate-700"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
-          )}
+
+            {/* Footer */}
+            <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs">
+              <span className="text-[11px] text-slate-400 italic">
+                💡 Giữ chuột hoặc chạm tay trên video để kéo thả chữ tự do
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsTextOverlayOpen(false)}
+                className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold"
+              >
+                Xong
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

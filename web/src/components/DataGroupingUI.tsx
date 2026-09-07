@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { DataEntry } from '../types';
 import {
   Trash2,
@@ -14,7 +14,8 @@ import {
   Plus,
   ShieldCheck,
   Flame,
-  Award
+  Award,
+  AlertTriangle
 } from 'lucide-react';
 
 export type GameMode = '3cards' | '2cards';
@@ -76,7 +77,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
   highlightClass: string;
 } {
   if (cards.length === 0) {
-    return { type: 'empty', label: 'Chờ chia (0 lá)', score: 0, highlightClass: 'text-slate-500 bg-slate-900/60' };
+    return { type: 'empty', label: 'Chờ chia (0 lá)', score: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
   }
   if (cards.length < 3) {
     const sum = cards.reduce((acc, c) => acc + parseCard(c.cardValue).value, 0);
@@ -84,7 +85,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
       type: 'partial',
       label: `Chờ chia (${cards.length}/3 lá)`,
       score: sum % 10,
-      highlightClass: 'text-slate-400 bg-slate-900/80 border-slate-700'
+      highlightClass: 'text-slate-400 bg-slate-900/80 border-slate-700/60'
     };
   }
 
@@ -100,7 +101,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
       type: 'sap',
       label: `Sáp ${sapRank} 👑`,
       score: 100,
-      highlightClass: 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-bold shadow-lg shadow-amber-500/30'
+      highlightClass: 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black shadow-lg shadow-amber-500/30 border-amber-300'
     };
   }
 
@@ -136,7 +137,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
       type: 'lieng',
       label: liengLabel,
       score: 80,
-      highlightClass: 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-bold shadow-md shadow-indigo-500/30'
+      highlightClass: 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-black shadow-md shadow-indigo-500/30 border-indigo-400'
     };
   }
 
@@ -175,7 +176,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   highlightClass: string;
 } {
   if (cards.length === 0) {
-    return { status: 'empty', label: 'Chờ chia (0 lá)', total: 0, highlightClass: 'text-slate-500 bg-slate-900/60' };
+    return { status: 'empty', label: 'Chờ chia (0 lá)', total: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
   }
   if (cards.length === 1) {
     const p = parseCard(cards[0].cardValue);
@@ -183,7 +184,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
       status: 'partial',
       label: `Chờ chia (1/2 lá)`,
       total: p.value,
-      highlightClass: 'text-slate-400 bg-slate-900/80 border-slate-700'
+      highlightClass: 'text-slate-400 bg-slate-900/80 border-slate-700/60'
     };
   }
 
@@ -201,7 +202,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
         status: 'xibang',
         label: `Xì Bàng 👑${danSuffix}`,
         total: 21,
-        highlightClass: 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 text-slate-950 font-black shadow-lg shadow-amber-500/40'
+        highlightClass: 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 text-slate-950 font-black shadow-lg shadow-amber-500/40 border-amber-300'
       };
     }
 
@@ -212,7 +213,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
         status: 'xilat',
         label: `Xì Lát 🔥 (21đ)${danSuffix}`,
         total: 21,
-        highlightClass: 'bg-gradient-to-r from-emerald-500 to-teal-400 text-slate-950 font-black shadow-lg shadow-emerald-500/40'
+        highlightClass: 'bg-gradient-to-r from-emerald-500 to-teal-400 text-slate-950 font-black shadow-lg shadow-emerald-500/40 border-emerald-300'
       };
     }
 
@@ -262,7 +263,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   // TRƯỜNG HỢP 2: TỪ 3 LÁ TRỞ LÊN (3, 4, hoặc 5 lá - đã bọt)
   // QUY TẮC CỐ ĐỊNH XÌ LÁT VIỆT NAM: CÂY A CHỈ TÍNH LÀ 1 ĐIỂM!
   const total = parsed.reduce((acc, p) => {
-    if (p.rank === 'A') return acc + 1; // 3 cây trở lên cây A bắt buộc tính là 1!
+    if (p.rank === 'A') return acc + 1;
     return acc + p.value;
   }, 0);
 
@@ -272,7 +273,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
       status: 'ngulinh',
       label: `Ngũ Linh 🌟 (${total}đ)${danSuffix}`,
       total,
-      highlightClass: 'bg-gradient-to-r from-purple-600 to-indigo-500 text-white font-black shadow-lg shadow-purple-500/40'
+      highlightClass: 'bg-gradient-to-r from-purple-600 to-indigo-500 text-white font-black shadow-lg shadow-purple-500/40 border-purple-400'
     };
   }
 
@@ -340,6 +341,28 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const [selectedCardForEdit, setSelectedCardForEdit] = useState<DataEntry | null>(null);
   const [editCardValue, setEditCardValue] = useState<string>('');
 
+  // Custom App Confirmation Modal (Thay thế hoàn toàn window.confirm)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    confirmColor: 'red' | 'emerald';
+    onConfirm: () => void;
+  } | null>(null);
+
+  // In-App Toast Notification (Thay thế alert local)
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<any>(null);
+
+  const showToast = (msg: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMessage(msg);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 2500);
+  };
+
   // Gom toàn bộ entries theo groupIndex
   const groupedItems: { [key: number]: DataEntry[] } = {};
   for (let i = 1; i <= numGroups; i++) {
@@ -359,6 +382,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     e.preventDefault();
     if (!manualInput.trim()) return;
     onAddCard(manualInput.trim(), numGroups);
+    showToast(`✨ Đã chia lá "${manualInput.trim()}"`);
     setManualInput('');
   };
 
@@ -367,6 +391,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     const val = (groupBotInputs[groupNum] || '').trim() || manualInput.trim();
     if (!val) return;
     onAddCard(val, numGroups, groupNum);
+    const gName = groupNames[groupNum] || `Nhóm ${groupNum}`;
+    showToast(`+ Đã bọt lá "${val}" vào ${gName}`);
     setGroupBotInputs((prev) => ({ ...prev, [groupNum]: '' }));
     if (val === manualInput.trim()) {
       setManualInput('');
@@ -375,7 +401,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   // Toggle trạng thái Dằn bài của nhóm
   const toggleDanGroup = (groupNum: number) => {
-    setDanGroups((prev) => ({ ...prev, [groupNum]: !prev[groupNum] }));
+    const nextState = !danGroups[groupNum];
+    setDanGroups((prev) => ({ ...prev, [groupNum]: nextState }));
+    const gName = groupNames[groupNum] || `Nhóm ${groupNum}`;
+    showToast(nextState ? `🛡️ ${gName} đã DẰN bài` : `🔓 ${gName} hủy dằn bài`);
   };
 
   // Bắt đầu sửa tên nhóm
@@ -388,6 +417,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const saveGroupName = (groupNum: number) => {
     if (onSetGroupNames && tempGroupName.trim()) {
       onSetGroupNames({ ...groupNames, [groupNum]: tempGroupName.trim() });
+      showToast(`✏️ Đã đổi tên thành "${tempGroupName.trim()}"`);
     }
     setEditingGroupId(null);
   };
@@ -402,6 +432,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const handleSaveEditCard = () => {
     if (selectedCardForEdit && onEditCard && editCardValue.trim()) {
       onEditCard(selectedCardForEdit.id, editCardValue.trim());
+      showToast(`🃏 Đã sửa lá bài thành "${editCardValue.trim()}"`);
       setSelectedCardForEdit(null);
     }
   };
@@ -410,8 +441,41 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const handleDeleteCurrentCard = () => {
     if (selectedCardForEdit && onDeleteCard) {
       onDeleteCard(selectedCardForEdit.id);
+      showToast(`🗑️ Đã xóa lá bài`);
       setSelectedCardForEdit(null);
     }
+  };
+
+  // Mở popup xác nhận xóa tất cả bài
+  const handleRequestClearCards = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Xóa Toàn Bộ Bài?',
+      message: 'Bạn có chắc chắn muốn xóa toàn bộ các lá bài hiện tại của phiên này không?',
+      confirmText: 'Xác Nhận Xóa',
+      confirmColor: 'red',
+      onConfirm: () => {
+        onClearCards();
+        showToast('🗑️ Đã xóa sạch toàn bộ bài');
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  // Mở popup xác nhận kết thúc phiên
+  const handleRequestFinishRound = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Kết Thúc Phiên Chơi?',
+      message: 'Hệ thống sẽ làm mới bộ nhớ DVR video và xóa bài để sẵn sàng cho phiên mới.',
+      confirmText: 'Xác Nhận Xong',
+      confirmColor: 'emerald',
+      onConfirm: () => {
+        if (onFinishRound) onFinishRound();
+        showToast('🎉 Đã hoàn tất phiên chơi');
+        setConfirmModal(null);
+      }
+    });
   };
 
   // Dự đoán lượt chia vòng kế tiếp
@@ -422,6 +486,13 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   return (
     <div className="glass-panel rounded-2xl p-2.5 sm:p-3.5 border border-indigo-500/20 space-y-2.5 flex flex-col justify-between relative">
+      {/* Toast Notification Floating Popup */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-2xl bg-slate-900/95 border border-amber-500/50 text-amber-300 text-xs sm:text-sm font-bold shadow-2xl backdrop-blur-md flex items-center space-x-2 animate-fadeIn pointer-events-none">
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* 1. Header & Quick Controls */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2">
         <div className="flex items-center space-x-2 min-w-0">
@@ -449,32 +520,33 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           {/* Undo Button */}
           {onUndoCard && entries.length > 0 && (
             <button
-              onClick={onUndoCard}
-              className="p-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-amber-300 border border-white/10 text-xs font-medium transition-all"
+              onClick={() => {
+                onUndoCard();
+                showToast('↩️ Đã hoàn tác lá bài vừa chia');
+              }}
+              className="p-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-amber-300 border border-white/10 text-xs font-medium transition-all active:scale-95"
               title="Hoàn tác: Xóa lá bài vừa chia"
             >
               <Undo2 className="w-3.5 h-3.5" />
             </button>
           )}
 
-          {/* Clear Button */}
+          {/* Clear Button (Popup Modal) */}
           <button
-            onClick={() => {
-              if (window.confirm('Bạn có chắc muốn xóa tất cả lá bài hiện tại?')) {
-                onClearCards();
-              }
-            }}
-            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-medium transition-all"
+            type="button"
+            onClick={handleRequestClearCards}
+            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-medium transition-all active:scale-95"
             title="Xóa toàn bộ danh sách hiện tại"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
 
-          {/* Finish Round Button */}
+          {/* Finish Round Button (Popup Modal) */}
           {onFinishRound && (
             <button
-              onClick={onFinishRound}
-              className="px-2 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold transition-all flex items-center space-x-1"
+              type="button"
+              onClick={handleRequestFinishRound}
+              className="px-2 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold transition-all flex items-center space-x-1 active:scale-95"
               title="Làm mới bộ nhớ và bắt đầu phiên mới"
             >
               <CheckCircle2 className="w-3 h-3" />
@@ -484,13 +556,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         </div>
       </div>
 
-      {/* 2. Mode Selector Tabs & Group Count Selector (Tăng từ 5 lên 8 nhóm) */}
+      {/* 2. Mode Selector Tabs & Group Count Selector */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 bg-slate-950/60 p-1.5 rounded-xl border border-white/5">
         {/* Game Mode Tabs */}
-        <div className="flex items-center space-x-1 bg-slate-900/80 p-0.5 rounded-lg border border-white/10">
+        <div className="grid grid-cols-2 gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-white/10 flex-1 sm:flex-initial">
           <button
+            type="button"
             onClick={() => setGameMode('3cards')}
-            className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center space-x-1 ${
+            className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
               gameMode === '3cards'
                 ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40 border border-indigo-400'
                 : 'text-slate-400 hover:text-slate-200'
@@ -500,10 +573,11 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <span>3 Lá (Liêng/Sáp)</span>
           </button>
           <button
+            type="button"
             onClick={() => setGameMode('2cards')}
-            className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center space-x-1 ${
+            className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
               gameMode === '2cards'
-                ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/40 border border-amber-400 font-extrabold'
+                ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/40 border border-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -513,7 +587,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         </div>
 
         {/* Group Count Selector: 2, 3, 4, 5, 6, 7, 8 */}
-        <div className="flex items-center space-x-1 bg-slate-900/80 px-2 py-0.5 rounded-lg border border-white/10 self-start sm:self-auto overflow-x-auto no-scrollbar">
+        <div className="flex items-center space-x-1 bg-slate-900/80 px-2 py-1 rounded-lg border border-white/10 self-stretch sm:self-auto overflow-x-auto no-scrollbar">
           <span className="text-[10px] sm:text-[11px] font-semibold text-slate-400 flex items-center pr-1 flex-shrink-0">
             <Hash className="w-3 h-3 mr-0.5 text-indigo-400" />
             Nhóm:
@@ -521,13 +595,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           {[2, 3, 4, 5, 6, 7, 8].map((count) => (
             <button
               key={count}
+              type="button"
               onClick={() => {
                 setNumGroups(count);
                 if (mobileActiveFilter !== 'all' && mobileActiveFilter > count) {
                   setMobileActiveFilter('all');
                 }
               }}
-              className={`w-5 h-5 sm:w-6 sm:h-6 rounded text-[11px] font-bold transition-all flex items-center justify-center flex-shrink-0 ${
+              className={`w-6 h-6 sm:w-6 sm:h-6 rounded text-[11px] font-bold transition-all flex items-center justify-center flex-shrink-0 ${
                 numGroups === count
                   ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
                   : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
@@ -556,9 +631,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
         <button
           type="submit"
-          className="px-2.5 py-1 rounded-lg font-bold text-xs flex items-center space-x-1 shadow transition-all active:scale-95 flex-shrink-0 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white"
+          className="px-3 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1 shadow transition-all active:scale-95 flex-shrink-0 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white"
         >
-          <Sparkles className="w-3 h-3 text-amber-300" />
+          <Sparkles className="w-3.5 h-3.5 text-amber-300" />
           <span className="hidden xs:inline">Chia Vòng</span>
           <span className="xs:hidden">Chia</span>
         </button>
@@ -578,8 +653,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       {/* 4. Mobile Tab Filter Bar */}
       <div className="flex md:hidden items-center space-x-1 overflow-x-auto no-scrollbar py-0.5">
         <button
+          type="button"
           onClick={() => setMobileActiveFilter('all')}
-          className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all flex items-center space-x-1 flex-shrink-0 ${
+          className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all flex items-center space-x-1 flex-shrink-0 ${
             mobileActiveFilter === 'all'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'bg-slate-900/60 text-slate-400 border border-white/5'
@@ -595,8 +671,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           return (
             <button
               key={gNum}
+              type="button"
               onClick={() => setMobileActiveFilter(gNum)}
-              className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all flex items-center space-x-1 flex-shrink-0 ${
+              className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all flex items-center space-x-1 flex-shrink-0 ${
                 mobileActiveFilter === gNum
                   ? 'bg-indigo-600 text-white shadow-sm'
                   : 'bg-slate-900/60 text-slate-400 border border-white/5'
@@ -609,19 +686,17 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         })}
       </div>
 
-      {/* 5. Grouped Columns Display (2 -> 8 nhóm) */}
+      {/* 5. Grouped Columns Display - Thiết kế cân đối, không bao giờ bị tràn hay lệch */}
       <div
         className={`grid ${
           numGroups === 2
-            ? 'grid-cols-1 sm:grid-cols-2'
+            ? 'grid-cols-2'
             : numGroups === 3
-            ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3'
+            ? 'grid-cols-2 sm:grid-cols-3'
             : numGroups === 4
-            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
-            : numGroups <= 6
-            ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6'
-            : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-4'
-        } gap-2`}
+            ? 'grid-cols-2 sm:grid-cols-2 xl:grid-cols-4'
+            : 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4'
+        } gap-2 sm:gap-2.5`}
       >
         {Array.from({ length: numGroups }).map((_, idx) => {
           const groupNum = idx + 1;
@@ -641,20 +716,24 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               ? evaluate3Cards(allItemsInGroup)
               : evaluate2Cards(allItemsInGroup, isStoodPat);
 
+          // Xác định số slot thẻ cần hiển thị (Ít nhất 2 lá cho Xì Lát, 3 lá cho 3 Lá)
+          const minSlots = gameMode === '3cards' ? 3 : 2;
+          const slotCount = Math.max(minSlots, allItemsInGroup.length);
+
           return (
             <div
               key={groupNum}
-              className={`rounded-xl p-2.5 transition-all border flex flex-col justify-between shadow-md relative ${
+              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden ${
                 isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
                   ? 'bg-indigo-950/45 border-indigo-500 shadow-indigo-500/10 ring-1 ring-indigo-500/30'
-                  : 'bg-slate-900/70 border-white/5'
+                  : 'bg-slate-900/70 border-white/5 hover:border-white/10'
               }`}
             >
               <div>
                 {/* Group Header: [Number] [Name / Inline Edit] [Count] */}
-                <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-1.5">
+                <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-2">
                   <div className="flex items-center space-x-1.5 min-w-0 flex-1 mr-1">
                     <span
                       className={`w-5 h-5 rounded-lg flex items-center justify-center font-bold text-[11px] flex-shrink-0 ${
@@ -706,101 +785,107 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   </span>
                 </div>
 
-                {/* List of Cards: Bấm vào bất kỳ lá nào để Sửa / Xóa */}
-                <div className="space-y-1 py-0.5 min-h-[58px]">
-                  {allItemsInGroup.length === 0 ? (
-                    <div className="flex items-center justify-center py-3 rounded-lg border border-dashed border-white/10 text-[10px] text-slate-600 font-mono select-none">
-                      Chờ chia bài...
-                    </div>
-                  ) : (
-                    allItemsInGroup.map((item, cardIdx) => {
+                {/* List of Cards: Thẻ bài hiển thị đầy đủ, không rỗng */}
+                <div className="space-y-1.5 py-0.5 min-h-[64px]">
+                  {Array.from({ length: slotCount }).map((_, slotIdx) => {
+                    const item = allItemsInGroup[slotIdx];
+                    if (item) {
                       const p = parseCard(item.cardValue);
                       return (
                         <div
-                          key={item.id || cardIdx}
+                          key={item.id || slotIdx}
                           onClick={() => openEditCardModal(item)}
-                          className="flex items-center justify-between px-2 py-1 rounded-lg bg-slate-800/90 border border-white/10 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group"
+                          className="flex items-center justify-between px-2 py-1.5 rounded-xl bg-slate-800/90 border border-white/10 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm"
                           title="Bấm vào lá bài để sửa hoặc xóa"
                         >
                           <div className="flex items-center space-x-1.5 min-w-0">
-                            <span className="text-[9px] font-mono text-slate-400 w-3.5">
-                              L{cardIdx + 1}
+                            <span className="text-[10px] font-mono text-slate-400 w-4">
+                              L{slotIdx + 1}
                             </span>
-                            <span className="font-bold font-mono text-white tracking-wide truncate group-hover:text-amber-300">
+                            <span className="font-black font-mono text-white text-sm tracking-wide truncate group-hover:text-amber-300">
                               {item.cardValue}
                             </span>
-                            <span className="text-[8px] font-mono text-slate-500">
+                            <span className="text-[9px] font-mono text-slate-500">
                               #{item.sequenceOrder}
                             </span>
                           </div>
 
                           <div className="flex items-center space-x-1 flex-shrink-0">
                             {p.value > 0 && (
-                              <span className="text-[9px] font-mono text-amber-300 px-1 py-0.2 rounded bg-slate-900/80 border border-white/5">
+                              <span className="text-[10px] font-mono font-bold text-amber-300 px-1.5 py-0.2 rounded bg-slate-900 border border-white/5">
                                 +{p.value}
                               </span>
                             )}
-                            <Edit2 className="w-2.5 h-2.5 text-slate-500 group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
                       );
-                    })
-                  )}
+                    } else {
+                      return (
+                        <div
+                          key={`empty-${slotIdx}`}
+                          className="flex items-center justify-center py-2 rounded-xl border border-dashed border-white/10 text-[11px] text-slate-500 font-mono select-none"
+                        >
+                          Lá {slotIdx + 1}
+                        </div>
+                      );
+                    }
+                  })}
                 </div>
               </div>
 
-              {/* Action Bar riêng cho từng nhóm: [Điền: ( )] [+ Bọt] [Dằn] */}
-              <div className="mt-2 pt-2 border-t border-white/10 space-y-1.5">
-                <div className="flex items-center space-x-1">
-                  <div className="flex-1 flex items-center bg-slate-950 px-1.5 py-0.5 rounded-lg border border-white/10">
-                    <span className="text-[10px] text-slate-400 mr-1 font-mono">Điền:</span>
-                    <input
-                      type="text"
-                      value={groupBotInputs[groupNum] || ''}
-                      onChange={(e) =>
-                        setGroupBotInputs((prev) => ({ ...prev, [groupNum]: e.target.value }))
+              {/* Action Bar riêng cho từng nhóm: Bố cục 2 hàng cực kỳ gọn gàng, không bao giờ tràn */}
+              <div className="mt-2.5 pt-2 border-t border-white/10 space-y-1.5">
+                {/* Hàng 1: Ô Điền full-width */}
+                <div className="flex items-center bg-slate-950 px-2 py-1 rounded-xl border border-white/10 w-full focus-within:border-amber-400/60 transition-all">
+                  <span className="text-[11px] text-slate-400 mr-1.5 font-mono flex-shrink-0 font-bold">Điền:</span>
+                  <input
+                    type="text"
+                    value={groupBotInputs[groupNum] || ''}
+                    onChange={(e) =>
+                      setGroupBotInputs((prev) => ({ ...prev, [groupNum]: e.target.value }))
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleBotSubmit(groupNum);
                       }
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleBotSubmit(groupNum);
-                        }
-                      }}
-                      placeholder="8, A..."
-                      className="w-full bg-transparent text-white font-mono text-xs focus:outline-none placeholder:text-slate-600"
-                    />
-                  </div>
+                    }}
+                    placeholder="8, 9, K, A..."
+                    className="w-full bg-transparent text-white font-mono text-xs focus:outline-none min-w-0 placeholder:text-slate-600"
+                  />
+                </div>
 
-                  {/* Nút + Bọt (Màu vàng rực rỡ theo yêu cầu) */}
+                {/* Hàng 2: Hai nút cân đối 50-50 (+ Bọt & Dằn) */}
+                <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleBotSubmit(groupNum)}
-                    className="px-2 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center space-x-0.5 shadow-sm transition-all active:scale-95 flex-shrink-0"
+                    className="w-full py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center justify-center space-x-1 shadow-sm transition-all active:scale-95"
                     title={`Rút thêm bài (Bọt) vào ${customName}`}
                   >
-                    <Plus className="w-3 h-3 stroke-[3]" />
+                    <Plus className="w-3.5 h-3.5 stroke-[3]" />
                     <span>Bọt</span>
                   </button>
 
-                  {/* Nút Dằn */}
                   <button
                     type="button"
                     onClick={() => toggleDanGroup(groupNum)}
-                    className={`px-2 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-0.5 flex-shrink-0 ${
+                    className={`w-full py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1 active:scale-95 ${
                       isStoodPat
-                        ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30'
+                        ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30 font-black'
                         : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10'
                     }`}
                     title="Đánh dấu nhóm này đã dằn (không rút thêm)"
                   >
-                    <ShieldCheck className="w-3 h-3" />
+                    <ShieldCheck className="w-3.5 h-3.5" />
                     <span>{isStoodPat ? 'Đã Dằn' : 'Dằn'}</span>
                   </button>
                 </div>
 
-                {/* Kết quả nhóm (Hiển thị luật Xì Lát VN hoặc 3 Lá Liêng/Sáp) */}
+                {/* Hàng 3: Kết quả nhóm (Hiển thị luật Xì Lát VN hoặc 3 Lá Liêng/Sáp) */}
                 <div
-                  className={`w-full py-1 px-2 rounded-lg text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
+                  className={`w-full py-1.5 px-2 rounded-xl text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
                 >
                   {evalResult.label}
                 </div>
@@ -810,16 +895,17 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         })}
       </div>
 
-      {/* 6. Modal / Popover Sửa hoặc Xóa Lá Bài (Nhập sai thì sửa được ở các nhóm) */}
+      {/* 6. Modal Popup Sửa hoặc Xóa Lá Bài */}
       {selectedCardForEdit && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 max-w-sm w-full space-y-3 shadow-2xl animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 max-w-sm w-full space-y-3 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <div className="flex items-center space-x-2">
                 <Edit2 className="w-4 h-4 text-amber-400" />
                 <h3 className="font-bold text-sm text-white">Sửa / Xóa Lá Bài</h3>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedCardForEdit(null)}
                 className="text-slate-400 hover:text-white p-1"
               >
@@ -895,6 +981,51 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   <span>Lưu Sửa</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Custom App Confirmation Modal (Thay thế window.confirm local) */}
+      {confirmModal && confirmModal.isOpen && (
+        <div className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-white/20 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl text-center">
+            <div
+              className={`w-12 h-12 rounded-full mx-auto flex items-center justify-center ${
+                confirmModal.confirmColor === 'red'
+                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              }`}
+            >
+              {confirmModal.confirmColor === 'red' ? (
+                <Trash2 className="w-6 h-6" />
+              ) : (
+                <CheckCircle2 className="w-6 h-6" />
+              )}
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">{confirmModal.title}</h3>
+              <p className="text-xs text-slate-400 mt-1">{confirmModal.message}</p>
+            </div>
+            <div className="flex items-center justify-center space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all flex-1"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={confirmModal.onConfirm}
+                className={`px-4 py-2 rounded-xl text-white text-xs font-bold transition-all shadow-md flex-1 ${
+                  confirmModal.confirmColor === 'red'
+                    ? 'bg-red-600 hover:bg-red-500 shadow-red-600/30'
+                    : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'
+                }`}
+              >
+                {confirmModal.confirmText}
+              </button>
             </div>
           </div>
         </div>
