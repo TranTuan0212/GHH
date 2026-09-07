@@ -1,0 +1,291 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000012C85000100000001 /* SloMoLiveApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000012C85000100000002 /* SloMoLiveApp.swift */; };
+		A10000022C85000100000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000022C85000100000002 /* ContentView.swift */; };
+		A10000032C85000100000001 /* CameraManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000032C85000100000002 /* CameraManager.swift */; };
+		A10000042C85000100000001 /* DeviceBindingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000042C85000100000002 /* DeviceBindingManager.swift */; };
+		A10000052C85000100000001 /* LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000052C85000100000002 /* LocationManager.swift */; };
+		A10000062C85000100000001 /* NetworkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000062C85000100000002 /* NetworkManager.swift */; };
+		A10000072C85000100000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000072C85000100000002 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000002C85000100000000 /* SloMoLive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SloMoLive.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000012C85000100000002 /* SloMoLiveApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SloMoLiveApp.swift; sourceTree = "<group>"; };
+		A10000022C85000100000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A10000032C85000100000002 /* CameraManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraManager.swift; sourceTree = "<group>"; };
+		A10000042C85000100000002 /* DeviceBindingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBindingManager.swift; sourceTree = "<group>"; };
+		A10000052C85000100000002 /* LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationManager.swift; sourceTree = "<group>"; };
+		A10000062C85000100000002 /* NetworkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkManager.swift; sourceTree = "<group>"; };
+		A10000072C85000100000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A10000082C85000100000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000002C85000100000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000002C85000100000004 = {
+			isa = PBXGroup;
+			children = (
+				A10000002C85000100000005 /* SloMoLive */,
+				A10000002C85000100000006 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000002C85000100000005 /* SloMoLive */ = {
+			isa = PBXGroup;
+			children = (
+				A10000012C85000100000002 /* SloMoLiveApp.swift */,
+				A10000022C85000100000002 /* ContentView.swift */,
+				A10000032C85000100000002 /* CameraManager.swift */,
+				A10000042C85000100000002 /* DeviceBindingManager.swift */,
+				A10000052C85000100000002 /* LocationManager.swift */,
+				A10000062C85000100000002 /* NetworkManager.swift */,
+				A10000072C85000100000002 /* Assets.xcassets */,
+				A10000082C85000100000002 /* Info.plist */,
+			);
+			path = SloMoLive;
+			sourceTree = "<group>";
+		};
+		A10000002C85000100000006 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000002C85000100000000 /* SloMoLive.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000002C85000100000007 /* SloMoLive */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000002C8500010000000A /* Build configuration list for PBXNativeTarget "SloMoLive" */;
+			buildPhases = (
+				A10000002C85000100000008 /* Sources */,
+				A10000002C85000100000003 /* Frameworks */,
+				A10000002C85000100000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SloMoLive;
+			productName = SloMoLive;
+			productReference = A10000002C85000100000000 /* SloMoLive.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000002C8500010000000B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					A10000002C85000100000007 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = A10000002C8500010000000E /* Build configuration list for PBXProject "SloMoLive" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000002C85000100000004;
+			productRefGroup = A10000002C85000100000006 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000002C85000100000007 /* SloMoLive */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000002C85000100000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000072C85000100000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000002C85000100000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000012C85000100000001 /* SloMoLiveApp.swift in Sources */,
+				A10000022C85000100000001 /* ContentView.swift in Sources */,
+				A10000032C85000100000001 /* CameraManager.swift in Sources */,
+				A10000042C85000100000001 /* DeviceBindingManager.swift in Sources */,
+				A10000052C85000100000001 /* LocationManager.swift in Sources */,
+				A10000062C85000100000001 /* NetworkManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A10000002C8500010000000F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AD_HOC_CODE_SIGNING_ALLOWED = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SloMoLive/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.slomo.live;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000002C85000100000010 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AD_HOC_CODE_SIGNING_ALLOWED = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SloMoLive/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.slomo.live;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A10000002C85000100000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AD_HOC_CODE_SIGNING_ALLOWED = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A10000002C85000100000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AD_HOC_CODE_SIGNING_ALLOWED = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000002C8500010000000A /* Build configuration list for PBXNativeTarget "SloMoLive" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000002C8500010000000F /* Debug */,
+				A10000002C85000100000010 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000002C8500010000000E /* Build configuration list for PBXProject "SloMoLive" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000002C85000100000011 /* Debug */,
+				A10000002C85000100000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000002C8500010000000B /* Project object */;
+}

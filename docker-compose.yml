@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: slomo-backend
+    restart: always
+    ports:
+      - "4000:4000"
+      - "1935:1935"
+      - "8000:8000"
+    volumes:
+      - ./server/data:/app/data
+      - ./server/media:/app/media
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: slomo-web
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
