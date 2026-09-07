@@ -69,6 +69,61 @@ export function parseCard(raw: string): { rank: string; value: number } {
   return { rank: s, value: 0 };
 }
 
+// Kiểm tra tính hợp lệ của lá bài nhập vào (A, 2..10, J, Q, K)
+export function isValidCardValue(raw: string): { isValid: boolean; normalizedRank: string; value: number; error?: string } {
+  if (!raw || !raw.trim()) {
+    return { isValid: false, normalizedRank: '', value: 0, error: 'Vui lòng nhập giá trị lá bài!' };
+  }
+
+  const s = raw.trim().toUpperCase();
+
+  // Át / Ace
+  if (s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE' || s.endsWith('A') || s.includes('ACE')) {
+    return { isValid: true, normalizedRank: 'A', value: 1 };
+  }
+  // Tây / Hình người
+  if (s === 'J' || s === 'BỒI' || s === 'BOI' || s === 'JACK' || s.endsWith('J') || s.includes('BỒI')) {
+    return { isValid: true, normalizedRank: 'J', value: 10 };
+  }
+  if (s === 'Q' || s === 'ĐẦM' || s === 'DAM' || s === 'QUEEN' || s.endsWith('Q') || s.includes('ĐẦM')) {
+    return { isValid: true, normalizedRank: 'Q', value: 10 };
+  }
+  if (s === 'K' || s === 'GIÀ' || s === 'GIA' || s === 'KING' || s.endsWith('K') || s.includes('GIÀ')) {
+    return { isValid: true, normalizedRank: 'K', value: 10 };
+  }
+  if (s === '10' || s.endsWith('10')) {
+    return { isValid: true, normalizedRank: '10', value: 10 };
+  }
+
+  // Số từ 2..9 (hoặc 1 tính là A)
+  const match = s.match(/\d+/);
+  if (match) {
+    const n = parseInt(match[0], 10);
+    if (n >= 2 && n <= 9) {
+      return { isValid: true, normalizedRank: n.toString(), value: n };
+    }
+    if (n === 10) {
+      return { isValid: true, normalizedRank: '10', value: 10 };
+    }
+    if (n === 1) {
+      return { isValid: true, normalizedRank: 'A', value: 1 };
+    }
+    return {
+      isValid: false,
+      normalizedRank: '',
+      value: 0,
+      error: `Số "${n}" không hợp lệ! Lá bài chỉ có giá trị từ 2 đến 10, hoặc A, J, Q, K.`
+    };
+  }
+
+  return {
+    isValid: false,
+    normalizedRank: '',
+    value: 0,
+    error: `"${raw}" không phải lá bài hợp lệ! Vui lòng chỉ nhập: A, 2..10, J, Q, K.`
+  };
+}
+
 // Tính kết quả Chế độ 3 Lá (Liêng / Sáp)
 export function evaluate3Cards(cards: DataEntry[]): {
   type: 'empty' | 'partial' | 'sap' | 'lieng' | '3tay' | 'points';
@@ -420,27 +475,47 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const targetGroupAll = groupedItems[currentTargetGroup] || [];
   const maxInitialCards = gameMode === '3cards' ? 3 : 2;
 
+  // Validation Popup Modal khi nhập sai
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   // Chia bài từ thanh input trên cùng
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualInput.trim()) return;
+    const raw = manualInput.trim();
+    if (!raw) {
+      setValidationError('Vui lòng nhập giá trị lá bài trước khi chia!');
+      return;
+    }
+    const check = isValidCardValue(raw);
+    if (!check.isValid) {
+      setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+      return;
+    }
     const target = currentTargetGroup;
-    onAddCard(manualInput.trim(), numGroups, target);
+    onAddCard(check.normalizedRank, numGroups, target);
     const gName = groupNames[target] || `Nhóm ${target}`;
-    showToast(`✨ Đã chia lá "${manualInput.trim()}" vào ${gName}`);
+    showToast(`✨ Đã chia lá "${check.normalizedRank}" vào ${gName}`);
     setManualInput('');
     setActiveGroupId(null);
   };
 
   // Thao tác Bọt riêng cho từng nhóm
   const handleBotSubmit = (groupNum: number) => {
-    const val = (groupBotInputs[groupNum] || '').trim() || manualInput.trim();
-    if (!val) return;
-    onAddCard(val, numGroups, groupNum);
+    const raw = (groupBotInputs[groupNum] || '').trim() || manualInput.trim();
     const gName = groupNames[groupNum] || `Nhóm ${groupNum}`;
-    showToast(`+ Đã bọt lá "${val}" vào ${gName}`);
+    if (!raw) {
+      setValidationError(`Vui lòng nhập giá trị lá bài để bọt vào ${gName}!`);
+      return;
+    }
+    const check = isValidCardValue(raw);
+    if (!check.isValid) {
+      setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+      return;
+    }
+    onAddCard(check.normalizedRank, numGroups, groupNum);
+    showToast(`+ Đã bọt lá "${check.normalizedRank}" vào ${gName}`);
     setGroupBotInputs((prev) => ({ ...prev, [groupNum]: '' }));
-    if (val === manualInput.trim()) {
+    if (raw === manualInput.trim()) {
       setManualInput('');
     }
     setActiveGroupId(null);
@@ -477,11 +552,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   // Lưu sửa lá bài
   const handleSaveEditCard = () => {
-    if (selectedCardForEdit && onEditCard && editCardValue.trim()) {
-      onEditCard(selectedCardForEdit.id, editCardValue.trim());
-      showToast(`🃏 Đã sửa lá bài thành "${editCardValue.trim()}"`);
-      setSelectedCardForEdit(null);
+    if (!selectedCardForEdit || !onEditCard) return;
+    const raw = editCardValue.trim();
+    if (!raw) {
+      setValidationError('Vui lòng nhập giá trị mới cho lá bài!');
+      return;
     }
+    const check = isValidCardValue(raw);
+    if (!check.isValid) {
+      setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+      return;
+    }
+    onEditCard(selectedCardForEdit.id, check.normalizedRank);
+    showToast(`🃏 Đã sửa lá bài thành "${check.normalizedRank}"`);
+    setSelectedCardForEdit(null);
   };
 
   // Xóa lá bài
@@ -1086,6 +1170,50 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 {confirmModal.confirmText}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Validation Popup Modal (Cảnh báo khi nhập sai lá bài) */}
+      {validationError && (
+        <div className="fixed inset-0 z-[95] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl text-center">
+            <div className="w-14 h-14 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center mx-auto shadow-lg shadow-red-500/10 animate-bounce">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white tracking-wide">Lá Bài Không Hợp Lệ</h3>
+              <p className="text-xs text-red-300 mt-1.5 font-medium leading-relaxed bg-red-950/40 border border-red-500/20 p-2.5 rounded-xl">
+                {validationError}
+              </p>
+            </div>
+            <div className="bg-slate-950/90 p-3 rounded-xl border border-white/10 text-xs text-slate-300 space-y-2 text-left">
+              <p className="font-bold text-amber-300 flex items-center space-x-1">
+                <span>💡</span>
+                <span>Các lá bài hợp lệ bao gồm:</span>
+              </p>
+              <div className="flex flex-wrap gap-1.5 font-mono font-black text-xs">
+                {['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].map((c) => (
+                  <span
+                    key={c}
+                    className="px-2 py-0.5 bg-slate-800 rounded-md border border-amber-400/30 text-amber-300 shadow-sm"
+                  >
+                    {c}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-400 italic">
+                * Có thể nhập chất hoặc tên thân quen: Át, Bồi, Đầm, Già, Ace, King, 10 Bích, v.v.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setValidationError(null)}
+              autoFocus
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all active:scale-95"
+            >
+              Đã Hiểu & Nhập Lại
+            </button>
           </div>
         </div>
       )}
