@@ -183,31 +183,27 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard isStreaming else { return }
         
-        let now = CACurrentMediaTime()
-        // Đảm bảo tốc độ truyền 60fps mượt mà như TikTok, không bị nghẽn mạng và chống giật lag
-        if now - lastSentTime < (1.0 / 60.0) {
-            return
+        autoreleasepool {
+            guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            var ciImage = CIImage(cvImageBuffer: imageBuffer)
+            
+            // Tối ưu kích thước khung hình chuẩn 960x540 để truyền siêu tốc 120fps/240fps
+            let extent = ciImage.extent
+            if extent.width > 960 {
+                let scale = 960.0 / extent.width
+                ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            }
+            
+            // Nén Intra-Frame độc lập trên GPU Metal (< 1ms), chất lượng 0.5 rõ nét, chống nhòe triệt để
+            guard let jpegData = ciContext.jpegRepresentation(
+                of: ciImage,
+                colorSpace: colorSpace,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]
+            ) else { return }
+            
+            let timestamp = Date().timeIntervalSince1970
+            // Truyền trực tiếp dữ liệu nhị phân siêu tốc qua WebSocket, không bị nghẽn mạng
+            NetworkManager.shared.sendBinaryFrame(data: jpegData, timestamp: timestamp)
         }
-        lastSentTime = now
-        
-        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        var ciImage = CIImage(cvImageBuffer: imageBuffer)
-        
-        // Tối ưu kích thước khung hình chuẩn 960x540 để giảm 10 lần dung lượng gửi, truyền mượt không bị nghẽn
-        let extent = ciImage.extent
-        if extent.width > 960 {
-            let scale = 960.0 / extent.width
-            ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        }
-        
-        // Nén trực tiếp trên GPU Metal (< 1ms), dung lượng chỉ ~25KB siêu nhẹ
-        guard let jpegData = ciContext.jpegRepresentation(
-            of: ciImage,
-            colorSpace: colorSpace,
-            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.4]
-        ) else { return }
-        
-        let base64String = jpegData.base64EncodedString()
-        NetworkManager.shared.sendVideoFrame(base64Data: base64String)
     }
 }

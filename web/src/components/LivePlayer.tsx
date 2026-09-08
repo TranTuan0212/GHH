@@ -61,6 +61,24 @@ function resolveServerUrl(serverUrlFromServer?: string): string {
   return 'http://localhost:4000';
 }
 
+// Hàm xác định URL WebSocket nhị phân siêu tốc 120fps/240fps
+function getBinaryWebSocketUrl(serverUrl: string, roomId: string): string {
+  let base = serverUrl.trim();
+  if (base.startsWith('https://')) {
+    base = 'wss://' + base.slice(8);
+  } else if (base.startsWith('http://')) {
+    base = 'ws://' + base.slice(7);
+  } else {
+    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:4000';
+    base = proto + host;
+  }
+  while (base.endsWith('/')) {
+    base = base.slice(0, -1);
+  }
+  return `${base}/stream/binary?roomId=${encodeURIComponent(roomId || 'default')}&role=web`;
+}
+
 interface LivePlayerProps {
   stream: StreamSession | null;
   socket?: Socket | null;
@@ -80,25 +98,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const [currentFrame, setCurrentFrame] = useState<string | null>(null);
-  const [frameHistory, setFrameHistory] = useState<string[]>([]);
+  const [hasFrame, setHasFrame] = useState(false);
+  const hasFrameRef = useRef(false);
+  const [bufferCount, setBufferCount] = useState<number>(0);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  // Refs để đồng bộ luồng chạy Slow-Mo liên tục, không bị timer re-render hủy ngang
-  const frameHistoryRef = useRef<string[]>([]);
+  // Bộ đệm Ring Buffer lưu trữ trực tiếp ImageBitmap hoặc HTMLImageElement
+  // Render trực tiếp lên GPU Canvas trong < 0.2ms và tự động close() thu hồi VRAM chống tràn RAM
+  const frameBitmapsRef = useRef<(ImageBitmap | HTMLImageElement)[]>([]);
   const historyIndexRef = useRef<number>(-1);
   const isLiveRef = useRef<boolean>(true);
   const isPlayingRef = useRef<boolean>(true);
   const playbackRateRef = useRef<number>(1.0);
-
-  // Buffer Delay: số giây trễ so với live thực tế để đảm bảo đủ frame (hỗ trợ 120/240fps iPhone)
-  const [bufferDelaySeconds, setBufferDelaySeconds] = useState<number>(5);
-  const bufferDelayRef = useRef<number>(5);
-  // Ref lưu index đang phát khi ở Live+Delay mode
-  const delayedPlayIndexRef = useRef<number>(-1);
-  // Đang chờ tích lũy buffer lần đầu chưa
-  const [isBuffering, setIsBuffering] = useState<boolean>(false);
-  const isBufferingRef = useRef<boolean>(false);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
@@ -260,92 +271,207 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Fallback demo video stream URL if HLS server is standalone
   const defaultStreamUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
 
-  // Reset video buffer whenever switching rooms
+  // Render Frame onto Canvas with GPU Hardware Acceleration (< 0.2ms)
+  const renderFrame = (frame: ImageBitmap | HTMLImageElement) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+    const w = 'width' in frame ? frame.width : (frame as HTMLImageElement).naturalWidth;
+    const h = 'height' in frame ? frame.height : (frame as HTMLImageElement).naturalHeight;
+    if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    ctx.drawImage(frame, 0, 0);
+  };
+
+  // Đồng bộ độ dài buffer lên UI định kỳ 10Hz để seekbar mượt mà, KHÔNG re-render React 240 lần/s
   useEffect(() => {
-    frameHistoryRef.current = [];
+    const interval = setInterval(() => {
+      setBufferCount(frameBitmapsRef.current.length);
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Reset video buffer khi chuyển đổi Room
+  useEffect(() => {
+    frameBitmapsRef.current.forEach((bm) => {
+      if (bm && 'close' in bm && typeof (bm as any).close === 'function') {
+        (bm as any).close();
+      }
+    });
+    frameBitmapsRef.current = [];
     historyIndexRef.current = -1;
-    setFrameHistory([]);
+    setBufferCount(0);
     setHistoryIndex(-1);
-    setCurrentFrame(null);
     setIsLive(true);
     isLiveRef.current = true;
     setIsPlaying(true);
     isPlayingRef.current = true;
     setPlaybackRate(1.0);
     playbackRateRef.current = 1.0;
-    delayedPlayIndexRef.current = -1;
-    isBufferingRef.current = false;
-    setIsBuffering(false);
+    hasFrameRef.current = false;
+    setHasFrame(false);
   }, [roomId]);
 
-  // Listen to Realtime Video Frames from iPhone
+  // KẾT NỐI WEBSOCKET NHỊ PHÂN SIÊU TỐC (TURBO BINARY STREAM 120FPS/240FPS)
+  // Tự động nhận Binary JPEG, giải mã trên GPU bằng createImageBitmap, tự động dọn dẹp RAM
+  useEffect(() => {
+    let isMounted = true;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: any = null;
+
+    function connect() {
+      const wsUrl = getBinaryWebSocketUrl(detectedServerUrl, roomId || 'default');
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onmessage = async (e) => {
+          if (!isMounted) return;
+          if (e.data instanceof ArrayBuffer) {
+            const buf = e.data;
+            if (buf.byteLength < 16) return;
+            const view = new DataView(buf);
+            const magic = view.getUint32(0, false);
+            if (magic !== 0x534C4F4D) return; // "SLOM"
+
+            const jpegBytes = buf.slice(16);
+            try {
+              const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+              // Giải mã trực tiếp trên luồng GPU nền (không chặn JavaScript main thread)
+              const bitmap = await createImageBitmap(blob);
+              if (!isMounted) {
+                if (typeof bitmap.close === 'function') bitmap.close();
+                return;
+              }
+
+              const history = frameBitmapsRef.current;
+              history.push(bitmap);
+
+              // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 1800 frames (~15-30s Slow-Mo)
+              // Tự động gọi close() thu hồi VRAM của frame cũ nhất để chống tràn RAM tuyệt đối!
+              if (history.length > 1800) {
+                const old = history.shift();
+                if (old && 'close' in old && typeof (old as any).close === 'function') {
+                  (old as any).close();
+                }
+                if (historyIndexRef.current > 0) {
+                  historyIndexRef.current--;
+                }
+              }
+
+              if (!hasFrameRef.current) {
+                hasFrameRef.current = true;
+                setHasFrame(true);
+              }
+
+              // Nếu đang xem Live trực tiếp: hiển thị ngay frame mới nhất
+              if (isLiveRef.current) {
+                renderFrame(bitmap);
+              }
+            } catch {
+              // Bỏ qua lỗi giải mã nếu frame bị gián đoạn
+            }
+          }
+        };
+
+        ws.onclose = () => {
+          if (isMounted) reconnectTimer = setTimeout(connect, 2000);
+        };
+        ws.onerror = () => {};
+      } catch {
+        if (isMounted) reconnectTimer = setTimeout(connect, 2000);
+      }
+    }
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+    };
+  }, [detectedServerUrl, roomId]);
+
+  // Socket.IO Realtime fallback & Session lifecycle
   useEffect(() => {
     if (!socket) return;
 
     const handleNewFrame = (data: { frame: string; timestamp: number; roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
       if (data && data.frame) {
-        frameHistoryRef.current.push(data.frame);
-        if (frameHistoryRef.current.length > 3600) {
-          frameHistoryRef.current.shift();
-          if (historyIndexRef.current > 0) {
-            historyIndexRef.current -= 1;
-          }
-          if (delayedPlayIndexRef.current > 0) {
-            delayedPlayIndexRef.current -= 1;
-          }
-        }
-
-        // Cập nhật state để thanh trượt seekbar hiển thị đúng độ dài buffer
-        setFrameHistory([...frameHistoryRef.current]);
-
-        if (isLiveRef.current) {
-          const delay = bufferDelayRef.current;
-          if (delay === 0) {
-            // Không delay: hiển thị ngay frame mới nhất
-            setCurrentFrame(data.frame);
-          } else {
-            // Có delay: cần tích lũy đủ (delay * ~30fps) frame trước khi bắt đầu phát
-            const minBufferFrames = delay * 30; // ~30fps web render rate
-            const history = frameHistoryRef.current;
-
-            if (history.length < minBufferFrames) {
-              // Chưa đủ buffer: hiển thị trạng thái đang chờ
-              if (!isBufferingRef.current) {
-                isBufferingRef.current = true;
-                setIsBuffering(true);
-              }
-            } else {
-              // Đã đủ buffer: bắt đầu / tiếp tục phát frame trễ
-              if (isBufferingRef.current) {
-                isBufferingRef.current = false;
-                setIsBuffering(false);
-                // Đặt điểm bắt đầu phát là frame ở vị trí đầu buffer delay
-                delayedPlayIndexRef.current = Math.max(0, history.length - minBufferFrames);
-              }
-              // Hiển thị frame tại vị trí đã trễ (không nhảy lên frame mới nhất)
-              const displayIdx = delayedPlayIndexRef.current;
-              if (displayIdx >= 0 && displayIdx < history.length) {
-                setCurrentFrame(history[displayIdx]);
-                // Tăng index từ từ để tiếp tục phát về phía trước (đuổi theo live)
-                delayedPlayIndexRef.current = Math.min(displayIdx + 1, history.length - 1);
-              }
+        const img = new Image();
+        img.onload = () => {
+          const history = frameBitmapsRef.current;
+          history.push(img);
+          if (history.length > 1800) {
+            const old = history.shift();
+            if (old && 'close' in old && typeof (old as any).close === 'function') {
+              (old as any).close();
             }
+            if (historyIndexRef.current > 0) historyIndexRef.current--;
           }
-        }
+          if (!hasFrameRef.current) {
+            hasFrameRef.current = true;
+            setHasFrame(true);
+          }
+          if (isLiveRef.current) {
+            renderFrame(img);
+          }
+        };
+        img.src = data.frame;
       }
     };
 
+    const handleBinaryFrame = async (buf: any) => {
+      if (!buf) return;
+      const arrayBuffer = buf instanceof ArrayBuffer ? buf : (buf.buffer ? buf.buffer : null);
+      if (!arrayBuffer || arrayBuffer.byteLength < 16) return;
+      const view = new DataView(arrayBuffer);
+      if (view.getUint32(0, false) !== 0x534C4F4D) return;
+      const jpegBytes = arrayBuffer.slice(16);
+      try {
+        const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+        const bitmap = await createImageBitmap(blob);
+        const history = frameBitmapsRef.current;
+        history.push(bitmap);
+        if (history.length > 1800) {
+          const old = history.shift();
+          if (old && 'close' in old && typeof (old as any).close === 'function') (old as any).close();
+          if (historyIndexRef.current > 0) historyIndexRef.current--;
+        }
+        if (!hasFrameRef.current) {
+          hasFrameRef.current = true;
+          setHasFrame(true);
+        }
+        if (isLiveRef.current) renderFrame(bitmap);
+      } catch {}
+    };
 
+    // Khi kết thúc ván: XÓA SẠCH TOÀN BỘ BỘ ĐỆM VÀ GIẢI PHÓNG RAM 100%
     const handleRoundFinished = (data?: { roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
-      frameHistoryRef.current = [];
+      frameBitmapsRef.current.forEach((bm) => {
+        if (bm && 'close' in bm && typeof (bm as any).close === 'function') {
+          (bm as any).close();
+        }
+      });
+      frameBitmapsRef.current = [];
       historyIndexRef.current = -1;
-      setFrameHistory([]);
+      setBufferCount(0);
       setHistoryIndex(-1);
       setIsLive(true);
       isLiveRef.current = true;
-      setCurrentFrame(null);
+      hasFrameRef.current = false;
+      setHasFrame(false);
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
     };
 
     const handleInitialState = (data: any) => {
@@ -353,80 +479,32 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (data && data.serverUrl) {
         setDetectedServerUrl(resolveServerUrl(data.serverUrl));
       }
-      if (data && data.dvrFrames && Array.isArray(data.dvrFrames)) {
-        const frames = data.dvrFrames.map((f: any) => f.frame).filter(Boolean);
-        if (frames.length > 0) {
-          frameHistoryRef.current = frames;
-          setFrameHistory(frames);
-          if (isLiveRef.current) {
-            setCurrentFrame(frames[frames.length - 1]);
-          }
-        }
-      }
     };
 
     socket.on('initial_state', handleInitialState);
     socket.on('live_frame_received', handleNewFrame);
+    socket.on('binary_frame_received', handleBinaryFrame);
     socket.on('round_finished', handleRoundFinished);
 
     return () => {
       socket.off('initial_state', handleInitialState);
       socket.off('live_frame_received', handleNewFrame);
+      socket.off('binary_frame_received', handleBinaryFrame);
       socket.off('round_finished', handleRoundFinished);
     };
   }, [socket, roomId]);
-
-  // Render Frame onto Canvas with GPU Hardware Acceleration (Like TikTok)
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const animFrameId = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!imgRef.current) {
-      imgRef.current = new Image();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!currentFrame || !canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
-
-    if (animFrameId.current) {
-      cancelAnimationFrame(animFrameId.current);
-    }
-
-    const img = imgRef.current || new Image();
-    img.onload = () => {
-      animFrameId.current = requestAnimationFrame(() => {
-        if (canvas.width !== img.width || canvas.height !== img.height) {
-          canvas.width = img.width;
-          canvas.height = img.height;
-        }
-        ctx.drawImage(img, 0, 0);
-      });
-    };
-    img.src = currentFrame;
-
-    return () => {
-      if (animFrameId.current) {
-        cancelAnimationFrame(animFrameId.current);
-      }
-    };
-  }, [currentFrame]);
 
   // Vòng lặp phát Slow-Motion liên tục: Chạy chậm tốc độ so với Live thực tế, từ từ chạy theo mượt mà
   useEffect(() => {
     if (!isPlaying || isLive) return;
 
-    // Tốc độ danh định camera ~30fps (33.3ms / frame)
-    // 0.75x -> 44ms, 0.5x -> 67ms, 0.25x -> 133ms, 0.1x -> 333ms, 0.05x -> 667ms
-    const baseIntervalMs = 33.3;
+    // Tốc độ interval theo tỷ lệ playbackRate:
+    // 0.5x -> ~33ms, 0.25x -> ~66ms, 0.1x -> ~166ms, 0.05x -> ~333ms
+    const baseIntervalMs = 16.6;
     const intervalMs = Math.max(16, Math.round(baseIntervalMs / playbackRate));
 
     const timer = setInterval(() => {
-      const history = frameHistoryRef.current;
+      const history = frameBitmapsRef.current;
       if (history.length === 0) return;
 
       let currentIdx = historyIndexRef.current;
@@ -440,8 +518,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (nextIdx < history.length) {
         historyIndexRef.current = nextIdx;
         setHistoryIndex(nextIdx);
-        if (history[nextIdx]) {
-          setCurrentFrame(history[nextIdx]);
+        const frame = history[nextIdx];
+        if (frame) {
+          renderFrame(frame);
         }
       }
       // Lưu ý: Nếu đã bắt kịp frame live mới nhất, GIỮ NGUYÊN trạng thái playing,
@@ -457,11 +536,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       // Khi đang Live mà bấm dừng -> chuyển sang xem Slow-Mo/DVR từ vị trí gần nhất
       setIsLive(false);
       isLiveRef.current = false;
-      const history = frameHistoryRef.current;
+      const history = frameBitmapsRef.current;
       const startIdx = Math.max(0, history.length - 30);
       historyIndexRef.current = startIdx;
       setHistoryIndex(startIdx);
-      if (history[startIdx]) setCurrentFrame(history[startIdx]);
+      if (history[startIdx]) renderFrame(history[startIdx]);
     }
     const nextPlaying = !isPlaying;
     setIsPlaying(nextPlaying);
@@ -476,17 +555,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (speed < 1.0) {
       if (isLiveRef.current) {
         // Chuyển từ Live sang Slow:
-        // Bắt đầu chạy chậm từ khoảng 30-40 frame trước (~1 giây trước) để xem chuyển động chậm mượt mà
+        // Bắt đầu chạy chậm từ khoảng 40 frame trước (~0.5-1s trước) để xem chuyển động chậm mượt mà
         setIsLive(false);
         isLiveRef.current = false;
         setIsPlaying(true);
         isPlayingRef.current = true;
-        const history = frameHistoryRef.current;
-        const startIdx = Math.max(0, history.length - 35);
+        const history = frameBitmapsRef.current;
+        const startIdx = Math.max(0, history.length - 40);
         historyIndexRef.current = startIdx;
         setHistoryIndex(startIdx);
         if (history[startIdx]) {
-          setCurrentFrame(history[startIdx]);
+          renderFrame(history[startIdx]);
         }
       } else {
         // Đang ở trong chế độ Slow: tiếp tục chạy với tốc độ mới mà không bị giật lùi
@@ -506,7 +585,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsLive(false);
     isLiveRef.current = false;
 
-    const history = frameHistoryRef.current;
+    const history = frameBitmapsRef.current;
     if (history.length === 0) return;
 
     let current = historyIndexRef.current;
@@ -516,38 +595,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     historyIndexRef.current = target;
     setHistoryIndex(target);
     if (history[target]) {
-      setCurrentFrame(history[target]);
-    }
-  };
-
-  // Thay đổi mức Buffer Delay (0s, 2s, 5s, 10s)
-  const handleDelayChange = (seconds: number) => {
-    setBufferDelaySeconds(seconds);
-    bufferDelayRef.current = seconds;
-    if (isLiveRef.current) {
-      if (seconds === 0) {
-        isBufferingRef.current = false;
-        setIsBuffering(false);
-        delayedPlayIndexRef.current = -1;
-        const history = frameHistoryRef.current;
-        if (history.length > 0) {
-          setCurrentFrame(history[history.length - 1]);
-        }
-      } else {
-        const minBufferFrames = seconds * 30;
-        const history = frameHistoryRef.current;
-        if (history.length < minBufferFrames) {
-          isBufferingRef.current = true;
-          setIsBuffering(true);
-        } else {
-          isBufferingRef.current = false;
-          setIsBuffering(false);
-          delayedPlayIndexRef.current = Math.max(0, history.length - minBufferFrames);
-          if (delayedPlayIndexRef.current >= 0 && delayedPlayIndexRef.current < history.length) {
-            setCurrentFrame(history[delayedPlayIndexRef.current]);
-          }
-        }
-      }
+      renderFrame(history[target]);
     }
   };
 
@@ -561,29 +609,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     playbackRateRef.current = 1.0;
     historyIndexRef.current = -1;
     setHistoryIndex(-1);
-    
-    const history = frameHistoryRef.current;
-    const delay = bufferDelayRef.current;
-    if (delay === 0) {
-      isBufferingRef.current = false;
-      setIsBuffering(false);
-      delayedPlayIndexRef.current = -1;
-      if (history.length > 0) {
-        setCurrentFrame(history[history.length - 1]);
-      }
-    } else {
-      const minBufferFrames = delay * 30;
-      if (history.length < minBufferFrames) {
-        isBufferingRef.current = true;
-        setIsBuffering(true);
-      } else {
-        isBufferingRef.current = false;
-        setIsBuffering(false);
-        delayedPlayIndexRef.current = Math.max(0, history.length - minBufferFrames);
-        if (delayedPlayIndexRef.current >= 0 && delayedPlayIndexRef.current < history.length) {
-          setCurrentFrame(history[delayedPlayIndexRef.current]);
-        }
-      }
+    const history = frameBitmapsRef.current;
+    if (history.length > 0) {
+      renderFrame(history[history.length - 1]);
     }
   };
 
@@ -594,14 +622,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     isLiveRef.current = false;
     historyIndexRef.current = idx;
     setHistoryIndex(idx);
-    const history = frameHistoryRef.current;
+    const history = frameBitmapsRef.current;
     if (history[idx]) {
-      setCurrentFrame(history[idx]);
+      renderFrame(history[idx]);
     }
   };
 
   const speedOptions = [0.05, 0.1, 0.25, 0.5, 0.75, 1.0];
-  const delayOptions = [0, 2, 5, 10];
 
   return (
     <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col">
@@ -672,7 +699,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </div>
         ))}
 
-        {currentFrame ? (
+        {hasFrame ? (
           <canvas
             ref={canvasRef}
             className="w-full h-full object-contain"
@@ -712,17 +739,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         {/* Live / Delayed Overlay Badge */}
         <div className="absolute top-2 left-2 flex flex-wrap items-center gap-1.5 z-10">
           {isLive ? (
-            isBuffering ? (
-              <span className="px-2.5 py-1 rounded-full bg-amber-500/90 text-slate-950 font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-amber-500/50 animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping mr-1.5" />
-                Đang nạp đệm {bufferDelaySeconds}s ({frameHistory.length}/{bufferDelaySeconds * 30}f)
-              </span>
-            ) : (
-              <span className="px-2.5 py-1 rounded-full bg-red-600 text-white font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/50">
-                <span className="w-2 h-2 rounded-full bg-white animate-ping mr-1.5" />
-                Trực Tiếp {bufferDelaySeconds > 0 ? `(Đệm ${bufferDelaySeconds}s)` : ''}
-              </span>
-            )
+            <span className="px-2.5 py-1 rounded-full bg-red-600 text-white font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/50">
+              <span className="w-2 h-2 rounded-full bg-white animate-ping mr-1.5" />
+              Trực Tiếp
+            </span>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
               <button
@@ -740,9 +760,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 Slow {playbackRate}x {isPlaying ? '• Đang chạy theo' : '• Tạm dừng'}
               </span>
 
-              {historyIndex >= 0 && frameHistory.length > 0 && (
+              {historyIndex >= 0 && bufferCount > 0 && (
                 <span className="hidden xs:inline-flex px-2 py-0.5 rounded-full bg-slate-900/80 text-slate-300 font-mono text-[10px] border border-white/10 backdrop-blur-sm">
-                  Trễ: -{((frameHistory.length - 1 - historyIndex) / 30).toFixed(1)}s ({frameHistory.length - 1 - historyIndex} frame)
+                  Trễ: -{((bufferCount - 1 - historyIndex) / 60).toFixed(1)}s ({bufferCount - 1 - historyIndex} frame)
                 </span>
               )}
             </div>
@@ -755,18 +775,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         {/* DVR Frame Buffer Seekbar */}
         <div className="flex items-center space-x-2">
           <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 min-w-[45px]">
-            #{historyIndex >= 0 ? historyIndex + 1 : frameHistory.length}
+            #{historyIndex >= 0 ? historyIndex + 1 : bufferCount}
           </span>
           <input
             type="range"
             min={0}
-            max={Math.max(0, frameHistory.length - 1)}
-            value={historyIndex >= 0 ? historyIndex : frameHistory.length - 1}
+            max={Math.max(0, bufferCount - 1)}
+            value={historyIndex >= 0 ? historyIndex : Math.max(0, bufferCount - 1)}
             onChange={handleSeekSlider}
             className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400"
           />
           <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 min-w-[45px] text-right">
-            / {frameHistory.length}
+            / {bufferCount}
           </span>
         </div>
 
@@ -848,49 +868,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             )}
           </div>
 
-          <div className="flex items-center space-x-1.5 flex-wrap sm:flex-nowrap">
-            {/* Buffer Delay Selector (0s, 2s, 5s, 10s) */}
-            <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
-              <div className="flex items-center space-x-0.5 px-1 text-emerald-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0" title="Độ trễ bộ đệm để load đủ frame mượt mà khi quay 120fps/240fps">
-                <Zap className="w-3 h-3" />
-                <span>Đệm:</span>
-              </div>
-              {delayOptions.map((sec) => (
-                <button
-                  key={sec}
-                  onClick={() => handleDelayChange(sec)}
-                  className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
-                    bufferDelaySeconds === sec
-                      ? 'bg-emerald-600 text-white shadow shadow-emerald-600/40 border border-emerald-400'
-                      : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-                  }`}
-                  title={sec === 0 ? '0s (Live ngay lập tức)' : `Đệm ${sec}s để tải đủ khung hình 120/240fps mượt mà không mất frame`}
-                >
-                  {sec === 0 ? '0s' : `${sec}s`}
-                </button>
-              ))}
+          {/* Slow Motion Speed Controls (0.05x -> 1.0x) */}
+          <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
+            <div className="flex items-center space-x-0.5 px-1 text-indigo-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0">
+              <Gauge className="w-3 h-3" />
+              <span>Slow:</span>
             </div>
-
-            {/* Slow Motion Speed Controls (0.05x -> 1.0x) */}
-            <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
-              <div className="flex items-center space-x-0.5 px-1 text-indigo-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0">
-                <Gauge className="w-3 h-3" />
-                <span>Slow:</span>
-              </div>
-              {speedOptions.map((rate) => (
-                <button
-                  key={rate}
-                  onClick={() => handleSpeedChange(rate)}
-                  className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
-                    playbackRate === rate
-                      ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
-                      : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-                  }`}
-                >
-                  {rate}x
-                </button>
-              ))}
-            </div>
+            {speedOptions.map((rate) => (
+              <button
+                key={rate}
+                onClick={() => handleSpeedChange(rate)}
+                className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
+                  playbackRate === rate
+                    ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
+                    : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                }`}
+              >
+                {rate}x
+              </button>
+            ))}
           </div>
         </div>
       </div>

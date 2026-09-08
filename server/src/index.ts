@@ -4,9 +4,11 @@ import cors from 'cors';
 import os from 'os';
 import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
+import { WebSocketServer, WebSocket } from 'ws';
+import { parse as parseUrl } from 'url';
 import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
-import { streamRouter, setSocketServer, getDvrBuffer, latestLiveFrames } from './routes/stream';
+import { streamRouter, setSocketServer, getDvrBuffer, getDvrBinaryBuffer, latestLiveFrames } from './routes/stream';
 import { db } from './db';
 import { startNativeMediaServer } from './mediaServer';
 
@@ -151,7 +153,7 @@ io.on('connection', (socket) => {
       latestLiveFrames[roomId] = frameObj;
       const buffer = getDvrBuffer(roomId);
       buffer.push(frameObj);
-      if (buffer.length > 3600) buffer.shift();
+      if (buffer.length > 1800) buffer.shift();
 
       // Chỉ gửi cho người xem trong Room này và Admin
       io.to(`room_${roomId}`).emit('live_frame_received', frameObj);
@@ -257,11 +259,28 @@ io.on('connection', (socket) => {
     io.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   });
 
+  socket.on('send_binary_frame', (data: any) => {
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf && buf.length >= 16) {
+      const magic = buf.readUInt32BE(0);
+      if (magic === 0x534C4F4D) {
+        const roomId = (socket as any).roomId || 'default';
+        const ring = getDvrBinaryBuffer(roomId);
+        ring.push(buf);
+        if (ring.length > 1200) ring.shift();
+        io.to(`room_${roomId}`).emit('binary_frame_received', buf);
+        io.to('room_admin').emit('binary_frame_received', buf);
+      }
+    }
+  });
+
   socket.on('finish_round', (data) => {
     const targetRoomId = data?.roomId || data?.userId || 'default';
     db.clearCardEntries(targetRoomId);
     const buffer = getDvrBuffer(targetRoomId);
     buffer.length = 0;
+    const binBuffer = getDvrBinaryBuffer(targetRoomId);
+    binBuffer.length = 0;
     io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
     io.to('room_admin').emit('round_finished', { roomId: targetRoomId });
@@ -293,6 +312,94 @@ io.on('connection', (socket) => {
     console.log(`[Socket] Client disconnected: ${socket.id}`);
   });
 });
+
+// ==========================================
+// Native High-Speed Binary WebSocket Server
+// Đường truyền nhị phân siêu tốc 120fps/240fps (Zero JSON, Zero Smearing, Auto-Purge RAM)
+// ==========================================
+interface BinaryClient extends WebSocket {
+  roomId?: string;
+  role?: 'mobile' | 'web' | 'admin';
+  isAlive?: boolean;
+}
+
+const wssBinary = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  const parsed = parseUrl(request.url || '');
+  if (parsed.pathname === '/stream/binary') {
+    wssBinary.handleUpgrade(request, socket, head, (ws) => {
+      wssBinary.emit('connection', ws, request);
+    });
+  }
+});
+
+wssBinary.on('connection', (ws: BinaryClient, request) => {
+  const query = parseUrl(request.url || '', true).query;
+  const roomId = (query.roomId as string) || 'default';
+  const role = (query.role as string) || 'web';
+
+  ws.roomId = roomId;
+  ws.role = role as any;
+  ws.isAlive = true;
+
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+
+  // Khi Web viewer kết nối: gửi ngay 1 frame nhị phân mới nhất nếu có để hiện hình tức thì
+  if (role === 'web') {
+    const binBuf = getDvrBinaryBuffer(roomId);
+    if (binBuf.length > 0) {
+      try {
+        ws.send(binBuf[binBuf.length - 1], { binary: true });
+      } catch {}
+    }
+  }
+
+  ws.on('message', (data: any, isBinary: boolean) => {
+    if (!isBinary || !Buffer.isBuffer(data) || data.length < 16) return;
+
+    // Kiểm tra magic header: 0x534C4F4D ("SLOM")
+    const magic = data.readUInt32BE(0);
+    if (magic !== 0x534C4F4D) return;
+
+    const targetRoomId = ws.roomId || 'default';
+
+    // Xoay vòng bộ đệm FIFO Ring Buffer (tối đa 1200 frame ~ 5-10s quay 240fps)
+    // Tự động giải phóng frame cũ nhất khỏi RAM để không bao giờ bị tràn nhớ!
+    const buf = getDvrBinaryBuffer(targetRoomId);
+    buf.push(data);
+    if (buf.length > 1200) {
+      buf.shift();
+    }
+
+    // Broadcast nhị phân trực tiếp cho tất cả Web viewer trong Room này và Admin
+    wssBinary.clients.forEach((client: BinaryClient) => {
+      if (
+        client !== ws &&
+        client.readyState === WebSocket.OPEN &&
+        (client.roomId === targetRoomId || client.role === 'admin')
+      ) {
+        try {
+          client.send(data, { binary: true });
+        } catch {}
+      }
+    });
+  });
+
+  ws.on('error', () => {});
+});
+
+const binaryPingInterval = setInterval(() => {
+  wssBinary.clients.forEach((client: BinaryClient) => {
+    if (!client.isAlive) return client.terminate();
+    client.isAlive = false;
+    try {
+      client.ping();
+    } catch {}
+  });
+}, 30000);
 
 // Start Native RTMP/HLS Media Server
 startNativeMediaServer();

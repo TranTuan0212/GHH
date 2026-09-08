@@ -7,12 +7,20 @@ export const streamRouter = Router();
 // Store latest live frame buffer for instant Web DVR playback per room
 export const dvrFrameBuffers: { [roomId: string]: { frame: string; timestamp: number }[] } = {};
 export const latestLiveFrames: { [roomId: string]: { frame: string; timestamp: number } | null } = {};
+export const dvrBinaryBuffers: { [roomId: string]: Buffer[] } = {};
 
 export function getDvrBuffer(roomId: string = 'default') {
   if (!dvrFrameBuffers[roomId]) {
     dvrFrameBuffers[roomId] = [];
   }
   return dvrFrameBuffers[roomId];
+}
+
+export function getDvrBinaryBuffer(roomId: string = 'default') {
+  if (!dvrBinaryBuffers[roomId]) {
+    dvrBinaryBuffers[roomId] = [];
+  }
+  return dvrBinaryBuffers[roomId];
 }
 
 // Fallback exports for index.ts
