@@ -515,91 +515,54 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     groupedItems[idx].push(entry);
   });
 
-  // Nhóm đang được chọn / đang focus để nhập bài
-  const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
-
-  // Tính toán thông minh nhóm tiếp theo cần chia bài (không bao giờ trỏ vào nhóm đã xong/đã đủ 5 lá/đã dằn/quắc)
-  const computedNextGroup = (() => {
-    const maxInitial = gameMode === '3cards' ? 3 : 2;
-
-    // 1. Chia vòng ban đầu (Lá 1 cho N1..N, sau đó Lá 2 cho N1..N,...)
-    for (let round = 0; round < maxInitial; round++) {
-      for (let g = 1; g <= numGroups; g++) {
-        const count = (groupedItems[g] || []).length;
-        if (count === round) {
-          return g;
-        }
-      }
-    }
-
-    // 2. Giai đoạn Bọt (Sau khi mọi người đã có >= 2 lá trong Xì Lát):
-    // Tìm nhóm tiếp theo còn có thể rút bài (chưa đủ 5 lá, chưa Quắc, chưa Ngũ Linh, chưa Dằn)
-    for (let g = 1; g <= numGroups; g++) {
-      const count = (groupedItems[g] || []).length;
-      const isStoodPat = danGroups[g] || false;
-      if (count < 5 && !isStoodPat) {
-        if (gameMode === '2cards') {
-          const ev = evaluate2Cards(groupedItems[g] || [], isStoodPat);
-          // Nếu đã Xì Bàng, Xì Lát, Quắc, Ngũ Linh thì nhóm này đã chốt, bỏ qua
-          if (ev.status !== 'xibang' && ev.status !== 'xilat' && ev.status !== 'quac' && ev.status !== 'ngulinh') {
-            return g;
-          }
-        } else {
-          return g;
-        }
-      }
-    }
-
-    return 1;
-  })();
-
-  // Nhóm mục tiêu thực tế (Viền xanh đi theo chỗ nhập/focus của user, nếu không thì theo thứ tự chia bài thông minh)
-  const currentTargetGroup = activeGroupId !== null ? activeGroupId : computedNextGroup;
-  const targetGroupAll = groupedItems[currentTargetGroup] || [];
+  // Dự đoán lượt chia vòng kế tiếp theo thứ tự tuần tự chuẩn như cũ (Round-Robin: 1 -> 2 -> 3 -> ... -> N -> 1 -> 2 -> 3...)
+  const nextSequenceOrder = entries.length + 1;
+  const nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
+  const targetGroupAll = groupedItems[nextGroupIndex] || [];
   const maxInitialCards = gameMode === '3cards' ? 3 : 2;
 
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Chia bài từ thanh input trên cùng (hoặc tự động lấy giá trị từ ô đang điền của nhóm đang chọn)
+  // Chia bài từ thanh input trên cùng (CHIA VÒNG TUẦN TỰ THEO THỨ TỰ NHƯ CŨ, KHÔNG DỒN VÀO 1 NHÓM)
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    let target = currentTargetGroup;
-    let raw = manualInput.trim();
+    const rawManual = manualInput.trim();
 
-    // Nếu ô trên cùng trống, tự động lấy giá trị từ ô Điền của nhóm đang chọn/mục tiêu hoặc bất kỳ ô nào có dữ liệu
-    if (!raw) {
-      if ((groupBotInputs[target] || '').trim()) {
-        raw = groupBotInputs[target].trim();
-      } else if (activeGroupId && (groupBotInputs[activeGroupId] || '').trim()) {
-        target = activeGroupId;
-        raw = groupBotInputs[activeGroupId].trim();
-      } else {
-        const foundKey = Object.keys(groupBotInputs).find(
-          (k) => (groupBotInputs[Number(k)] || '').trim() !== ''
-        );
-        if (foundKey) {
-          target = Number(foundKey);
-          raw = groupBotInputs[target].trim();
-        }
+    if (rawManual) {
+      // 1. Chia vòng tuần tự chuẩn như cũ: KHÔNG truyền targetGroup để các lá bài được chia đều vào từng nhóm 1, 2, 3...
+      const check = isValidCardValue(rawManual);
+      if (!check.isValid) {
+        setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+        return;
       }
+      onAddCard(check.normalizedRank, numGroups);
+      showToast(`✨ Đã chia vòng lá "${check.normalizedRank}"`);
+      setManualInput('');
+      return;
     }
 
-    if (!raw) {
-      setValidationError('Vui lòng nhập giá trị lá bài trước khi chia!');
+    // 2. Nếu ô trên cùng trống, kiểm tra xem người dùng có gõ số vào ô Điền của nhóm nào không
+    const foundGroupKey = Object.keys(groupBotInputs).find(
+      (k) => (groupBotInputs[Number(k)] || '').trim() !== ''
+    );
+
+    if (foundGroupKey) {
+      const gNum = Number(foundGroupKey);
+      const rawVal = groupBotInputs[gNum].trim();
+      const check = isValidCardValue(rawVal);
+      if (!check.isValid) {
+        setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+        return;
+      }
+      onAddCard(check.normalizedRank, numGroups, gNum);
+      const gName = groupNames[gNum] || `Nhóm ${gNum}`;
+      showToast(`✨ Đã chia lá "${check.normalizedRank}" vào ${gName}`);
+      setGroupBotInputs((prev) => ({ ...prev, [gNum]: '' }));
       return;
     }
-    const check = isValidCardValue(raw);
-    if (!check.isValid) {
-      setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
-      return;
-    }
-    onAddCard(check.normalizedRank, numGroups, target);
-    const gName = groupNames[target] || `Nhóm ${target}`;
-    showToast(`✨ Đã chia lá "${check.normalizedRank}" vào ${gName}`);
-    setManualInput('');
-    setGroupBotInputs((prev) => ({ ...prev, [target]: '' }));
-    setActiveGroupId(null);
+
+    setValidationError('Vui lòng nhập giá trị lá bài trước khi chia!');
   };
 
   // Thao tác Chia / Bọt riêng cho từng nhóm
@@ -625,7 +588,6 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     if (raw === manualInput.trim()) {
       setManualInput('');
     }
-    setActiveGroupId(null);
   };
 
   // Toggle trạng thái Dằn bài của nhóm
@@ -855,7 +817,6 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           <input
             type="text"
             value={manualInput}
-            onFocus={() => setActiveGroupId(null)}
             onChange={(e) => setManualInput(e.target.value)}
             placeholder="Nhập mã hoặc chọn lá: 8, 9, K, A, 10..."
             className="w-full bg-transparent text-white font-mono text-xs focus:outline-none placeholder:text-slate-500 truncate"
@@ -875,7 +836,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         <div className="flex items-center space-x-1 pl-1.5 pr-0.5 border-l border-white/10 text-[11px] flex-shrink-0 font-mono">
           <span className="text-slate-400 text-[10px] hidden sm:inline">Kế tiếp:</span>
           <span className="px-1.5 py-0.5 rounded font-bold border text-[10px] sm:text-[11px] flex items-center space-x-1 bg-indigo-600/40 text-indigo-200 border-indigo-500/40">
-            <span>N{currentTargetGroup}</span>
+            <span>N{nextGroupIndex}</span>
             <span className="text-[9px] font-normal opacity-90">
               (Lá {targetGroupAll.length + 1}/{maxInitialCards})
             </span>
@@ -935,7 +896,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           const groupNum = idx + 1;
           const allItemsInGroup = groupedItems[groupNum] || [];
           const customName = groupNames[groupNum] || `Nhóm ${groupNum}`;
-          const isNextTarget = groupNum === currentTargetGroup;
+          const isNextTarget = groupNum === nextGroupIndex;
           const isStoodPat = danGroups[groupNum] || false;
 
           // Mobile filter check
@@ -956,8 +917,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           return (
             <div
               key={groupNum}
-              onClick={() => setActiveGroupId(groupNum)}
-              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden cursor-pointer ${
+              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden ${
                 isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
@@ -1091,7 +1051,6 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   <input
                     type="text"
                     value={groupBotInputs[groupNum] || ''}
-                    onFocus={() => setActiveGroupId(groupNum)}
                     onChange={(e) =>
                       setGroupBotInputs((prev) => ({ ...prev, [groupNum]: e.target.value }))
                     }
