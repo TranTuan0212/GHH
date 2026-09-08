@@ -151,7 +151,7 @@ io.on('connection', (socket) => {
       latestLiveFrames[roomId] = frameObj;
       const buffer = getDvrBuffer(roomId);
       buffer.push(frameObj);
-      if (buffer.length > 1800) buffer.shift();
+      if (buffer.length > 3600) buffer.shift();
 
       // Chỉ gửi cho người xem trong Room này và Admin
       io.to(`room_${roomId}`).emit('live_frame_received', frameObj);

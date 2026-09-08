@@ -91,6 +91,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const isPlayingRef = useRef<boolean>(true);
   const playbackRateRef = useRef<number>(1.0);
 
+  // Buffer Delay: số giây trễ so với live thực tế để đảm bảo đủ frame (hỗ trợ 120/240fps iPhone)
+  const [bufferDelaySeconds, setBufferDelaySeconds] = useState<number>(5);
+  const bufferDelayRef = useRef<number>(5);
+  // Ref lưu index đang phát khi ở Live+Delay mode
+  const delayedPlayIndexRef = useRef<number>(-1);
+  // Đang chờ tích lũy buffer lần đầu chưa
+  const [isBuffering, setIsBuffering] = useState<boolean>(false);
+  const isBufferingRef = useRef<boolean>(false);
+
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [isLive, setIsLive] = useState(true);
@@ -264,6 +273,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     isPlayingRef.current = true;
     setPlaybackRate(1.0);
     playbackRateRef.current = 1.0;
+    delayedPlayIndexRef.current = -1;
+    isBufferingRef.current = false;
+    setIsBuffering(false);
   }, [roomId]);
 
   // Listen to Realtime Video Frames from iPhone
@@ -274,22 +286,56 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
       if (data && data.frame) {
         frameHistoryRef.current.push(data.frame);
-        if (frameHistoryRef.current.length > 1800) {
+        if (frameHistoryRef.current.length > 3600) {
           frameHistoryRef.current.shift();
           if (historyIndexRef.current > 0) {
             historyIndexRef.current -= 1;
+          }
+          if (delayedPlayIndexRef.current > 0) {
+            delayedPlayIndexRef.current -= 1;
           }
         }
 
         // Cập nhật state để thanh trượt seekbar hiển thị đúng độ dài buffer
         setFrameHistory([...frameHistoryRef.current]);
 
-        // Nếu đang ở chế độ Live trực tiếp: hiển thị ngay frame mới nhất
         if (isLiveRef.current) {
-          setCurrentFrame(data.frame);
+          const delay = bufferDelayRef.current;
+          if (delay === 0) {
+            // Không delay: hiển thị ngay frame mới nhất
+            setCurrentFrame(data.frame);
+          } else {
+            // Có delay: cần tích lũy đủ (delay * ~30fps) frame trước khi bắt đầu phát
+            const minBufferFrames = delay * 30; // ~30fps web render rate
+            const history = frameHistoryRef.current;
+
+            if (history.length < minBufferFrames) {
+              // Chưa đủ buffer: hiển thị trạng thái đang chờ
+              if (!isBufferingRef.current) {
+                isBufferingRef.current = true;
+                setIsBuffering(true);
+              }
+            } else {
+              // Đã đủ buffer: bắt đầu / tiếp tục phát frame trễ
+              if (isBufferingRef.current) {
+                isBufferingRef.current = false;
+                setIsBuffering(false);
+                // Đặt điểm bắt đầu phát là frame ở vị trí đầu buffer delay
+                delayedPlayIndexRef.current = Math.max(0, history.length - minBufferFrames);
+              }
+              // Hiển thị frame tại vị trí đã trễ (không nhảy lên frame mới nhất)
+              const displayIdx = delayedPlayIndexRef.current;
+              if (displayIdx >= 0 && displayIdx < history.length) {
+                setCurrentFrame(history[displayIdx]);
+                // Tăng index từ từ để tiếp tục phát về phía trước (đuổi theo live)
+                delayedPlayIndexRef.current = Math.min(displayIdx + 1, history.length - 1);
+              }
+            }
+          }
         }
       }
     };
+
 
     const handleRoundFinished = (data?: { roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
@@ -474,6 +520,37 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   };
 
+  // Thay đổi mức Buffer Delay (0s, 2s, 5s, 10s)
+  const handleDelayChange = (seconds: number) => {
+    setBufferDelaySeconds(seconds);
+    bufferDelayRef.current = seconds;
+    if (isLiveRef.current) {
+      if (seconds === 0) {
+        isBufferingRef.current = false;
+        setIsBuffering(false);
+        delayedPlayIndexRef.current = -1;
+        const history = frameHistoryRef.current;
+        if (history.length > 0) {
+          setCurrentFrame(history[history.length - 1]);
+        }
+      } else {
+        const minBufferFrames = seconds * 30;
+        const history = frameHistoryRef.current;
+        if (history.length < minBufferFrames) {
+          isBufferingRef.current = true;
+          setIsBuffering(true);
+        } else {
+          isBufferingRef.current = false;
+          setIsBuffering(false);
+          delayedPlayIndexRef.current = Math.max(0, history.length - minBufferFrames);
+          if (delayedPlayIndexRef.current >= 0 && delayedPlayIndexRef.current < history.length) {
+            setCurrentFrame(history[delayedPlayIndexRef.current]);
+          }
+        }
+      }
+    }
+  };
+
   // Nhảy ngay về xem Trực Tiếp (Live)
   const jumpToLive = () => {
     setIsLive(true);
@@ -484,9 +561,29 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     playbackRateRef.current = 1.0;
     historyIndexRef.current = -1;
     setHistoryIndex(-1);
+    
     const history = frameHistoryRef.current;
-    if (history.length > 0) {
-      setCurrentFrame(history[history.length - 1]);
+    const delay = bufferDelayRef.current;
+    if (delay === 0) {
+      isBufferingRef.current = false;
+      setIsBuffering(false);
+      delayedPlayIndexRef.current = -1;
+      if (history.length > 0) {
+        setCurrentFrame(history[history.length - 1]);
+      }
+    } else {
+      const minBufferFrames = delay * 30;
+      if (history.length < minBufferFrames) {
+        isBufferingRef.current = true;
+        setIsBuffering(true);
+      } else {
+        isBufferingRef.current = false;
+        setIsBuffering(false);
+        delayedPlayIndexRef.current = Math.max(0, history.length - minBufferFrames);
+        if (delayedPlayIndexRef.current >= 0 && delayedPlayIndexRef.current < history.length) {
+          setCurrentFrame(history[delayedPlayIndexRef.current]);
+        }
+      }
     }
   };
 
@@ -504,6 +601,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   };
 
   const speedOptions = [0.05, 0.1, 0.25, 0.5, 0.75, 1.0];
+  const delayOptions = [0, 2, 5, 10];
 
   return (
     <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col">
@@ -614,10 +712,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         {/* Live / Delayed Overlay Badge */}
         <div className="absolute top-2 left-2 flex flex-wrap items-center gap-1.5 z-10">
           {isLive ? (
-            <span className="px-2.5 py-1 rounded-full bg-red-600 text-white font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/50">
-              <span className="w-2 h-2 rounded-full bg-white animate-ping mr-1.5" />
-              Trực Tiếp
-            </span>
+            isBuffering ? (
+              <span className="px-2.5 py-1 rounded-full bg-amber-500/90 text-slate-950 font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-amber-500/50 animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping mr-1.5" />
+                Đang nạp đệm {bufferDelaySeconds}s ({frameHistory.length}/{bufferDelaySeconds * 30}f)
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 rounded-full bg-red-600 text-white font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/50">
+                <span className="w-2 h-2 rounded-full bg-white animate-ping mr-1.5" />
+                Trực Tiếp {bufferDelaySeconds > 0 ? `(Đệm ${bufferDelaySeconds}s)` : ''}
+              </span>
+            )
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
               <button
@@ -743,25 +848,49 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             )}
           </div>
 
-          {/* Slow Motion Speed Controls (0.05x -> 1.0x) */}
-          <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
-            <div className="flex items-center space-x-0.5 px-1 text-indigo-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0">
-              <Gauge className="w-3 h-3" />
-              <span>Slow:</span>
+          <div className="flex items-center space-x-1.5 flex-wrap sm:flex-nowrap">
+            {/* Buffer Delay Selector (0s, 2s, 5s, 10s) */}
+            <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
+              <div className="flex items-center space-x-0.5 px-1 text-emerald-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0" title="Độ trễ bộ đệm để load đủ frame mượt mà khi quay 120fps/240fps">
+                <Zap className="w-3 h-3" />
+                <span>Đệm:</span>
+              </div>
+              {delayOptions.map((sec) => (
+                <button
+                  key={sec}
+                  onClick={() => handleDelayChange(sec)}
+                  className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
+                    bufferDelaySeconds === sec
+                      ? 'bg-emerald-600 text-white shadow shadow-emerald-600/40 border border-emerald-400'
+                      : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                  }`}
+                  title={sec === 0 ? '0s (Live ngay lập tức)' : `Đệm ${sec}s để tải đủ khung hình 120/240fps mượt mà không mất frame`}
+                >
+                  {sec === 0 ? '0s' : `${sec}s`}
+                </button>
+              ))}
             </div>
-            {speedOptions.map((rate) => (
-              <button
-                key={rate}
-                onClick={() => handleSpeedChange(rate)}
-                className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
-                  playbackRate === rate
-                    ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
-                    : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-                }`}
-              >
-                {rate}x
-              </button>
-            ))}
+
+            {/* Slow Motion Speed Controls (0.05x -> 1.0x) */}
+            <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
+              <div className="flex items-center space-x-0.5 px-1 text-indigo-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0">
+                <Gauge className="w-3 h-3" />
+                <span>Slow:</span>
+              </div>
+              {speedOptions.map((rate) => (
+                <button
+                  key={rate}
+                  onClick={() => handleSpeedChange(rate)}
+                  className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
+                    playbackRate === rate
+                      ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
+                      : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                  }`}
+                >
+                  {rate}x
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
