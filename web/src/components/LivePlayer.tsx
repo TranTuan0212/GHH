@@ -84,6 +84,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [frameHistory, setFrameHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
+  // Refs để đồng bộ luồng chạy Slow-Mo liên tục, không bị timer re-render hủy ngang
+  const frameHistoryRef = useRef<string[]>([]);
+  const historyIndexRef = useRef<number>(-1);
+  const isLiveRef = useRef<boolean>(true);
+  const isPlayingRef = useRef<boolean>(true);
+  const playbackRateRef = useRef<number>(1.0);
+
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [isLive, setIsLive] = useState(true);
@@ -246,10 +253,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Reset video buffer whenever switching rooms
   useEffect(() => {
+    frameHistoryRef.current = [];
+    historyIndexRef.current = -1;
     setFrameHistory([]);
     setHistoryIndex(-1);
     setCurrentFrame(null);
     setIsLive(true);
+    isLiveRef.current = true;
+    setIsPlaying(true);
+    isPlayingRef.current = true;
+    setPlaybackRate(1.0);
+    playbackRateRef.current = 1.0;
   }, [roomId]);
 
   // Listen to Realtime Video Frames from iPhone
@@ -259,13 +273,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const handleNewFrame = (data: { frame: string; timestamp: number; roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
       if (data && data.frame) {
-        setFrameHistory((prev) => {
-          const next = [...prev, data.frame];
-          if (next.length > 600) next.shift(); // Keep last 600 frames for DVR
-          return next;
-        });
+        frameHistoryRef.current.push(data.frame);
+        if (frameHistoryRef.current.length > 1800) {
+          frameHistoryRef.current.shift();
+          if (historyIndexRef.current > 0) {
+            historyIndexRef.current -= 1;
+          }
+        }
 
-        if (isLive) {
+        // Cập nhật state để thanh trượt seekbar hiển thị đúng độ dài buffer
+        setFrameHistory([...frameHistoryRef.current]);
+
+        // Nếu đang ở chế độ Live trực tiếp: hiển thị ngay frame mới nhất
+        if (isLiveRef.current) {
           setCurrentFrame(data.frame);
         }
       }
@@ -273,9 +293,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const handleRoundFinished = (data?: { roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
+      frameHistoryRef.current = [];
+      historyIndexRef.current = -1;
       setFrameHistory([]);
       setHistoryIndex(-1);
       setIsLive(true);
+      isLiveRef.current = true;
       setCurrentFrame(null);
     };
 
@@ -287,8 +310,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (data && data.dvrFrames && Array.isArray(data.dvrFrames)) {
         const frames = data.dvrFrames.map((f: any) => f.frame).filter(Boolean);
         if (frames.length > 0) {
+          frameHistoryRef.current = frames;
           setFrameHistory(frames);
-          setCurrentFrame(frames[frames.length - 1]);
+          if (isLiveRef.current) {
+            setCurrentFrame(frames[frames.length - 1]);
+          }
         }
       }
     };
@@ -302,7 +328,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       socket.off('live_frame_received', handleNewFrame);
       socket.off('round_finished', handleRoundFinished);
     };
-  }, [socket, isLive, roomId]);
+  }, [socket, roomId]);
 
   // Render Frame onto Canvas with GPU Hardware Acceleration (Like TikTok)
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -344,95 +370,136 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [currentFrame]);
 
-  // Handle Slow-Motion Playback loop for frame sequence
+  // Vòng lặp phát Slow-Motion liên tục: Chạy chậm tốc độ so với Live thực tế, từ từ chạy theo mượt mà
   useEffect(() => {
-    if (!isPlaying || isLive || frameHistory.length === 0) return;
+    if (!isPlaying || isLive) return;
 
-    // Slow-mo interval speed calculation
-    // Base nominal display rate ~33ms per frame (30fps)
-    // 0.5x -> 66ms, 0.25x -> 132ms, 0.1x -> 330ms, 0.05x -> 660ms per frame
-    const baseIntervalMs = 33;
-    const intervalMs = Math.max(16, Math.floor(baseIntervalMs / playbackRate));
+    // Tốc độ danh định camera ~30fps (33.3ms / frame)
+    // 0.75x -> 44ms, 0.5x -> 67ms, 0.25x -> 133ms, 0.1x -> 333ms, 0.05x -> 667ms
+    const baseIntervalMs = 33.3;
+    const intervalMs = Math.max(16, Math.round(baseIntervalMs / playbackRate));
 
     const timer = setInterval(() => {
-      setHistoryIndex((prevIdx) => {
-        const currentIdx = prevIdx < 0 ? frameHistory.length - 1 : prevIdx;
-        const nextIdx = currentIdx + 1;
-        if (nextIdx >= frameHistory.length) {
-          setIsPlaying(false); // Pause when reaching end of history buffer (Never auto jump to live!)
-          return currentIdx;
+      const history = frameHistoryRef.current;
+      if (history.length === 0) return;
+
+      let currentIdx = historyIndexRef.current;
+      if (currentIdx < 0) {
+        currentIdx = Math.max(0, history.length - 1);
+      }
+
+      const nextIdx = currentIdx + 1;
+
+      // Nếu còn frame phía trước trong bộ nhớ đệm: tiến tới frame đó ở tốc độ chậm
+      if (nextIdx < history.length) {
+        historyIndexRef.current = nextIdx;
+        setHistoryIndex(nextIdx);
+        if (history[nextIdx]) {
+          setCurrentFrame(history[nextIdx]);
         }
-        if (frameHistory[nextIdx]) {
-          setCurrentFrame(frameHistory[nextIdx]);
-        }
-        return nextIdx;
-      });
+      }
+      // Lưu ý: Nếu đã bắt kịp frame live mới nhất, GIỮ NGUYÊN trạng thái playing,
+      // không dừng lại để khi có frame live tiếp theo từ camera tới là nó tiếp tục chạy từ từ theo!
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [isPlaying, isLive, frameHistory.length, playbackRate]);
+  }, [isPlaying, isLive, playbackRate]);
 
-  // Handle Play/Pause
+  // Bật / Tắt Phát
   const togglePlay = () => {
     if (!isPlaying && isLive) {
-      // Switch from Live to DVR playback from recent frames
+      // Khi đang Live mà bấm dừng -> chuyển sang xem Slow-Mo/DVR từ vị trí gần nhất
       setIsLive(false);
-      const startIdx = Math.max(0, frameHistory.length - 30);
+      isLiveRef.current = false;
+      const history = frameHistoryRef.current;
+      const startIdx = Math.max(0, history.length - 30);
+      historyIndexRef.current = startIdx;
       setHistoryIndex(startIdx);
-      if (frameHistory[startIdx]) setCurrentFrame(frameHistory[startIdx]);
+      if (history[startIdx]) setCurrentFrame(history[startIdx]);
     }
-    setIsPlaying(!isPlaying);
+    const nextPlaying = !isPlaying;
+    setIsPlaying(nextPlaying);
+    isPlayingRef.current = nextPlaying;
   };
 
-  // Change Playback Speed (Activates Slow-Mo playback mode)
+  // Thay đổi tốc độ phát Slow-Motion (chạy chậm từ từ theo luồng Live)
   const handleSpeedChange = (speed: number) => {
     setPlaybackRate(speed);
+    playbackRateRef.current = speed;
+
     if (speed < 1.0) {
-      setIsLive(false);
-      setIsPlaying(true);
-      // Start playing slow motion from recent frames
-      const startIdx = Math.max(0, frameHistory.length - 30);
-      setHistoryIndex(startIdx);
-      if (frameHistory[startIdx]) setCurrentFrame(frameHistory[startIdx]);
+      if (isLiveRef.current) {
+        // Chuyển từ Live sang Slow:
+        // Bắt đầu chạy chậm từ khoảng 30-40 frame trước (~1 giây trước) để xem chuyển động chậm mượt mà
+        setIsLive(false);
+        isLiveRef.current = false;
+        setIsPlaying(true);
+        isPlayingRef.current = true;
+        const history = frameHistoryRef.current;
+        const startIdx = Math.max(0, history.length - 35);
+        historyIndexRef.current = startIdx;
+        setHistoryIndex(startIdx);
+        if (history[startIdx]) {
+          setCurrentFrame(history[startIdx]);
+        }
+      } else {
+        // Đang ở trong chế độ Slow: tiếp tục chạy với tốc độ mới mà không bị giật lùi
+        setIsPlaying(true);
+        isPlayingRef.current = true;
+      }
     } else {
+      // Chọn 1.0x: Nhảy về Live trực tiếp
       jumpToLive();
     }
   };
 
-  // Frame Stepping (+/- 1 frame)
+  // Tua từng khung hình (+/- 1 frame)
   const stepFrame = (step: number) => {
     setIsPlaying(false);
+    isPlayingRef.current = false;
     setIsLive(false);
+    isLiveRef.current = false;
 
-    setHistoryIndex((prev) => {
-      const current = prev < 0 ? frameHistory.length - 1 : prev;
-      const target = Math.max(0, Math.min(frameHistory.length - 1, current + step));
-      if (frameHistory[target]) {
-        setCurrentFrame(frameHistory[target]);
-      }
-      return target;
-    });
-  };
+    const history = frameHistoryRef.current;
+    if (history.length === 0) return;
 
-  // Jump back to Live Realtime
-  const jumpToLive = () => {
-    setIsLive(true);
-    setIsPlaying(true);
-    setPlaybackRate(1.0);
-    setHistoryIndex(-1);
-    if (frameHistory.length > 0) {
-      setCurrentFrame(frameHistory[frameHistory.length - 1]);
+    let current = historyIndexRef.current;
+    if (current < 0) current = history.length - 1;
+
+    const target = Math.max(0, Math.min(history.length - 1, current + step));
+    historyIndexRef.current = target;
+    setHistoryIndex(target);
+    if (history[target]) {
+      setCurrentFrame(history[target]);
     }
   };
 
-  // Seekbar Slider (Freeze frame on seeked index, no auto jump to live!)
+  // Nhảy ngay về xem Trực Tiếp (Live)
+  const jumpToLive = () => {
+    setIsLive(true);
+    isLiveRef.current = true;
+    setIsPlaying(true);
+    isPlayingRef.current = true;
+    setPlaybackRate(1.0);
+    playbackRateRef.current = 1.0;
+    historyIndexRef.current = -1;
+    setHistoryIndex(-1);
+    const history = frameHistoryRef.current;
+    if (history.length > 0) {
+      setCurrentFrame(history[history.length - 1]);
+    }
+  };
+
+  // Kéo thanh trượt DVR Seekbar
   const handleSeekSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const idx = parseInt(e.target.value);
+    const idx = parseInt(e.target.value, 10);
     setIsLive(false);
-    setIsPlaying(false); // Pause auto-advancing so user can inspect seeked frame!
+    isLiveRef.current = false;
+    historyIndexRef.current = idx;
     setHistoryIndex(idx);
-    if (frameHistory[idx]) {
-      setCurrentFrame(frameHistory[idx]);
+    const history = frameHistoryRef.current;
+    if (history[idx]) {
+      setCurrentFrame(history[idx]);
     }
   };
 
@@ -547,25 +614,33 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         {/* Live / Delayed Overlay Badge */}
         <div className="absolute top-2 left-2 flex flex-wrap items-center gap-1.5 z-10">
           {isLive ? (
-            <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-bold text-[10px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/50">
-              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping mr-1" />
+            <span className="px-2.5 py-1 rounded-full bg-red-600 text-white font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/50">
+              <span className="w-2 h-2 rounded-full bg-white animate-ping mr-1.5" />
               Trực Tiếp
             </span>
           ) : (
-            <button
-              onClick={jumpToLive}
-              className="px-2 py-0.5 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[10px] uppercase tracking-wider flex items-center shadow-lg transition-all"
-            >
-              <RotateCcw className="w-3 h-3 mr-1" />
-              Tua lại • Nhảy tới LIVE
-            </button>
-          )}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={jumpToLive}
+                className="px-2.5 py-1 rounded-full bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center shadow-lg shadow-red-600/40 transition-all active:scale-95 animate-pulse"
+                title="Bấm để nhảy ngay về hình ảnh Trực Tiếp (Live)"
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                Về Live
+              </button>
 
-          {playbackRate !== 1.0 && (
-            <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white font-bold text-[10px] flex items-center border border-indigo-400 shadow-lg">
-              <Zap className="w-3 h-3 mr-1 text-amber-300" />
-              {playbackRate}x
-            </span>
+              <span className="px-2.5 py-1 rounded-full bg-amber-500/25 text-amber-300 font-bold font-mono text-[10px] sm:text-[11px] border border-amber-500/40 flex items-center shadow-md backdrop-blur-md">
+                <Gauge className="w-3.5 h-3.5 mr-1 text-amber-400" />
+                Slow {playbackRate}x {isPlaying ? '• Đang chạy theo' : '• Tạm dừng'}
+              </span>
+
+              {historyIndex >= 0 && frameHistory.length > 0 && (
+                <span className="hidden xs:inline-flex px-2 py-0.5 rounded-full bg-slate-900/80 text-slate-300 font-mono text-[10px] border border-white/10 backdrop-blur-sm">
+                  Trễ: -{((frameHistory.length - 1 - historyIndex) / 30).toFixed(1)}s ({frameHistory.length - 1 - historyIndex} frame)
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>
