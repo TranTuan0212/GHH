@@ -38,7 +38,11 @@ public class NetworkManager: ObservableObject {
     }
     private var pendingFrames: [PendingFrame] = []
     private var pendingHead = 0
-    private var isSenderActive = false
+    // Pipelined sender: gửi nhiều frames song song để giảm latency
+    // 240fps = frame mỗi 4ms, nhưng WS send qua tunnel mất ~30-50ms
+    // => Cần gửi 8-12 frames song song để đạt near-realtime
+    private let maxConcurrentSends = 10
+    private var activeSendCount = 0
 
     private lazy var frameSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -254,10 +258,10 @@ public class NetworkManager: ObservableObject {
         }
     }
 
-    /// Gửi tuần tự từng frame trong hàng đợi (đảm bảo đúng thứ tự), tự động nối lại khi WS rớt.
-    /// LUÔN gọi trên frameQueue.
+    /// Gửi pipelined: cho phép gửi nhiều frames song song (maxConcurrentSends) để giảm latency.
+    /// Mỗi frame gửi xong sẽ trigger gửi frame tiếp theo.
     private func drainQueueIfNeeded() {
-        guard !isSenderActive else { return }
+        guard activeSendCount < maxConcurrentSends else { return }
         guard pendingFrameCount() > 0 else { return }
 
         guard isWebSocketConnected, let task = webSocketTask else {
@@ -265,7 +269,7 @@ public class NetworkManager: ObservableObject {
             return
         }
 
-        isSenderActive = true
+        activeSendCount += 1
         let frame = pendingFrames[pendingHead]
         pendingHead += 1
         compactPendingFramesIfNeeded()
@@ -284,7 +288,7 @@ public class NetworkManager: ObservableObject {
         task.send(msg) { [weak self] error in
             guard let self = self else { return }
             self.frameQueue.async {
-                self.isSenderActive = false
+                self.activeSendCount -= 1
                 if error != nil {
                     self.isWebSocketConnected = false
                     // Gửi lỗi: đưa frame trở lại đầu queue để thử lại, không mất sequence.
@@ -295,7 +299,7 @@ public class NetworkManager: ObservableObject {
                         self.pendingFrames.append(frame)
                     }
                 }
-                // Tiếp tục gửi frame kế tiếp (nếu còn) để duy trì luồng tuần tự
+                // Tiếp tục gửi frames khác (pipelining)
                 self.drainQueueIfNeeded()
             }
         }
