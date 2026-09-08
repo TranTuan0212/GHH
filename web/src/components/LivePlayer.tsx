@@ -602,14 +602,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHasFrame(true);
           }
 
-          // Khi đang xem Live trực tiếp: vẽ ngay frame mới lên canvas nếu là frame mới nhất
+          // Khi Live: chỉ render frame lên canvas khi đây là frame MỚI NHẤT trong batch hiện tại
+          // (decodeQueue đã trống sau khi shift() item này, hoặc chỉ còn rất ít).
+          // Điều này tránh hiển thị frame cũ trong queue khi backlog tạm thời tăng lên,
+          // đảm bảo canvas luôn phát Live gần thực tế nhất, không bị trễ nhân tạo do queue.
+          // Mọi frame vẫn được lưu đầy đủ vào history cho Slow-Mo (không mất frame nào).
           if (isLiveRef.current) {
             if (item.timestamp < lastLiveRenderedTsRef.current - 5.0) {
               lastLiveRenderedTsRef.current = 0;
             }
             if (item.timestamp >= lastLiveRenderedTsRef.current) {
               lastLiveRenderedTsRef.current = item.timestamp;
-              renderFrame(bitmap);
+              // Chỉ vẽ nếu đây là frame cuối batch (queue = 0) hoặc queue rất nhỏ
+              if (decodeQueue.length === 0 || decodeQueue.length < 4) {
+                renderFrame(bitmap);
+              }
             }
           }
         } catch {
