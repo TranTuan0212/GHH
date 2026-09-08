@@ -20,6 +20,14 @@ public class CameraManager: NSObject, ObservableObject {
         .priorityRequestLow: false
     ])
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
+    // Ưu tiên TỐC ĐỘ hơn ĐỘ NÉT: giảm kích thước khung hình và chất lượng nén JPEG để mỗi frame
+    // nhẹ hơn nhiều -> gửi nhanh hơn, đỡ nghẽn mạng, giảm nguy cơ dồn ứ ở các hàng đợi latency-cap.
+    // Chỉnh 2 hằng số này nếu muốn cân bằng lại độ nét/tốc độ:
+    //   - targetWidth càng nhỏ -> ảnh càng nhỏ/nhẹ, càng nhanh, nhưng càng mờ khi phóng to.
+    //   - jpegQuality càng thấp -> file càng nhẹ, càng nhanh, nhưng càng nhiều artifact/mờ.
+    private let targetWidth: CGFloat = 640      // trước đây 960
+    private let jpegQuality: CGFloat = 0.35     // trước đây 0.5
     private var lastSentTime: TimeInterval = 0
 
     private var frameCounter = 0
@@ -30,6 +38,36 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     public func setupCamera(completion: @escaping (Bool) -> Void) {
+        // Xin quyền camera tường minh và ĐỢI kết quả trước khi cấu hình session — nếu không, session
+        // vẫn "chạy" nhưng không có khung hình nào thực sự tới khi chưa có quyền, preview đen im lặng.
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            self.configureAndStartSession(completion: completion)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                if granted {
+                    self.configureAndStartSession(completion: completion)
+                } else {
+                    DispatchQueue.main.async {
+                        self.errorMessage = "Bạn chưa cấp quyền Camera. Vào Cài đặt > Quyền riêng tư > Camera để bật."
+                        completion(false)
+                    }
+                }
+            }
+        case .denied, .restricted:
+            DispatchQueue.main.async {
+                self.errorMessage = "Ứng dụng chưa được cấp quyền Camera. Vào Cài đặt > Quyền riêng tư > Camera để bật."
+                completion(false)
+            }
+        @unknown default:
+            DispatchQueue.main.async {
+                self.errorMessage = "Không xác định được trạng thái quyền Camera."
+                completion(false)
+            }
+        }
+    }
+
+    private func configureAndStartSession(completion: @escaping (Bool) -> Void) {
         sessionQueue.async {
             self.captureSession.beginConfiguration()
             
@@ -187,18 +225,18 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
             var ciImage = CIImage(cvImageBuffer: imageBuffer)
             
-            // Tối ưu kích thước khung hình chuẩn 960x540 để truyền siêu tốc 120fps/240fps
+            // Tối ưu kích thước khung hình để truyền siêu tốc 120fps/240fps (ưu tiên tốc độ hơn độ nét)
             let extent = ciImage.extent
-            if extent.width > 960 {
-                let scale = 960.0 / extent.width
+            if extent.width > targetWidth {
+                let scale = targetWidth / extent.width
                 ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             }
             
-            // Nén Intra-Frame độc lập trên GPU Metal (< 1ms), chất lượng 0.5 rõ nét, chống nhòe triệt để
+            // Nén Intra-Frame độc lập trên GPU Metal, chất lượng thấp hơn để ưu tiên tốc độ truyền
             guard let jpegData = ciContext.jpegRepresentation(
                 of: ciImage,
                 colorSpace: colorSpace,
-                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
             ) else { return }
             
             let timestamp = Date().timeIntervalSince1970

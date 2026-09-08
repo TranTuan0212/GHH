@@ -111,9 +111,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [bufferCount, setBufferCount] = useState<number>(0);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  // Bộ đệm Ring Buffer lưu trữ trực tiếp ImageBitmap hoặc HTMLImageElement
-  // Render trực tiếp lên GPU Canvas trong < 0.2ms và tự động close() thu hồi VRAM chống tràn RAM
-  const frameBitmapsRef = useRef<(ImageBitmap | HTMLImageElement)[]>([]);
+  // Bộ đệm Ring Buffer lưu {timestamp thật lúc quay, bitmap}. Lưu kèm timestamp là bắt buộc để
+  // phát lại Slow-Motion bám theo ĐỒNG HỒ THỰC (xem vòng lặp phát bên dưới) thay vì chỉ nhảy
+  // "1 frame mỗi tick" — cách cũ không biết tốc độ quay gốc thực tế là 120fps hay 240fps nên
+  // tốc độ 0.25x/0.5x hiển thị sai và bị giật do lệch nhịp setInterval.
+  interface HistoryEntry {
+    timestamp: number; // giây, Unix epoch — do iPhone gán tại thời điểm quay (Date().timeIntervalSince1970)
+    bitmap: ImageBitmap | HTMLImageElement;
+  }
+  const frameBitmapsRef = useRef<HistoryEntry[]>([]);
   const historyIndexRef = useRef<number>(-1);
   const isLiveRef = useRef<boolean>(true);
   const isPlayingRef = useRef<boolean>(true);
@@ -304,7 +310,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Reset video buffer khi chuyển đổi Room
   useEffect(() => {
-    frameBitmapsRef.current.forEach((bm) => {
+    frameBitmapsRef.current.forEach((entry) => {
+      const bm = entry.bitmap;
       if (bm && 'close' in bm && typeof (bm as any).close === 'function') {
         (bm as any).close();
       }
@@ -330,12 +337,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     let ws: WebSocket | null = null;
     let reconnectTimer: any = null;
 
-    // Hàng đợi giải mã: WebSocket (TCP) đã đảm bảo thứ tự message tới, nhưng nếu decode nhiều
-    // frame song song (createImageBitmap là async), các promise có thể resolve KHÔNG đúng thứ tự
-    // dưới tải cao (120/240fps) -> hình bị chèn sai trình tự trong buffer lịch sử. Xử lý tuần tự
-    // (1 frame tại 1 thời điểm) để đảm bảo đúng thứ tự tuyệt đối, đồng thời giới hạn hàng đợi theo
-    // độ trễ tối đa cho phép để không tích luỹ RAM vô hạn nếu tab bị throttle nền/máy yếu.
-    const MAX_QUEUE_LATENCY_SEC = 10;
+    // TRẦN ĐỘ TRỄ TUYỆT ĐỐI cho toàn hệ thống (tính từ thời điểm quay thực tế trên iPhone tới lúc
+    // hiển thị trên Web) — PHẢI dùng cùng một mốc "đồng hồ thực" (Date.now()) ở MỌI tầng
+    // (iOS/Server/Web), không phải đo tương đối trong riêng hàng đợi của từng tầng. Trước đây Web
+    // đo "khoảng cách giữa frame mới nhất và cũ nhất TRONG HÀNG ĐỢI CỦA CHÍNH NÓ" — nếu frame đã bị
+    // trễ sẵn từ iOS/Server (ví dụ đã trễ 10s trước khi tới Web), Web vẫn vô tình cho phép trễ thêm
+    // tối đa 10s NỮA vì không biết frame đã "già" từ trước. Cộng dồn qua 3 tầng độc lập như vậy có
+    // thể ra tới ~30s thực tế dù mỗi tầng đều cấu hình "tối đa 10s". Sửa: luôn so sánh tuổi frame
+    // với Date.now() thực tế — tầng nào cũng tự động không cho tổng độ trễ vượt ngưỡng này, bất kể
+    // độ trễ đã phát sinh ở đâu trước đó.
+    const TOTAL_MAX_LATENCY_SEC = 10;
     type QueuedFrame = { timestamp: number; bytes: ArrayBuffer };
     const decodeQueue: QueuedFrame[] = [];
     let isDecoding = false;
@@ -345,6 +356,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isDecoding = true;
       while (decodeQueue.length > 0) {
         const item = decodeQueue.shift()!;
+
+        // Tới lượt xử lý mà đã quá hạn tổng (tuổi tuyệt đối tính từ lúc quay) -> bỏ luôn, không
+        // giải mã (đỡ tốn CPU) và không hiển thị, thay vì cố hiển thị 1 hình đã trễ vô nghĩa.
+        if (Date.now() / 1000 - item.timestamp > TOTAL_MAX_LATENCY_SEC) {
+          continue;
+        }
+
         try {
           const blob = new Blob([item.bytes], { type: 'image/jpeg' });
           // Giải mã trên luồng GPU nền (không chặn JS main thread), nhưng chờ tuần tự để giữ thứ tự
@@ -355,13 +373,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           }
 
           const history = frameBitmapsRef.current;
-          history.push(bitmap);
+          history.push({ timestamp: item.timestamp, bitmap });
 
           // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 1800 frames (~15-30s Slow-Mo)
           if (history.length > 1800) {
             const old = history.shift();
-            if (old && 'close' in old && typeof (old as any).close === 'function') {
-              (old as any).close();
+            if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') {
+              (old.bitmap as any).close();
             }
             if (historyIndexRef.current > 0) {
               historyIndexRef.current--;
@@ -389,15 +407,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const magic = view.getUint32(0, false);
       if (magic !== 0x534C4F4D) return; // "SLOM"
       const timestamp = view.getFloat64(8, false);
+
+      // Kiểm tra NGAY khi nhận: nếu frame đã trễ quá TOTAL_MAX_LATENCY_SEC tính từ lúc quay thực tế
+      // (không phải chỉ trong hàng đợi riêng của Web) thì bỏ luôn, không xếp hàng, không giải mã.
+      const nowSec = Date.now() / 1000;
+      if (nowSec - timestamp > TOTAL_MAX_LATENCY_SEC) {
+        return;
+      }
+
       const jpegBytes = buf.slice(16);
       decodeQueue.push({ timestamp, bytes: jpegBytes });
 
-      // Trần độ trễ phía Web: nếu frame mới nhất đến quá xa so với frame cũ nhất còn trong hàng
-      // đợi giải mã (nghĩa là máy/tab không giải mã kịp), bỏ bớt frame cũ nhất thay vì để trễ
-      // tăng vô hạn. Trong ngưỡng MAX_QUEUE_LATENCY_SEC thì không mất frame nào.
+      // Dọn thêm các frame đã kịp "quá hạn" trong lúc còn nằm chờ giải mã (trần TUYỆT ĐỐI theo
+      // đồng hồ thực, không phải chỉ khoảng cách với frame mới nhất) — phòng khi decode chậm lại
+      // (CPU yếu, tab bị throttle nền) khiến hàng đợi ứ lại.
       while (
-        decodeQueue.length > 1 &&
-        timestamp - decodeQueue[0].timestamp > MAX_QUEUE_LATENCY_SEC
+        decodeQueue.length > 0 &&
+        Date.now() / 1000 - decodeQueue[0].timestamp > TOTAL_MAX_LATENCY_SEC
       ) {
         decodeQueue.shift();
       }
@@ -445,14 +471,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const handleNewFrame = (data: { frame: string; timestamp: number; roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
       if (data && data.frame) {
+        const ts = (data.timestamp || Date.now()) / 1000;
+        // Cùng trần trễ tuyệt đối như đường WebSocket chính — không cộng dồn thêm ở đường fallback này
+        if (Date.now() / 1000 - ts > 10) return;
         const img = new Image();
         img.onload = () => {
           const history = frameBitmapsRef.current;
-          history.push(img);
+          history.push({ timestamp: ts, bitmap: img });
           if (history.length > 1800) {
             const old = history.shift();
-            if (old && 'close' in old && typeof (old as any).close === 'function') {
-              (old as any).close();
+            if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') {
+              (old.bitmap as any).close();
             }
             if (historyIndexRef.current > 0) historyIndexRef.current--;
           }
@@ -474,15 +503,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (!arrayBuffer || arrayBuffer.byteLength < 16) return;
       const view = new DataView(arrayBuffer);
       if (view.getUint32(0, false) !== 0x534C4F4D) return;
+      const timestamp = view.getFloat64(8, false);
+      // Cùng trần trễ tuyệt đối như đường WebSocket chính
+      if (Date.now() / 1000 - timestamp > 10) return;
       const jpegBytes = arrayBuffer.slice(16);
       try {
         const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
         const bitmap = await createImageBitmap(blob);
         const history = frameBitmapsRef.current;
-        history.push(bitmap);
+        history.push({ timestamp, bitmap });
         if (history.length > 1800) {
           const old = history.shift();
-          if (old && 'close' in old && typeof (old as any).close === 'function') (old as any).close();
+          if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') (old.bitmap as any).close();
           if (historyIndexRef.current > 0) historyIndexRef.current--;
         }
         if (!hasFrameRef.current) {
@@ -496,7 +528,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     // Khi kết thúc ván: XÓA SẠCH TOÀN BỘ BỘ ĐỆM VÀ GIẢI PHÓNG RAM 100%
     const handleRoundFinished = (data?: { roomId?: string }) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
-      frameBitmapsRef.current.forEach((bm) => {
+      frameBitmapsRef.current.forEach((entry) => {
+        const bm = entry.bitmap;
         if (bm && 'close' in bm && typeof (bm as any).close === 'function') {
           (bm as any).close();
         }
@@ -535,40 +568,58 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [socket, roomId]);
 
-  // Vòng lặp phát Slow-Motion liên tục: Chạy chậm tốc độ so với Live thực tế, từ từ chạy theo mượt mà
+  // Vòng lặp phát Slow-Motion: dùng "đồng hồ ảo" bám theo TIMESTAMP THẬT của từng frame (thời điểm
+  // quay thực tế trên iPhone) thay vì đếm "1 frame mỗi tick" như trước. Lý do đổi cách này:
+  //
+  // 1) MƯỢT: chạy theo requestAnimationFrame (đồng bộ khung hình trình duyệt, ~60Hz+) thay vì
+  //    setInterval — setInterval bị trôi/giật khi tab bận (đang decode JPEG, GC...), còn rAF được
+  //    trình duyệt tự canh nhịp render nên chuyển động mượt hơn hẳn.
+  // 2) ĐÚNG TỐC ĐỘ: trước đây giả định nguồn quay cố định ~60fps (baseIntervalMs = 16.6) để suy ra
+  //    interval, nhưng camera thực tế quay 120fps hoặc 240fps (thậm chí dao động) — nên "0.5x" hiển
+  //    thị không phải 0.5x thật. Cách mới: mỗi frame nhận từ iPhone có kèm timestamp Unix thật khi
+  //    quay. Ta neo "thời điểm nguồn" (anchorSourceTime) tại thời điểm bắt đầu phát, rồi mỗi lần vẽ
+  //    tính "thời điểm nguồn mục tiêu" = anchorSourceTime + (thời gian thực đã trôi qua) * playbackRate,
+  //    và luôn hiển thị đúng frame gần nhất có timestamp <= mục tiêu đó. Cách này tự động đúng với
+  //    BẤT KỲ tốc độ quay gốc nào (120/240fps hay dao động do mạng), không cần biết trước fps nguồn.
   useEffect(() => {
     if (!isPlaying || isLive) return;
 
-    // Tốc độ interval theo tỷ lệ playbackRate:
-    // 0.5x -> ~33ms, 0.25x -> ~66ms, 0.1x -> ~166ms, 0.05x -> ~333ms
-    const baseIntervalMs = 16.6;
-    const intervalMs = Math.max(16, Math.round(baseIntervalMs / playbackRate));
+    let rafId: number;
+    const anchorRealTimeMs = performance.now();
+    const startIdx = historyIndexRef.current >= 0
+      ? historyIndexRef.current
+      : Math.max(0, frameBitmapsRef.current.length - 1);
+    const anchorSourceTime = frameBitmapsRef.current[startIdx]?.timestamp ?? null;
 
-    const timer = setInterval(() => {
+    const tick = () => {
       const history = frameBitmapsRef.current;
-      if (history.length === 0) return;
-
-      let currentIdx = historyIndexRef.current;
-      if (currentIdx < 0) {
-        currentIdx = Math.max(0, history.length - 1);
+      if (history.length === 0 || anchorSourceTime === null) {
+        rafId = requestAnimationFrame(tick);
+        return;
       }
 
-      const nextIdx = currentIdx + 1;
+      const elapsedRealSec = (performance.now() - anchorRealTimeMs) / 1000;
+      const targetSourceTime = anchorSourceTime + elapsedRealSec * playbackRate;
 
-      // Nếu còn frame phía trước trong bộ nhớ đệm: tiến tới frame đó ở tốc độ chậm
-      if (nextIdx < history.length) {
-        historyIndexRef.current = nextIdx;
-        setHistoryIndex(nextIdx);
-        const frame = history[nextIdx];
-        if (frame) {
-          renderFrame(frame);
-        }
+      // Tiến tới (không lùi) tới frame gần nhất có timestamp <= targetSourceTime.
+      let idx = historyIndexRef.current < 0 ? 0 : historyIndexRef.current;
+      while (idx + 1 < history.length && history[idx + 1].timestamp <= targetSourceTime) {
+        idx++;
       }
-      // Lưu ý: Nếu đã bắt kịp frame live mới nhất, GIỮ NGUYÊN trạng thái playing,
-      // không dừng lại để khi có frame live tiếp theo từ camera tới là nó tiếp tục chạy từ từ theo!
-    }, intervalMs);
 
-    return () => clearInterval(timer);
+      if (idx !== historyIndexRef.current) {
+        historyIndexRef.current = idx;
+        setHistoryIndex(idx);
+        renderFrame(history[idx].bitmap);
+      }
+      // Nếu đã đuổi kịp frame mới nhất trong buffer: giữ nguyên trạng thái playing, chờ frame
+      // live tiếp theo từ camera tới rồi tự động tiếp tục chạy chậm theo, không bị dừng khựng.
+
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
   }, [isPlaying, isLive, playbackRate]);
 
   // Bật / Tắt Phát
@@ -581,7 +632,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const startIdx = Math.max(0, history.length - 30);
       historyIndexRef.current = startIdx;
       setHistoryIndex(startIdx);
-      if (history[startIdx]) renderFrame(history[startIdx]);
+      if (history[startIdx]) renderFrame(history[startIdx].bitmap);
     }
     const nextPlaying = !isPlaying;
     setIsPlaying(nextPlaying);
@@ -606,10 +657,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         historyIndexRef.current = startIdx;
         setHistoryIndex(startIdx);
         if (history[startIdx]) {
-          renderFrame(history[startIdx]);
+          renderFrame(history[startIdx].bitmap);
         }
       } else {
         // Đang ở trong chế độ Slow: tiếp tục chạy với tốc độ mới mà không bị giật lùi
+        // (useEffect ở trên sẽ tự neo lại anchorSourceTime = frame hiện tại khi playbackRate đổi)
         setIsPlaying(true);
         isPlayingRef.current = true;
       }
@@ -636,7 +688,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     historyIndexRef.current = target;
     setHistoryIndex(target);
     if (history[target]) {
-      renderFrame(history[target]);
+      renderFrame(history[target].bitmap);
     }
   };
 
@@ -652,7 +704,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setHistoryIndex(-1);
     const history = frameBitmapsRef.current;
     if (history.length > 0) {
-      renderFrame(history[history.length - 1]);
+      renderFrame(history[history.length - 1].bitmap);
     }
   };
 
@@ -665,11 +717,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setHistoryIndex(idx);
     const history = frameBitmapsRef.current;
     if (history[idx]) {
-      renderFrame(history[idx]);
+      renderFrame(history[idx].bitmap);
     }
   };
 
   const speedOptions = [0.05, 0.1, 0.25, 0.5, 0.75, 1.0];
+
 
   return (
     <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col">
