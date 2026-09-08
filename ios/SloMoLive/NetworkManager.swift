@@ -13,6 +13,7 @@ public class NetworkManager: ObservableObject {
     @Published public var isAuthenticated = false
     @Published public var authToken: String? = nil
     @Published public var currentUsername: String? = nil
+    @Published public var currentUserId: String? = nil
     @Published public var activeStreamId: String? = nil
     @Published public var errorMessage: String? = nil
 
@@ -123,6 +124,10 @@ public class NetworkManager: ObservableObject {
                 if let token = json["token"] as? String, let user = json["user"] as? [String: Any] {
                     self.authToken = token
                     self.currentUsername = user["username"] as? String
+                    // Server luôn dùng userId (req.user.id) làm roomId cho stream session,
+                    // frame HTTP fallback, gps, card entries... nên phải lưu và dùng đúng giá trị này,
+                    // KHÔNG dùng username, để tránh lệch phòng với các kênh còn lại.
+                    self.currentUserId = (user["id"] as? String) ?? (user["_id"] as? String)
                     self.isAuthenticated = true
                     self.errorMessage = nil
                     completion(true)
@@ -134,6 +139,8 @@ public class NetworkManager: ObservableObject {
         }.resume()
     }
 
+    private var isWebSocketConnecting = false
+
     public var webSocketURL: URL? {
         let clean = NetworkManager.normalizeServerURL(serverURL)
         var wsBase = clean
@@ -142,25 +149,44 @@ public class NetworkManager: ObservableObject {
         } else if wsBase.hasPrefix("http://") {
             wsBase = "ws://" + wsBase.dropFirst(7)
         }
-        let roomId = currentUsername ?? activeStreamId ?? "default"
+        // QUAN TRỌNG: phải dùng currentUserId (khớp với req.user.id mà server dùng cho
+        // /api/stream/start, /api/stream/frame, gps, card entries...), KHÔNG dùng currentUsername.
+        // Nếu dùng username, mobile sẽ gửi frame vào một "room" khác với room mà Web đang join,
+        // khiến trạng thái Live lên nhưng hình ảnh không bao giờ tới Web.
+        let roomId = currentUserId ?? activeStreamId ?? "default"
         let full = "\(wsBase)/stream/binary?roomId=\(roomId)&role=mobile"
         return URL(string: full)
     }
 
     public func connectWebSocket() {
-        disconnectWebSocket()
+        guard !isWebSocketConnected && !isWebSocketConnecting else { return }
         guard let url = webSocketURL else { return }
+        
+        isWebSocketConnecting = true
         let session = URLSession(configuration: .default)
         self.webSocketSession = session
         let task = session.webSocketTask(with: url)
         self.webSocketTask = task
         task.resume()
-        self.isWebSocketConnected = true
+
+        // Xác nhận handshake thành công qua ping trước khi chuyển state sang connected
+        task.sendPing { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isWebSocketConnecting = false
+                if error == nil {
+                    self.isWebSocketConnected = true
+                } else {
+                    self.isWebSocketConnected = false
+                }
+            }
+        }
         listenWebSocket()
     }
 
     public func disconnectWebSocket() {
         isWebSocketConnected = false
+        isWebSocketConnecting = false
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
         webSocketSession?.invalidateAndCancel()
@@ -175,6 +201,7 @@ public class NetworkManager: ObservableObject {
                 self.listenWebSocket()
             case .failure:
                 self.isWebSocketConnected = false
+                self.isWebSocketConnecting = false
                 DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) { [weak self] in
                     guard let self = self, self.activeStreamId != nil else { return }
                     self.connectWebSocket()
