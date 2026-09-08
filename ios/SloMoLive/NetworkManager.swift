@@ -260,6 +260,8 @@ public class NetworkManager: ObservableObject {
 
     /// Gửi pipelined: cho phép gửi nhiều frames song song (maxConcurrentSends) để giảm latency.
     /// Mỗi frame gửi xong sẽ trigger gửi frame tiếp theo.
+    /// - Nếu queue quá đông (> maxQueueDepth), drop frames cũ để tránh stale.
+    private let maxQueueDepth = 30
     private func drainQueueIfNeeded() {
         guard activeSendCount < maxConcurrentSends else { return }
         guard pendingFrameCount() > 0 else { return }
@@ -267,6 +269,14 @@ public class NetworkManager: ObservableObject {
         guard isWebSocketConnected, let task = webSocketTask else {
             connectWebSocket()
             return
+        }
+
+        // Back-pressure: nếu queue quá sâu, drop các frames cũ nhất
+        // nhưng GIỮ frame mới nhất để live vẫn realtime.
+        if pendingFrameCount() > maxQueueDepth {
+            let dropCount = pendingFrameCount() - maxQueueDepth
+            pendingHead += dropCount
+            compactPendingFramesIfNeeded()
         }
 
         activeSendCount += 1

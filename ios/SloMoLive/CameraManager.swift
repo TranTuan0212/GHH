@@ -113,7 +113,7 @@ public class CameraManager: NSObject, ObservableObject {
                 videoDevice.unlockForConfiguration()
 
                 if self.captureSession.canAddOutput(self.videoDataOutput) {
-                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = false
+                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = true  // Bỏ frames cũ khi delegate xử lý không kịp
                     self.videoDataOutput.videoSettings = [
                         kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
                     ]
