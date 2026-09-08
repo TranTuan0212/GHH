@@ -541,89 +541,64 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     let ws: WebSocket | null = null;
     let reconnectTimer: any = null;
 
-    // TRẦN ĐỘ TRỄ TUYỆT ĐỐI cho toàn hệ thống (tính từ thời điểm quay thực tế trên iPhone tới lúc
-    // hiển thị trên Web) — PHẢI dùng cùng một mốc "đồng hồ thực" (Date.now()) ở MỌI tầng
-    // (iOS/Server/Web), không phải đo tương đối trong riêng hàng đợi của từng tầng. Trước đây Web
-    // đo "khoảng cách giữa frame mới nhất và cũ nhất TRONG HÀNG ĐỢI CỦA CHÍNH NÓ" — nếu frame đã bị
-    // trễ sẵn từ iOS/Server (ví dụ đã trễ 10s trước khi tới Web), Web vẫn vô tình cho phép trễ thêm
-    // tối đa 10s NỮA vì không biết frame đã "già" từ trước. Cộng dồn qua 3 tầng độc lập như vậy có
-    // thể ra tới ~30s thực tế dù mỗi tầng đều cấu hình "tối đa 10s". Sửa: luôn so sánh tuổi frame
-    // với Date.now() thực tế — tầng nào cũng tự động không cho tổng độ trễ vượt ngưỡng này, bất kể
-    // độ trễ đã phát sinh ở đâu trước đó.
+    // DECODE SONG SONG (Parallel Decode):
+    // Mỗi frame đến lập tức được gửi cho GPU browser để decode (createImageBitmap chạy trên
+    // luồng imaging riêng của browser, KHÔNG chặn JS main thread). Các frame decode song song
+    // với nhau — không cần chờ frame trước xong. insertFrameSorted đảm bảo thứ tự trong history.
+    // Kết quả: Live không bị trễ do backlog, Slow-Mo vẫn đủ frame.
     const TOTAL_MAX_LATENCY_SEC = 60;
-    type QueuedFrame = { timestamp: number; bytes: ArrayBuffer };
-    const decodeQueue: QueuedFrame[] = [];
-    let isDecoding = false;
 
-    async function processDecodeQueue() {
-      if (isDecoding) return;
-      isDecoding = true;
-      while (decodeQueue.length > 0) {
-        const item = decodeQueue.shift()!;
+    function decodeAndStore(timestamp: number, jpegBytes: ArrayBuffer) {
+      const nowSec = Date.now() / 1000;
+      if (nowSec > timestamp && nowSec - timestamp > TOTAL_MAX_LATENCY_SEC) return;
 
-        // Tới lượt xử lý mà đã quá hạn tổng (tuổi tuyệt đối tính từ lúc quay) -> bỏ luôn
-        if (Date.now() / 1000 > item.timestamp && Date.now() / 1000 - item.timestamp > TOTAL_MAX_LATENCY_SEC) {
-          continue;
+      const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+      createImageBitmap(blob).then((bitmap) => {
+        if (!isMounted) {
+          if (typeof bitmap.close === 'function') bitmap.close();
+          return;
         }
 
-        try {
-          const blob = new Blob([item.bytes], { type: 'image/jpeg' });
-          // Giải mã trên luồng GPU nền (không chặn JS main thread), nhưng chờ tuần tự để giữ thứ tự
-          const bitmap = await createImageBitmap(blob);
-          if (!isMounted) {
-            if (typeof bitmap.close === 'function') bitmap.close();
-            break;
-          }
+        const history = frameBitmapsRef.current;
+        insertFrameSorted({ timestamp, bitmap });
+        receivedFrameCountRef.current++;
 
-          const history = frameBitmapsRef.current;
-          insertFrameSorted({ timestamp: item.timestamp, bitmap });
-          receivedFrameCountRef.current++;
-
-          // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 3000 frames (~12.5s ở 240fps, 25s ở 120fps)
-          if (history.length > 3000) {
-            // Khi đang xem slow-mo ở vị trí gần đầu, bảo vệ tối thiểu 100 frame trước playhead
-            if (historyIndexRef.current < 0 || historyIndexRef.current > 100) {
-              const old = history.shift();
-              if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') {
-                (old.bitmap as any).close();
-              }
-              if (historyIndexRef.current > 0) {
-                historyIndexRef.current--;
-              }
-              if (markedFrameRef.current && markedFrameRef.current.index > 0) {
-                markedFrameRef.current.index--;
-                setMarkedFrame({ ...markedFrameRef.current });
-              }
+        // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 3000 frames (~12.5s ở 240fps, 25s ở 120fps)
+        if (history.length > 3000) {
+          if (historyIndexRef.current < 0 || historyIndexRef.current > 100) {
+            const old = history.shift();
+            if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') {
+              (old.bitmap as any).close();
+            }
+            if (historyIndexRef.current > 0) {
+              historyIndexRef.current--;
+            }
+            if (markedFrameRef.current && markedFrameRef.current.index > 0) {
+              markedFrameRef.current.index--;
+              setMarkedFrame({ ...markedFrameRef.current });
             }
           }
-
-          if (!hasFrameRef.current) {
-            hasFrameRef.current = true;
-            setHasFrame(true);
-          }
-
-          // Khi Live: chỉ render frame lên canvas khi đây là frame MỚI NHẤT trong batch hiện tại
-          // (decodeQueue đã trống sau khi shift() item này, hoặc chỉ còn rất ít).
-          // Điều này tránh hiển thị frame cũ trong queue khi backlog tạm thời tăng lên,
-          // đảm bảo canvas luôn phát Live gần thực tế nhất, không bị trễ nhân tạo do queue.
-          // Mọi frame vẫn được lưu đầy đủ vào history cho Slow-Mo (không mất frame nào).
-          if (isLiveRef.current) {
-            if (item.timestamp < lastLiveRenderedTsRef.current - 5.0) {
-              lastLiveRenderedTsRef.current = 0;
-            }
-            if (item.timestamp >= lastLiveRenderedTsRef.current) {
-              lastLiveRenderedTsRef.current = item.timestamp;
-              // Chỉ vẽ nếu đây là frame cuối batch (queue = 0) hoặc queue rất nhỏ
-              if (decodeQueue.length === 0 || decodeQueue.length < 4) {
-                renderFrame(bitmap);
-              }
-            }
-          }
-        } catch {
-          // Bỏ qua lỗi giải mã nếu frame bị gián đoạn, không làm gián đoạn hàng đợi
         }
-      }
-      isDecoding = false;
+
+        if (!hasFrameRef.current) {
+          hasFrameRef.current = true;
+          setHasFrame(true);
+        }
+
+        // Live: Vẽ ngay khi frame mới nhất decode xong. Vì decode song song, frame mới có thể
+        // finish trước frame cũ đôi khi — lastLiveRenderedTsRef lọc bỏ frame cũ đến sau.
+        if (isLiveRef.current) {
+          if (timestamp < lastLiveRenderedTsRef.current - 5.0) {
+            lastLiveRenderedTsRef.current = 0;
+          }
+          if (timestamp >= lastLiveRenderedTsRef.current) {
+            lastLiveRenderedTsRef.current = timestamp;
+            renderFrame(bitmap);
+          }
+        }
+      }).catch(() => {
+        // Bỏ qua lỗi giải mã không ảnh hưởng đến frame khác
+      });
     }
 
     function enqueueIncoming(buf: ArrayBuffer) {
@@ -632,25 +607,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const magic = view.getUint32(0, false);
       if (magic !== 0x534C4F4D) return; // "SLOM"
       const timestamp = view.getFloat64(8, false);
-
-      // Kiểm tra ngay khi nhận: chỉ bỏ frame nếu thực sự quá cũ (trên 60s)
-      const nowSec = Date.now() / 1000;
-      if (nowSec > timestamp && nowSec - timestamp > TOTAL_MAX_LATENCY_SEC) {
-        return;
-      }
-
       const jpegBytes = buf.slice(16);
-      decodeQueue.push({ timestamp, bytes: jpegBytes });
-
-      while (
-        decodeQueue.length > 0 &&
-        Date.now() / 1000 > decodeQueue[0].timestamp &&
-        Date.now() / 1000 - decodeQueue[0].timestamp > TOTAL_MAX_LATENCY_SEC
-      ) {
-        decodeQueue.shift();
-      }
-
-      processDecodeQueue();
+      decodeAndStore(timestamp, jpegBytes);
     }
 
     function connect() {
