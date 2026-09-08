@@ -69,30 +69,84 @@ export function parseCard(raw: string): { rank: string; value: number } {
   return { rank: s, value: 0 };
 }
 
-// Kiểm tra tính hợp lệ của lá bài nhập vào (A, 2..10, J, Q, K)
-export function isValidCardValue(raw: string): { isValid: boolean; normalizedRank: string; value: number; error?: string } {
+// Kiểm tra tính hợp lệ của từng lá bài đơn lẻ
+function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: string; value: number; error?: string } {
   if (!raw || !raw.trim()) {
     return { isValid: false, normalizedRank: '', value: 0, error: 'Vui lòng nhập giá trị lá bài!' };
   }
 
   const s = raw.trim().toUpperCase();
 
-  // Át / Ace
-  if (s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE' || s.endsWith('A') || s.includes('ACE')) {
+  // 10 (ưu tiên bắt trước 1 để tránh nhầm với A)
+  if (s === '10' || s.startsWith('10') || s.endsWith('10')) {
+    return { isValid: true, normalizedRank: '10', value: 10 };
+  }
+
+  // Át / Ace / 1
+  if (
+    s === 'A' ||
+    s === 'ÁT' ||
+    s === 'AT' ||
+    s === 'ACE' ||
+    s === '1' ||
+    s.startsWith('A ') ||
+    s.startsWith('ÁT ') ||
+    s.startsWith('AT ') ||
+    s.startsWith('ACE ') ||
+    s.startsWith('A') ||
+    s.endsWith('A') ||
+    s.includes('ÁT') ||
+    s.includes('ACE')
+  ) {
     return { isValid: true, normalizedRank: 'A', value: 1 };
   }
-  // Tây / Hình người
-  if (s === 'J' || s === 'BỒI' || s === 'BOI' || s === 'JACK' || s.endsWith('J') || s.includes('BỒI')) {
+
+  // Tây: J (Bồi)
+  if (
+    s === 'J' ||
+    s === 'BỒI' ||
+    s === 'BOI' ||
+    s === 'JACK' ||
+    s.startsWith('J ') ||
+    s.startsWith('J') ||
+    s.startsWith('BỒI') ||
+    s.startsWith('BOI') ||
+    s.endsWith('J') ||
+    s.includes('BỒI')
+  ) {
     return { isValid: true, normalizedRank: 'J', value: 10 };
   }
-  if (s === 'Q' || s === 'ĐẦM' || s === 'DAM' || s === 'QUEEN' || s.endsWith('Q') || s.includes('ĐẦM')) {
+
+  // Tây: Q (Đầm)
+  if (
+    s === 'Q' ||
+    s === 'ĐẦM' ||
+    s === 'DAM' ||
+    s === 'QUEEN' ||
+    s.startsWith('Q ') ||
+    s.startsWith('Q') ||
+    s.startsWith('ĐẦM') ||
+    s.startsWith('DAM') ||
+    s.endsWith('Q') ||
+    s.includes('ĐẦM')
+  ) {
     return { isValid: true, normalizedRank: 'Q', value: 10 };
   }
-  if (s === 'K' || s === 'GIÀ' || s === 'GIA' || s === 'KING' || s.endsWith('K') || s.includes('GIÀ')) {
+
+  // Tây: K (Già)
+  if (
+    s === 'K' ||
+    s === 'GIÀ' ||
+    s === 'GIA' ||
+    s === 'KING' ||
+    s.startsWith('K ') ||
+    s.startsWith('K') ||
+    s.startsWith('GIÀ') ||
+    s.startsWith('GIA') ||
+    s.endsWith('K') ||
+    s.includes('GIÀ')
+  ) {
     return { isValid: true, normalizedRank: 'K', value: 10 };
-  }
-  if (s === '10' || s.endsWith('10')) {
-    return { isValid: true, normalizedRank: '10', value: 10 };
   }
 
   // Số từ 2..9 (hoặc 1 tính là A)
@@ -122,6 +176,35 @@ export function isValidCardValue(raw: string): { isValid: boolean; normalizedRan
     value: 0,
     error: `"${raw}" không phải lá bài hợp lệ! Vui lòng chỉ nhập: A, 2..10, J, Q, K.`
   };
+}
+
+// Kiểm tra tính hợp lệ của lá bài nhập vào (hỗ trợ cả 1 lá hoặc nhiều lá cách nhau bởi dấu phẩy)
+export function isValidCardValue(raw: string): { isValid: boolean; normalizedRank: string; value: number; error?: string } {
+  if (!raw || !raw.trim()) {
+    return { isValid: false, normalizedRank: '', value: 0, error: 'Vui lòng nhập giá trị lá bài!' };
+  }
+
+  // Hỗ trợ nhập nhiều lá bài cách nhau bằng dấu phẩy (vd: "8, 9, K" hoặc "8, 9, 10")
+  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1) {
+    const normalizedParts: string[] = [];
+    let lastValue = 0;
+    for (const part of parts) {
+      const res = validateSingleCard(part);
+      if (!res.isValid) {
+        return res;
+      }
+      normalizedParts.push(res.normalizedRank);
+      lastValue = res.value;
+    }
+    return {
+      isValid: true,
+      normalizedRank: normalizedParts.join(','),
+      value: lastValue
+    };
+  }
+
+  return validateSingleCard(raw);
 }
 
 // Tính kết quả Chế độ 3 Lá (Liêng / Sáp)
@@ -478,10 +561,30 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Chia bài từ thanh input trên cùng
+  // Chia bài từ thanh input trên cùng (hoặc tự động lấy giá trị từ ô đang điền của nhóm đang chọn)
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const raw = manualInput.trim();
+    let target = currentTargetGroup;
+    let raw = manualInput.trim();
+
+    // Nếu ô trên cùng trống, tự động lấy giá trị từ ô Điền của nhóm đang chọn/mục tiêu hoặc bất kỳ ô nào có dữ liệu
+    if (!raw) {
+      if ((groupBotInputs[target] || '').trim()) {
+        raw = groupBotInputs[target].trim();
+      } else if (activeGroupId && (groupBotInputs[activeGroupId] || '').trim()) {
+        target = activeGroupId;
+        raw = groupBotInputs[activeGroupId].trim();
+      } else {
+        const foundKey = Object.keys(groupBotInputs).find(
+          (k) => (groupBotInputs[Number(k)] || '').trim() !== ''
+        );
+        if (foundKey) {
+          target = Number(foundKey);
+          raw = groupBotInputs[target].trim();
+        }
+      }
+    }
+
     if (!raw) {
       setValidationError('Vui lòng nhập giá trị lá bài trước khi chia!');
       return;
@@ -491,20 +594,24 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
       return;
     }
-    const target = currentTargetGroup;
     onAddCard(check.normalizedRank, numGroups, target);
     const gName = groupNames[target] || `Nhóm ${target}`;
     showToast(`✨ Đã chia lá "${check.normalizedRank}" vào ${gName}`);
     setManualInput('');
+    setGroupBotInputs((prev) => ({ ...prev, [target]: '' }));
     setActiveGroupId(null);
   };
 
-  // Thao tác Bọt riêng cho từng nhóm
+  // Thao tác Chia / Bọt riêng cho từng nhóm
   const handleBotSubmit = (groupNum: number) => {
     const raw = (groupBotInputs[groupNum] || '').trim() || manualInput.trim();
     const gName = groupNames[groupNum] || `Nhóm ${groupNum}`;
+    const allItemsInGroup = groupedItems[groupNum] || [];
+    const minSlots = gameMode === '3cards' ? 3 : 2;
+    const isBot = allItemsInGroup.length >= minSlots;
+
     if (!raw) {
-      setValidationError(`Vui lòng nhập giá trị lá bài để bọt vào ${gName}!`);
+      setValidationError(`Vui lòng nhập giá trị lá bài để ${isBot ? 'bọt' : 'chia'} vào ${gName}!`);
       return;
     }
     const check = isValidCardValue(raw);
@@ -513,7 +620,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       return;
     }
     onAddCard(check.normalizedRank, numGroups, groupNum);
-    showToast(`+ Đã bọt lá "${check.normalizedRank}" vào ${gName}`);
+    showToast(`${isBot ? '+' : '✨'} Đã ${isBot ? 'bọt' : 'chia'} lá "${check.normalizedRank}" vào ${gName}`);
     setGroupBotInputs((prev) => ({ ...prev, [groupNum]: '' }));
     if (raw === manualInput.trim()) {
       setManualInput('');
@@ -999,16 +1106,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   />
                 </div>
 
-                {/* Hàng 2: Hai nút cân đối 50-50 (+ Bọt & Dằn) */}
+                {/* Hàng 2: Hai nút cân đối 50-50 (+ Chia/Bọt & Dằn) */}
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleBotSubmit(groupNum)}
                     className="w-full py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center justify-center space-x-1 shadow-sm transition-all active:scale-95"
-                    title={`Rút thêm bài (Bọt) vào ${customName}`}
+                    title={
+                      allItemsInGroup.length < minSlots
+                        ? `Chia lá vào ${customName}`
+                        : `Rút thêm bài (Bọt) vào ${customName}`
+                    }
                   >
                     <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                    <span>Bọt</span>
+                    <span>{allItemsInGroup.length < minSlots ? 'Chia' : 'Bọt'}</span>
                   </button>
 
                   <button
