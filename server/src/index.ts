@@ -321,6 +321,55 @@ interface BinaryClient extends WebSocket {
   roomId?: string;
   role?: 'mobile' | 'web' | 'admin';
   isAlive?: boolean;
+  outQueue?: Buffer[];
+  isSendingQueue?: boolean;
+}
+
+// Độ trễ tối đa cho phép so với thời điểm quay thực tế (ms). Trong ngưỡng này KHÔNG mất frame,
+// chỉ chấp nhận trễ; vượt ngưỡng mới bắt đầu loại bỏ frame cũ nhất của RIÊNG client đó (không
+// ảnh hưởng tới các viewer khác đang xem mượt).
+const MAX_BUFFERED_LATENCY_MS = 10000;
+
+// Đọc lại Timestamp (Double, Big Endian, giây) từ header 16 byte mà iOS đã đóng gói: bytes 8..16
+function readFrameTimestampMs(buf: Buffer): number {
+  if (buf.length < 16) return Date.now();
+  return buf.readDoubleBE(8) * 1000;
+}
+
+// Xếp hàng một frame để gửi cho 1 client cụ thể, đảm bảo gửi tuần tự đúng thứ tự và không tích
+// luỹ RAM/độ trễ vô hạn khi client đó có mạng chậm hơn tốc độ stream.
+function enqueueForClient(client: BinaryClient, data: Buffer) {
+  if (!client.outQueue) client.outQueue = [];
+  client.outQueue.push(data);
+
+  const now = Date.now();
+  while (client.outQueue.length > 0) {
+    const oldest = client.outQueue[0];
+    if (now - readFrameTimestampMs(oldest) > MAX_BUFFERED_LATENCY_MS) {
+      client.outQueue.shift();
+    } else {
+      break;
+    }
+  }
+
+  drainClientQueue(client);
+}
+
+function drainClientQueue(client: BinaryClient) {
+  if (client.isSendingQueue) return;
+  if (!client.outQueue || client.outQueue.length === 0) return;
+  if (client.readyState !== WebSocket.OPEN) return;
+
+  client.isSendingQueue = true;
+  const next = client.outQueue.shift()!;
+  client.send(next, { binary: true }, (err) => {
+    client.isSendingQueue = false;
+    if (err) {
+      // Gửi lỗi: đưa frame trở lại đầu hàng đợi của chính client này để thử lại
+      client.outQueue!.unshift(next);
+    }
+    drainClientQueue(client);
+  });
 }
 
 const wssBinary = new WebSocketServer({ noServer: true });
@@ -351,9 +400,7 @@ wssBinary.on('connection', (ws: BinaryClient, request) => {
   if (role === 'web') {
     const binBuf = getDvrBinaryBuffer(roomId);
     if (binBuf.length > 0) {
-      try {
-        ws.send(binBuf[binBuf.length - 1], { binary: true });
-      } catch {}
+      enqueueForClient(ws, binBuf[binBuf.length - 1]);
     }
   }
 
@@ -374,21 +421,24 @@ wssBinary.on('connection', (ws: BinaryClient, request) => {
       buf.shift();
     }
 
-    // Broadcast nhị phân trực tiếp cho tất cả Web viewer trong Room này và Admin
+    // Broadcast nhị phân cho tất cả Web viewer trong Room này và Admin, mỗi client có hàng đợi
+    // riêng để: (1) không mất frame khi client đó tạm chậm hơn nguồn stream, (2) không để 1 client
+    // chậm làm chậm/ảnh hưởng tới các client khác, (3) giữ đúng thứ tự khung hình.
     wssBinary.clients.forEach((client: BinaryClient) => {
       if (
         client !== ws &&
         client.readyState === WebSocket.OPEN &&
         (client.roomId === targetRoomId || client.role === 'admin')
       ) {
-        try {
-          client.send(data, { binary: true });
-        } catch {}
+        enqueueForClient(client, data);
       }
     });
   });
 
   ws.on('error', () => {});
+  ws.on('close', () => {
+    ws.outQueue = [];
+  });
 });
 
 const binaryPingInterval = setInterval(() => {

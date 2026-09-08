@@ -28,6 +28,23 @@ public class NetworkManager: ObservableObject {
     private var frameSequence: UInt32 = 0
     @Published public var isWebSocketConnected = false
 
+    // MARK: - Hàng đợi khung hình có thứ tự, chấp nhận trễ tối đa thay vì mất khung hình
+    //
+    // Trước đây: nếu > 10 frame đang "in-flight" thì bỏ luôn frame mới (mất hình khi mạng chậm).
+    // Bây giờ: mọi frame sau khi encode đều được xếp hàng (FIFO) và CHỈ bị loại khi tuổi của nó
+    // (so với frame mới nhất) vượt quá `maxBufferedLatency` giây — nghĩa là "chấp nhận trễ tối đa
+    // N giây, nhưng trong ngưỡng đó thì không mất khung hình nào". Gửi tuần tự (1 frame tại 1 thời
+    // điểm) để đảm bảo thứ tự tới Server đúng như thứ tự quay.
+    private struct PendingFrame {
+        let seq: UInt32
+        let timestamp: Double
+        let data: Data
+    }
+    private var pendingFrames: [PendingFrame] = []
+    private var isSenderActive = false
+    /// Độ trễ tối đa được phép so với thời điểm quay thực tế (giây). Có thể chỉnh theo nhu cầu.
+    public var maxBufferedLatency: Double = 10.0
+
     private lazy var frameSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10.0
@@ -176,6 +193,8 @@ public class NetworkManager: ObservableObject {
                 self.isWebSocketConnecting = false
                 if error == nil {
                     self.isWebSocketConnected = true
+                    // Bắt đầu xả các frame đã tích luỹ trong lúc chờ kết nối
+                    self.frameQueue.async { self.drainQueueIfNeeded() }
                 } else {
                     self.isWebSocketConnected = false
                 }
@@ -210,53 +229,67 @@ public class NetworkManager: ObservableObject {
         }
     }
 
-    /// Gửi khung hình nhị phân 120fps/240fps qua WebSocket siêu tốc (Không JSON, Không Base64, Tự động giải phóng RAM)
+    /// Gửi khung hình nhị phân 120fps/240fps qua WebSocket. Không mất khung hình trong ngưỡng
+    /// `maxBufferedLatency` — chỉ chấp nhận trễ, không bỏ frame, trừ khi hàng đợi đã quá cũ.
     public func sendBinaryFrame(data: Data, timestamp: Double) {
-        if !isWebSocketConnected || webSocketTask == nil {
-            connectWebSocket()
-            let base64 = data.base64EncodedString()
-            sendVideoFrame(base64Data: base64)
-            return
-        }
-        guard let task = webSocketTask else {
-            let base64 = data.base64EncodedString()
-            sendVideoFrame(base64Data: base64)
-            return
-        }
-
         frameQueue.async {
-            // Chống tích tụ RAM & chống trễ hình (Backpressure): nếu mạng nghẽn (> 10 gói chưa gửi xong) thì bỏ qua
-            guard self.inFlightFrames < 10 else { return }
-            self.inFlightFrames += 1
-
             self.frameSequence &+= 1
-            var packet = Data(capacity: 16 + data.count)
+            self.pendingFrames.append(PendingFrame(seq: self.frameSequence, timestamp: timestamp, data: data))
 
-            // Header 16 bytes:
-            // 1. Magic 4 bytes: 0x534C4F4D ("SLOM")
-            var magic = UInt32(0x534C4F4D).bigEndian
-            withUnsafeBytes(of: &magic) { packet.append(contentsOf: $0) }
+            // Chỉ loại bỏ frame khi tuổi của nó (so với frame vừa nhận) vượt ngưỡng trễ cho phép.
+            // Đây là lựa chọn duy nhất khi mạng/encode không theo kịp tốc độ camera trong thời gian dài;
+            // nếu không có bước này, hàng đợi và RAM sẽ tăng vô hạn.
+            while let oldest = self.pendingFrames.first,
+                  (timestamp - oldest.timestamp) > self.maxBufferedLatency {
+                self.pendingFrames.removeFirst()
+            }
 
-            // 2. Sequence Number: UInt32 Big Endian
-            var seq = self.frameSequence.bigEndian
-            withUnsafeBytes(of: &seq) { packet.append(contentsOf: $0) }
+            self.drainQueueIfNeeded()
+        }
+    }
 
-            // 3. Timestamp: Double 8 bytes Big Endian
-            var bitPattern = timestamp.bitPattern.bigEndian
-            withUnsafeBytes(of: &bitPattern) { packet.append(contentsOf: $0) }
+    /// Gửi tuần tự từng frame trong hàng đợi (đảm bảo đúng thứ tự), tự động nối lại khi WS rớt.
+    /// LUÔN gọi trên frameQueue.
+    private func drainQueueIfNeeded() {
+        guard !isSenderActive else { return }
+        guard !pendingFrames.isEmpty else { return }
 
-            // 4. Raw JPEG bytes
-            packet.append(data)
+        guard isWebSocketConnected, let task = webSocketTask else {
+            // Chưa có kết nối WS: chủ động thử kết nối lại; đồng thời gửi tạm frame mới nhất
+            // qua HTTP fallback để Web còn có gì đó hiển thị trong lúc chờ (không đảm bảo thứ tự/độ trễ).
+            connectWebSocket()
+            if let latest = pendingFrames.last {
+                sendVideoFrame(base64Data: latest.data.base64EncodedString())
+            }
+            return
+        }
 
-            let msg = URLSessionWebSocketTask.Message.data(packet)
-            task.send(msg) { [weak self] error in
-                guard let self = self else { return }
-                self.frameQueue.async {
-                    self.inFlightFrames = max(0, self.inFlightFrames - 1)
-                    if error != nil {
-                        self.isWebSocketConnected = false
-                    }
+        isSenderActive = true
+        let frame = pendingFrames.removeFirst()
+
+        var packet = Data(capacity: 16 + frame.data.count)
+        // Header 16 bytes: Magic 4 bytes "SLOM" + Sequence 4 bytes + Timestamp 8 bytes
+        var magic = UInt32(0x534C4F4D).bigEndian
+        withUnsafeBytes(of: &magic) { packet.append(contentsOf: $0) }
+        var seq = frame.seq.bigEndian
+        withUnsafeBytes(of: &seq) { packet.append(contentsOf: $0) }
+        var bitPattern = frame.timestamp.bitPattern.bigEndian
+        withUnsafeBytes(of: &bitPattern) { packet.append(contentsOf: $0) }
+        packet.append(frame.data)
+
+        let msg = URLSessionWebSocketTask.Message.data(packet)
+        task.send(msg) { [weak self] error in
+            guard let self = self else { return }
+            self.frameQueue.async {
+                self.isSenderActive = false
+                if error != nil {
+                    self.isWebSocketConnected = false
+                    // Gửi lỗi: đưa frame trở lại ĐẦU hàng đợi để thử lại, không làm mất dữ liệu
+                    // (trừ khi sau đó nó bị loại bỏ do vượt ngưỡng maxBufferedLatency ở lần append kế tiếp).
+                    self.pendingFrames.insert(frame, at: 0)
                 }
+                // Tiếp tục gửi frame kế tiếp (nếu còn) để duy trì luồng tuần tự
+                self.drainQueueIfNeeded()
             }
         }
     }

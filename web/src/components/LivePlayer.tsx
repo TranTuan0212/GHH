@@ -330,58 +330,91 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     let ws: WebSocket | null = null;
     let reconnectTimer: any = null;
 
+    // Hàng đợi giải mã: WebSocket (TCP) đã đảm bảo thứ tự message tới, nhưng nếu decode nhiều
+    // frame song song (createImageBitmap là async), các promise có thể resolve KHÔNG đúng thứ tự
+    // dưới tải cao (120/240fps) -> hình bị chèn sai trình tự trong buffer lịch sử. Xử lý tuần tự
+    // (1 frame tại 1 thời điểm) để đảm bảo đúng thứ tự tuyệt đối, đồng thời giới hạn hàng đợi theo
+    // độ trễ tối đa cho phép để không tích luỹ RAM vô hạn nếu tab bị throttle nền/máy yếu.
+    const MAX_QUEUE_LATENCY_SEC = 10;
+    type QueuedFrame = { timestamp: number; bytes: ArrayBuffer };
+    const decodeQueue: QueuedFrame[] = [];
+    let isDecoding = false;
+
+    async function processDecodeQueue() {
+      if (isDecoding) return;
+      isDecoding = true;
+      while (decodeQueue.length > 0) {
+        const item = decodeQueue.shift()!;
+        try {
+          const blob = new Blob([item.bytes], { type: 'image/jpeg' });
+          // Giải mã trên luồng GPU nền (không chặn JS main thread), nhưng chờ tuần tự để giữ thứ tự
+          const bitmap = await createImageBitmap(blob);
+          if (!isMounted) {
+            if (typeof bitmap.close === 'function') bitmap.close();
+            break;
+          }
+
+          const history = frameBitmapsRef.current;
+          history.push(bitmap);
+
+          // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 1800 frames (~15-30s Slow-Mo)
+          if (history.length > 1800) {
+            const old = history.shift();
+            if (old && 'close' in old && typeof (old as any).close === 'function') {
+              (old as any).close();
+            }
+            if (historyIndexRef.current > 0) {
+              historyIndexRef.current--;
+            }
+          }
+
+          if (!hasFrameRef.current) {
+            hasFrameRef.current = true;
+            setHasFrame(true);
+          }
+
+          if (isLiveRef.current) {
+            renderFrame(bitmap);
+          }
+        } catch {
+          // Bỏ qua lỗi giải mã nếu frame bị gián đoạn, không làm gián đoạn hàng đợi
+        }
+      }
+      isDecoding = false;
+    }
+
+    function enqueueIncoming(buf: ArrayBuffer) {
+      if (buf.byteLength < 16) return;
+      const view = new DataView(buf);
+      const magic = view.getUint32(0, false);
+      if (magic !== 0x534C4F4D) return; // "SLOM"
+      const timestamp = view.getFloat64(8, false);
+      const jpegBytes = buf.slice(16);
+      decodeQueue.push({ timestamp, bytes: jpegBytes });
+
+      // Trần độ trễ phía Web: nếu frame mới nhất đến quá xa so với frame cũ nhất còn trong hàng
+      // đợi giải mã (nghĩa là máy/tab không giải mã kịp), bỏ bớt frame cũ nhất thay vì để trễ
+      // tăng vô hạn. Trong ngưỡng MAX_QUEUE_LATENCY_SEC thì không mất frame nào.
+      while (
+        decodeQueue.length > 1 &&
+        timestamp - decodeQueue[0].timestamp > MAX_QUEUE_LATENCY_SEC
+      ) {
+        decodeQueue.shift();
+      }
+
+      processDecodeQueue();
+    }
+
     function connect() {
       const wsUrl = getBinaryWebSocketUrl(detectedServerUrl, roomId || 'default');
       try {
         ws = new WebSocket(wsUrl);
         ws.binaryType = 'arraybuffer';
 
-        ws.onmessage = async (e) => {
+        ws.onmessage = (e) => {
           if (!isMounted) return;
           if (e.data instanceof ArrayBuffer) {
-            const buf = e.data;
-            if (buf.byteLength < 16) return;
-            const view = new DataView(buf);
-            const magic = view.getUint32(0, false);
-            if (magic !== 0x534C4F4D) return; // "SLOM"
-
-            const jpegBytes = buf.slice(16);
-            try {
-              const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-              // Giải mã trực tiếp trên luồng GPU nền (không chặn JavaScript main thread)
-              const bitmap = await createImageBitmap(blob);
-              if (!isMounted) {
-                if (typeof bitmap.close === 'function') bitmap.close();
-                return;
-              }
-
-              const history = frameBitmapsRef.current;
-              history.push(bitmap);
-
-              // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 1800 frames (~15-30s Slow-Mo)
-              // Tự động gọi close() thu hồi VRAM của frame cũ nhất để chống tràn RAM tuyệt đối!
-              if (history.length > 1800) {
-                const old = history.shift();
-                if (old && 'close' in old && typeof (old as any).close === 'function') {
-                  (old as any).close();
-                }
-                if (historyIndexRef.current > 0) {
-                  historyIndexRef.current--;
-                }
-              }
-
-              if (!hasFrameRef.current) {
-                hasFrameRef.current = true;
-                setHasFrame(true);
-              }
-
-              // Nếu đang xem Live trực tiếp: hiển thị ngay frame mới nhất
-              if (isLiveRef.current) {
-                renderFrame(bitmap);
-              }
-            } catch {
-              // Bỏ qua lỗi giải mã nếu frame bị gián đoạn
-            }
+            enqueueIncoming(e.data);
           }
         };
 
