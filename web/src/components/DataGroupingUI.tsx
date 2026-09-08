@@ -178,30 +178,56 @@ function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: st
   };
 }
 
-// Kiểm tra tính hợp lệ của lá bài nhập vào (hỗ trợ cả 1 lá hoặc nhiều lá cách nhau bởi dấu phẩy)
+// Kiểm tra tính hợp lệ của lá bài nhập vào (hỗ trợ cả 1 lá hoặc nhiều lá cách nhau bởi dấu phẩy hoặc khoảng trắng)
 export function isValidCardValue(raw: string): { isValid: boolean; normalizedRank: string; value: number; error?: string } {
   if (!raw || !raw.trim()) {
     return { isValid: false, normalizedRank: '', value: 0, error: 'Vui lòng nhập giá trị lá bài!' };
   }
 
-  // Hỗ trợ nhập nhiều lá bài cách nhau bằng dấu phẩy (vd: "8, 9, K" hoặc "8, 9, 10")
-  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
-  if (parts.length > 1) {
+  // 1. Hỗ trợ nhập nhiều lá bài cách nhau bằng dấu phẩy (vd: "1,2,3,4,5,6,7,8,9" hoặc "8, 9, K")
+  if (raw.includes(',')) {
+    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      const normalizedParts: string[] = [];
+      let lastValue = 0;
+      for (const part of parts) {
+        const res = validateSingleCard(part);
+        if (!res.isValid) {
+          return res;
+        }
+        normalizedParts.push(res.normalizedRank);
+        lastValue = res.value;
+      }
+      return {
+        isValid: true,
+        normalizedRank: normalizedParts.join(','),
+        value: lastValue
+      };
+    }
+  }
+
+  // 2. Hỗ trợ nhập nhiều lá bài cách nhau bằng dấu cách (vd: "1 2 3 4 5 6 7 8 9" hoặc "8 9 10")
+  const spaceParts = raw.trim().split(/\s+/).filter(Boolean);
+  if (spaceParts.length > 1) {
+    let allValid = true;
     const normalizedParts: string[] = [];
     let lastValue = 0;
-    for (const part of parts) {
+    for (const part of spaceParts) {
       const res = validateSingleCard(part);
       if (!res.isValid) {
-        return res;
+        allValid = false;
+        break;
       }
       normalizedParts.push(res.normalizedRank);
       lastValue = res.value;
     }
-    return {
-      isValid: true,
-      normalizedRank: normalizedParts.join(','),
-      value: lastValue
-    };
+    if (allValid && normalizedParts.length > 1) {
+      return {
+        isValid: true,
+        normalizedRank: normalizedParts.join(','),
+        value: lastValue
+      };
+    }
   }
 
   return validateSingleCard(raw);
@@ -245,7 +271,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
 
   // 2. Kiểm tra Liêng (3 con liên tiếp)
   const rankOrderMap: { [k: string]: number } = {
-    A: 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, J: 11, Q: 12, K: 13
+    A: 1, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, J: 11, Q: 12, K: 13
   };
   const orderNums = ranks.map((r) => rankOrderMap[r] || 0).sort((a, b) => a - b);
 
