@@ -142,7 +142,7 @@ public class NetworkManager: ObservableObject {
         } else if wsBase.hasPrefix("http://") {
             wsBase = "ws://" + wsBase.dropFirst(7)
         }
-        let roomId = activeStreamId ?? "default"
+        let roomId = currentUsername ?? activeStreamId ?? "default"
         let full = "\(wsBase)/stream/binary?roomId=\(roomId)&role=mobile"
         return URL(string: full)
     }
@@ -187,8 +187,15 @@ public class NetworkManager: ObservableObject {
     public func sendBinaryFrame(data: Data, timestamp: Double) {
         if !isWebSocketConnected || webSocketTask == nil {
             connectWebSocket()
+            let base64 = data.base64EncodedString()
+            sendVideoFrame(base64Data: base64)
+            return
         }
-        guard let task = webSocketTask else { return }
+        guard let task = webSocketTask else {
+            let base64 = data.base64EncodedString()
+            sendVideoFrame(base64Data: base64)
+            return
+        }
 
         frameQueue.async {
             // Chống tích tụ RAM & chống trễ hình (Backpressure): nếu mạng nghẽn (> 10 gói chưa gửi xong) thì bỏ qua

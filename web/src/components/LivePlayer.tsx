@@ -63,14 +63,22 @@ function resolveServerUrl(serverUrlFromServer?: string): string {
 
 // Hàm xác định URL WebSocket nhị phân siêu tốc 120fps/240fps
 function getBinaryWebSocketUrl(serverUrl: string, roomId: string): string {
+  const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+  let host = typeof window !== 'undefined' ? window.location.host : 'localhost:4000';
+
+  // Nếu trình duyệt đang mở trên máy tính (localhost/127.0.0.1)
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    const isDevPort = window.location.port === '5173' || window.location.port === '3000';
+    const wsPort = isDevPort ? '4000' : (window.location.port || '4000');
+    return `${proto}${window.location.hostname}:${wsPort}/stream/binary?roomId=${encodeURIComponent(roomId || 'default')}&role=web`;
+  }
+
   let base = serverUrl.trim();
   if (base.startsWith('https://')) {
     base = 'wss://' + base.slice(8);
   } else if (base.startsWith('http://')) {
     base = 'ws://' + base.slice(7);
   } else {
-    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:4000';
     base = proto + host;
   }
   while (base.endsWith('/')) {
