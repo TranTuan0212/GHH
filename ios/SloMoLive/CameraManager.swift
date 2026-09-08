@@ -27,7 +27,9 @@ public class CameraManager: NSObject, ObservableObject {
     //   - targetWidth càng nhỏ -> ảnh càng nhỏ/nhẹ, càng nhanh, nhưng càng mờ khi phóng to.
     //   - jpegQuality càng thấp -> file càng nhẹ, càng nhanh, nhưng càng nhiều artifact/mờ.
     private let targetWidth: CGFloat = 640      // trước đây 960
-    private let jpegQuality: CGFloat = 0.35     // trước đây 0.5
+    private let jpegQuality: CGFloat = 0.50
+    private let videoOutputQueue = DispatchQueue(label: "com.slomo.video.outputQueue", qos: .userInteractive)
+    private var streamEpochOffset: TimeInterval?
     private var lastSentTime: TimeInterval = 0
 
     private var frameCounter = 0
@@ -111,15 +113,16 @@ public class CameraManager: NSObject, ObservableObject {
                 videoDevice.unlockForConfiguration()
 
                 if self.captureSession.canAddOutput(self.videoDataOutput) {
-                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
+                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = false
                     self.videoDataOutput.videoSettings = [
                         kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
                     ]
-                    self.videoDataOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "com.slomo.video.outputQueue"))
+                    self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
                     self.captureSession.addOutput(self.videoDataOutput)
                 }
 
                 self.captureSession.commitConfiguration()
+                self.streamEpochOffset = nil
                 self.captureSession.startRunning()
 
                 DispatchQueue.main.async {

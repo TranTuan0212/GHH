@@ -102,6 +102,8 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
   db.clearCardEntries(roomId);
   const buffer = getDvrBuffer(roomId);
   buffer.length = 0;
+  const binaryBuffer = getDvrBinaryBuffer(roomId);
+  binaryBuffer.length = 0;
   latestLiveFrames[roomId] = null;
 
   if (globalIo) {

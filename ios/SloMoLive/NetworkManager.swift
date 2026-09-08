@@ -28,22 +28,17 @@ public class NetworkManager: ObservableObject {
     private var frameSequence: UInt32 = 0
     @Published public var isWebSocketConnected = false
 
-    // MARK: - Hàng đợi khung hình có thứ tự, chấp nhận trễ tối đa thay vì mất khung hình
-    //
-    // Trước đây: nếu > 10 frame đang "in-flight" thì bỏ luôn frame mới (mất hình khi mạng chậm).
-    // Bây giờ: mọi frame sau khi encode đều được xếp hàng (FIFO) và CHỈ bị loại khi tuổi của nó
-    // (so với frame mới nhất) vượt quá `maxBufferedLatency` giây — nghĩa là "chấp nhận trễ tối đa
-    // N giây, nhưng trong ngưỡng đó thì không mất khung hình nào". Gửi tuần tự (1 frame tại 1 thời
-    // điểm) để đảm bảo thứ tự tới Server đúng như thứ tự quay.
+    // MARK: - Hàng đợi khung hình
+    // FIFO không có policy tự ý bỏ frame theo latency. Nếu transport chậm, queue tăng
+    // để giữ nguyên sequence thay vì âm thầm làm mất frame.
     private struct PendingFrame {
         let seq: UInt32
         let timestamp: Double
         let data: Data
     }
     private var pendingFrames: [PendingFrame] = []
+    private var pendingHead = 0
     private var isSenderActive = false
-    /// Độ trễ tối đa được phép so với thời điểm quay thực tế (giây). Có thể chỉnh theo nhu cầu.
-    public var maxBufferedLatency: Double = 10.0
 
     private lazy var frameSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -229,22 +224,33 @@ public class NetworkManager: ObservableObject {
         }
     }
 
-    /// Gửi khung hình nhị phân 120fps/240fps qua WebSocket. Không mất khung hình trong ngưỡng
-    /// `maxBufferedLatency` — chỉ chấp nhận trễ, không bỏ frame, trừ khi hàng đợi đã quá cũ.
+    /// Gửi từng frame 120/240fps theo đúng thứ tự. Không có policy tự ý bỏ frame theo latency.
+    /// Nếu mạng chậm hơn nguồn, queue sẽ tăng để tạo back-pressure ở tầng transport thay vì
+    /// âm thầm làm mất sequence.
     public func sendBinaryFrame(data: Data, timestamp: Double) {
         frameQueue.async {
             self.frameSequence &+= 1
             self.pendingFrames.append(PendingFrame(seq: self.frameSequence, timestamp: timestamp, data: data))
-
-            // Chỉ loại bỏ frame khi tuổi của nó (so với frame vừa nhận) vượt ngưỡng trễ cho phép.
-            // Đây là lựa chọn duy nhất khi mạng/encode không theo kịp tốc độ camera trong thời gian dài;
-            // nếu không có bước này, hàng đợi và RAM sẽ tăng vô hạn.
-            while let oldest = self.pendingFrames.first,
-                  (timestamp - oldest.timestamp) > self.maxBufferedLatency {
-                self.pendingFrames.removeFirst()
-            }
-
             self.drainQueueIfNeeded()
+        }
+    }
+
+    private func pendingFrameCount() -> Int {
+        max(0, pendingFrames.count - pendingHead)
+    }
+
+    private func compactPendingFramesIfNeeded() {
+        if pendingHead >= 1024 && pendingHead * 2 >= pendingFrames.count {
+            pendingFrames.removeFirst(pendingHead)
+            pendingHead = 0
+        }
+    }
+
+    private func resetFramePipeline() {
+        frameQueue.sync {
+            pendingFrames.removeAll(keepingCapacity: true)
+            pendingHead = 0
+            frameSequence = 0
         }
     }
 
@@ -252,20 +258,17 @@ public class NetworkManager: ObservableObject {
     /// LUÔN gọi trên frameQueue.
     private func drainQueueIfNeeded() {
         guard !isSenderActive else { return }
-        guard !pendingFrames.isEmpty else { return }
+        guard pendingFrameCount() > 0 else { return }
 
         guard isWebSocketConnected, let task = webSocketTask else {
-            // Chưa có kết nối WS: chủ động thử kết nối lại; đồng thời gửi tạm frame mới nhất
-            // qua HTTP fallback để Web còn có gì đó hiển thị trong lúc chờ (không đảm bảo thứ tự/độ trễ).
             connectWebSocket()
-            if let latest = pendingFrames.last {
-                sendVideoFrame(base64Data: latest.data.base64EncodedString())
-            }
             return
         }
 
         isSenderActive = true
-        let frame = pendingFrames.removeFirst()
+        let frame = pendingFrames[pendingHead]
+        pendingHead += 1
+        compactPendingFramesIfNeeded()
 
         var packet = Data(capacity: 16 + frame.data.count)
         // Header 16 bytes: Magic 4 bytes "SLOM" + Sequence 4 bytes + Timestamp 8 bytes
@@ -284,9 +287,13 @@ public class NetworkManager: ObservableObject {
                 self.isSenderActive = false
                 if error != nil {
                     self.isWebSocketConnected = false
-                    // Gửi lỗi: đưa frame trở lại ĐẦU hàng đợi để thử lại, không làm mất dữ liệu
-                    // (trừ khi sau đó nó bị loại bỏ do vượt ngưỡng maxBufferedLatency ở lần append kế tiếp).
-                    self.pendingFrames.insert(frame, at: 0)
+                    // Gửi lỗi: đưa frame trở lại đầu queue để thử lại, không mất sequence.
+                    self.pendingHead = max(0, self.pendingHead - 1)
+                    if self.pendingHead < self.pendingFrames.count {
+                        self.pendingFrames[self.pendingHead] = frame
+                    } else {
+                        self.pendingFrames.append(frame)
+                    }
                 }
                 // Tiếp tục gửi frame kế tiếp (nếu còn) để duy trì luồng tuần tự
                 self.drainQueueIfNeeded()
@@ -311,6 +318,7 @@ public class NetworkManager: ObservableObject {
                     return
                 }
                 self.activeStreamId = streamId
+                self.resetFramePipeline()
                 self.connectWebSocket()
                 completion(streamId)
             }

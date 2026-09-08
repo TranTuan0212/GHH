@@ -281,6 +281,8 @@ io.on('connection', (socket) => {
     buffer.length = 0;
     const binBuffer = getDvrBinaryBuffer(targetRoomId);
     binBuffer.length = 0;
+    lastIncomingSeqByRoom[targetRoomId] = null;
+    incomingGapCountByRoom[targetRoomId] = 0;
     io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
     io.to('room_admin').emit('round_finished', { roomId: targetRoomId });
@@ -328,28 +330,22 @@ interface BinaryClient extends WebSocket {
 // Độ trễ tối đa cho phép so với thời điểm quay thực tế (ms). Trong ngưỡng này KHÔNG mất frame,
 // chỉ chấp nhận trễ; vượt ngưỡng mới bắt đầu loại bỏ frame cũ nhất của RIÊNG client đó (không
 // ảnh hưởng tới các viewer khác đang xem mượt).
-const MAX_BUFFERED_LATENCY_MS = 10000;
+const lastIncomingSeqByRoom: Record<string, number | null> = {};
+const incomingGapCountByRoom: Record<string, number> = {};
+const MAX_CLIENT_QUEUE_FRAMES = 7200;
 
-// Đọc lại Timestamp (Double, Big Endian, giây) từ header 16 byte mà iOS đã đóng gói: bytes 8..16
-function readFrameTimestampMs(buf: Buffer): number {
-  if (buf.length < 16) return Date.now();
-  return buf.readDoubleBE(8) * 1000;
-}
-
-// Xếp hàng một frame để gửi cho 1 client cụ thể, đảm bảo gửi tuần tự đúng thứ tự và không tích
-// luỹ RAM/độ trễ vô hạn khi client đó có mạng chậm hơn tốc độ stream.
+// Xếp hàng một frame cho từng client, gửi tuần tự đúng thứ tự. Không tự ý drop frame.
 function enqueueForClient(client: BinaryClient, data: Buffer) {
   if (!client.outQueue) client.outQueue = [];
   client.outQueue.push(data);
 
-  const now = Date.now();
-  while (client.outQueue.length > 0) {
-    const oldest = client.outQueue[0];
-    if (now - readFrameTimestampMs(oldest) > MAX_BUFFERED_LATENCY_MS) {
-      client.outQueue.shift();
-    } else {
-      break;
-    }
+  // Không drop frame âm thầm. Nếu một viewer thực sự không thể theo kịp quá lâu,
+  // đóng viewer đó để bảo vệ RAM/server; nguồn và các viewer khác vẫn tiếp tục nguyên vẹn.
+  if (client.outQueue.length > MAX_CLIENT_QUEUE_FRAMES) {
+    console.warn(`[Binary] Viewer queue quá lớn (${client.outQueue.length}), đóng viewer chậm để tránh OOM.`);
+    try { client.close(1013, 'Viewer quá chậm để giữ toàn bộ frame'); } catch {}
+    client.outQueue = [];
+    return;
   }
 
   drainClientQueue(client);
@@ -413,11 +409,25 @@ wssBinary.on('connection', (ws: BinaryClient, request) => {
 
     const targetRoomId = ws.roomId || 'default';
 
-    // Xoay vòng bộ đệm FIFO Ring Buffer (tối đa 1200 frame ~ 5-10s quay 240fps)
+    // Theo dõi sequence tại server để phát hiện mất frame trên đường iPhone -> server.
+    // Chỉ ghi nhận gap, không tự ý bỏ frame.
+    const incomingSeq = data.readUInt32BE(4);
+    const lastIncomingSeq = lastIncomingSeqByRoom[targetRoomId];
+    if (lastIncomingSeq !== null && lastIncomingSeq !== undefined) {
+      const delta = (incomingSeq - lastIncomingSeq) >>> 0;
+      if (delta > 1 && delta < 0x80000000) {
+        const missing = delta - 1;
+        incomingGapCountByRoom[targetRoomId] = (incomingGapCountByRoom[targetRoomId] || 0) + missing;
+        console.warn(`[Binary] FRAME GAP room=${targetRoomId} expected=${(lastIncomingSeq + 1) >>> 0} received=${incomingSeq} missing=${missing}`);
+      }
+    }
+    lastIncomingSeqByRoom[targetRoomId] = incomingSeq;
+
+    // Ring buffer binary chỉ dùng làm cache/reconnect ngắn; replay chính nằm ở phía viewer.
     // Tự động giải phóng frame cũ nhất khỏi RAM để không bao giờ bị tràn nhớ!
     const buf = getDvrBinaryBuffer(targetRoomId);
     buf.push(data);
-    if (buf.length > 1200) {
+    if (buf.length > 2400) {
       buf.shift();
     }
 

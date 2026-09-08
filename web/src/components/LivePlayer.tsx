@@ -129,11 +129,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // "1 frame mỗi tick" — cách cũ không biết tốc độ quay gốc thực tế là 120fps hay 240fps nên
   // tốc độ 0.25x/0.5x hiển thị sai và bị giật do lệch nhịp setInterval.
   interface HistoryEntry {
-    timestamp: number; // giây, Unix epoch — do iPhone gán tại thời điểm quay (Date().timeIntervalSince1970)
+    // seq là ID duy nhất của frame do iPhone/server cấp. Timestamp chỉ dùng để định thời gian phát.
+    seq: number;
+    timestamp: number; // giây, Unix epoch — do iPhone gán tại thời điểm quay
     bitmap: ImageBitmap | HTMLImageElement;
   }
   const frameBitmapsRef = useRef<HistoryEntry[]>([]);
   const historyIndexRef = useRef<number>(-1);
+
+  // Theo dõi tính liên tục của frame ở cấp giao thức. Timestamp không đủ để phát hiện frame bị mất.
+  const lastReceivedSeqRef = useRef<number | null>(null);
+  const receivedGapCountRef = useRef(0);
+  const duplicateFrameCountRef = useRef(0);
+  const generatedSeqRef = useRef(0);
+  const binaryWsOnlineRef = useRef(false);
+
+  // Giới hạn số decode đồng thời. createImageBitmap() chạy ngoài main thread nhưng nếu thả vô hạn
+  // Promise decode cùng lúc sẽ tạo backlog/GC pressure và làm Live lẫn Replay giật.
+  const decodeQueueRef = useRef<Array<{ seq: number; timestamp: number; jpegBytes: ArrayBuffer }>>([]);
+  const activeDecodeCountRef = useRef(0);
+  const MAX_CONCURRENT_DECODES = 4;
+  const MAX_DECODE_QUEUE = 5000;
   // "Mốc" timestamp của frame MỚI NHẤT đã thực sự được vẽ lên canvas khi đang Live — dùng chung
   // cho cả 2 đường nhận dữ liệu (WebSocket nhị phân & Socket.IO base64 fallback). Vì đường base64
   // giải mã bất đồng bộ (Image.onload) nên có thể hoàn tất KHÔNG đúng thứ tự tới; mốc này đảm bảo
@@ -450,20 +466,50 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // tuần tự) là frame mới nhất luôn tới sau cùng nên chi phí thực tế gần như O(1).
   function insertFrameSorted(entry: HistoryEntry) {
     const history = frameBitmapsRef.current;
-    if (history.length === 0 || entry.timestamp >= history[history.length - 1].timestamp) {
+
+    // Với binary WebSocket chuẩn, seq luôn tăng. Vẫn giữ sorted fallback cho Socket.IO cũ.
+    if (history.length === 0 || entry.seq > history[history.length - 1].seq) {
       history.push(entry);
       return;
     }
-    let pos = history.length - 1;
-    while (pos > 0 && history[pos - 1].timestamp > entry.timestamp) {
-      pos--;
+
+    // Không bao giờ lưu duplicate sequence.
+    const duplicate = history.find((item) => item.seq === entry.seq);
+    if (duplicate) {
+      duplicateFrameCountRef.current++;
+      if (entry.bitmap !== duplicate.bitmap && 'close' in entry.bitmap && typeof (entry.bitmap as any).close === 'function') {
+        (entry.bitmap as any).close();
+      }
+      return;
     }
-    history.splice(pos, 0, entry);
-    // Nếu chèn vào trước vị trí đang xem trong Slow-Mo, dịch index đang xem lên 1 để playhead
-    // không vô tình nhảy hình.
-    if (historyIndexRef.current >= pos) {
-      historyIndexRef.current++;
+
+    let lo = 0;
+    let hi = history.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (history[mid].seq < entry.seq) lo = mid + 1;
+      else hi = mid;
     }
+    history.splice(lo, 0, entry);
+    if (historyIndexRef.current >= lo) historyIndexRef.current++;
+  }
+
+  function acceptSequence(seq: number) {
+    const last = lastReceivedSeqRef.current;
+    if (last !== null) {
+      const delta = (seq - last) >>> 0;
+      if (delta === 0 || delta >= 0x80000000) {
+        duplicateFrameCountRef.current++;
+        return false;
+      }
+      if (delta > 1) {
+        const missing = delta - 1;
+        receivedGapCountRef.current += missing;
+        console.warn(`[LivePlayer] FRAME GAP: expected ${(last + 1) >>> 0}, received ${seq}, missing ${missing}`);
+      }
+    }
+    lastReceivedSeqRef.current = seq;
+    return true;
   }
 
   // Render Frame onto Canvas with GPU Hardware Acceleration (< 0.2ms)
@@ -532,6 +578,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     hasFrameRef.current = false;
     setHasFrame(false);
     lastLiveRenderedTsRef.current = 0;
+    lastReceivedSeqRef.current = null;
+    receivedGapCountRef.current = 0;
+    binaryWsOnlineRef.current = false;
+    duplicateFrameCountRef.current = 0;
+    generatedSeqRef.current = 0;
+    decodeQueueRef.current = [];
+    activeDecodeCountRef.current = 0;
   }, [roomId]);
 
   // KẾT NỐI WEBSOCKET NHỊ PHÂN SIÊU TỐC (TURBO BINARY STREAM 120FPS/240FPS)
@@ -541,74 +594,78 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     let ws: WebSocket | null = null;
     let reconnectTimer: any = null;
 
-    // DECODE SONG SONG (Parallel Decode):
-    // Mỗi frame đến lập tức được gửi cho GPU browser để decode (createImageBitmap chạy trên
-    // luồng imaging riêng của browser, KHÔNG chặn JS main thread). Các frame decode song song
-    // với nhau — không cần chờ frame trước xong. insertFrameSorted đảm bảo thứ tự trong history.
-    // Kết quả: Live không bị trễ do backlog, Slow-Mo vẫn đủ frame.
-    const TOTAL_MAX_LATENCY_SEC = 60;
+    // Decode pipeline có giới hạn concurrency. Frame vẫn được nhận theo seq, còn kết quả decode
+    // được chèn vào history theo seq nên thứ tự không phụ thuộc thời điểm Promise hoàn tất.
+    const processDecodeQueue = () => {
+      while (activeDecodeCountRef.current < MAX_CONCURRENT_DECODES && decodeQueueRef.current.length > 0) {
+        const item = decodeQueueRef.current.shift()!;
+        activeDecodeCountRef.current++;
 
-    function decodeAndStore(timestamp: number, jpegBytes: ArrayBuffer) {
-      const nowSec = Date.now() / 1000;
-      if (nowSec > timestamp && nowSec - timestamp > TOTAL_MAX_LATENCY_SEC) return;
+        const blob = new Blob([item.jpegBytes], { type: 'image/jpeg' });
+        createImageBitmap(blob).then((bitmap) => {
+          if (!isMounted) {
+            bitmap.close();
+            return;
+          }
 
-      const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-      createImageBitmap(blob).then((bitmap) => {
-        if (!isMounted) {
-          if (typeof bitmap.close === 'function') bitmap.close();
-          return;
-        }
+          const history = frameBitmapsRef.current;
+          insertFrameSorted({ seq: item.seq, timestamp: item.timestamp, bitmap });
+          receivedFrameCountRef.current++;
 
-        const history = frameBitmapsRef.current;
-        insertFrameSorted({ timestamp, bitmap });
-        receivedFrameCountRef.current++;
-
-        // Xoay vòng bộ đệm FIFO Ring Buffer: Tối đa 3000 frames (~12.5s ở 240fps, 25s ở 120fps)
-        if (history.length > 3000) {
-          if (historyIndexRef.current < 0 || historyIndexRef.current > 100) {
+          // Giữ tối đa 7200 frame metadata/bitmap (~30s ở 240fps). Không reset accumulator và
+          // không tự ý bỏ frame ở giữa playback.
+          if (history.length > 7200) {
             const old = history.shift();
             if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') {
               (old.bitmap as any).close();
             }
-            if (historyIndexRef.current > 0) {
-              historyIndexRef.current--;
-            }
+            if (historyIndexRef.current > 0) historyIndexRef.current--;
             if (markedFrameRef.current && markedFrameRef.current.index > 0) {
               markedFrameRef.current.index--;
               setMarkedFrame({ ...markedFrameRef.current });
             }
           }
-        }
 
-        if (!hasFrameRef.current) {
-          hasFrameRef.current = true;
-          setHasFrame(true);
-        }
-
-        // Live: Vẽ ngay khi frame mới nhất decode xong. Vì decode song song, frame mới có thể
-        // finish trước frame cũ đôi khi — lastLiveRenderedTsRef lọc bỏ frame cũ đến sau.
-        if (isLiveRef.current) {
-          if (timestamp < lastLiveRenderedTsRef.current - 5.0) {
-            lastLiveRenderedTsRef.current = 0;
+          if (!hasFrameRef.current) {
+            hasFrameRef.current = true;
+            setHasFrame(true);
           }
-          if (timestamp >= lastLiveRenderedTsRef.current) {
-            lastLiveRenderedTsRef.current = timestamp;
+
+          // Live luôn hiển thị frame có timestamp mới nhất đã decode; frame cũ hoàn tất decode sau
+          // sẽ không được vẽ lùi. History vẫn giữ frame đó để replay.
+          if (isLiveRef.current && item.timestamp >= lastLiveRenderedTsRef.current) {
+            lastLiveRenderedTsRef.current = item.timestamp;
             renderFrame(bitmap);
           }
-        }
-      }).catch(() => {
-        // Bỏ qua lỗi giải mã không ảnh hưởng đến frame khác
-      });
-    }
+        }).catch(() => {
+          // Decode error được tính riêng, không làm hỏng queue còn lại.
+        }).finally(() => {
+          activeDecodeCountRef.current--;
+          processDecodeQueue();
+        });
+      }
+    };
 
     function enqueueIncoming(buf: ArrayBuffer) {
       if (buf.byteLength < 16) return;
       const view = new DataView(buf);
-      const magic = view.getUint32(0, false);
-      if (magic !== 0x534C4F4D) return; // "SLOM"
+      if (view.getUint32(0, false) !== 0x534C4F4D) return; // SLOM
+
+      // Protocol chuẩn: SLOM (4) + UInt32 sequence BE (4) + Double timestamp BE (8) + JPEG.
+      const seq = view.getUint32(4, false);
       const timestamp = view.getFloat64(8, false);
       const jpegBytes = buf.slice(16);
-      decodeAndStore(timestamp, jpegBytes);
+
+      if (!Number.isFinite(seq) || !Number.isFinite(timestamp) || jpegBytes.byteLength === 0) return;
+      if (!acceptSequence(seq)) return;
+
+      if (decodeQueueRef.current.length >= MAX_DECODE_QUEUE) {
+        // Không âm thầm drop frame. Log rõ ràng để biết browser decode không theo kịp nguồn.
+        console.error(`[LivePlayer] DECODE BACKLOG ${decodeQueueRef.current.length}; source is faster than browser decode.`);
+      }
+
+      decodeQueueRef.current.push({ seq, timestamp, jpegBytes });
+      processDecodeQueue();
     }
 
     function connect() {
@@ -616,6 +673,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       try {
         ws = new WebSocket(wsUrl);
         ws.binaryType = 'arraybuffer';
+        ws.onopen = () => {
+          binaryWsOnlineRef.current = true;
+        };
 
         ws.onmessage = (e) => {
           if (!isMounted) return;
@@ -625,6 +685,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         };
 
         ws.onclose = () => {
+          binaryWsOnlineRef.current = false;
           if (isMounted) reconnectTimer = setTimeout(connect, 2000);
         };
         ws.onerror = () => {};
@@ -649,6 +710,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (!socket) return;
 
     const handleNewFrame = (data: { frame: string; timestamp: number; roomId?: string }) => {
+      // WebSocket binary là đường chính; không xử lý Socket.IO fallback đồng thời để tránh duplicate.
+      if (binaryWsOnlineRef.current) return;
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
       if (data && data.frame) {
         const ts = (data.timestamp || Date.now()) / 1000;
@@ -657,9 +720,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const img = new Image();
         img.onload = () => {
           const history = frameBitmapsRef.current;
-          insertFrameSorted({ timestamp: ts, bitmap: img });
+          const seq = ++generatedSeqRef.current;
+          if (!acceptSequence(seq)) return;
+          insertFrameSorted({ seq, timestamp: ts, bitmap: img });
           receivedFrameCountRef.current++;
-          if (history.length > 3000) {
+          if (history.length > 7200) {
             if (historyIndexRef.current < 0 || historyIndexRef.current > 100) {
               const old = history.shift();
               if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') {
@@ -689,44 +754,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
 
     const handleBinaryFrame = async (buf: any) => {
+      if (binaryWsOnlineRef.current) return;
       if (!buf) return;
       const arrayBuffer = buf instanceof ArrayBuffer ? buf : (buf.buffer ? buf.buffer : null);
       if (!arrayBuffer || arrayBuffer.byteLength < 16) return;
-      const view = new DataView(arrayBuffer);
-      if (view.getUint32(0, false) !== 0x534C4F4D) return;
-      const timestamp = view.getFloat64(8, false);
-      const nowSec = Date.now() / 1000;
-      if (nowSec > timestamp && nowSec - timestamp > 60) return;
-      const jpegBytes = arrayBuffer.slice(16);
-      try {
-        const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-        const bitmap = await createImageBitmap(blob);
-        const history = frameBitmapsRef.current;
-        insertFrameSorted({ timestamp, bitmap });
-        receivedFrameCountRef.current++;
-        if (history.length > 3000) {
-          if (historyIndexRef.current < 0 || historyIndexRef.current > 100) {
-            const old = history.shift();
-            if (old && 'close' in old.bitmap && typeof (old.bitmap as any).close === 'function') (old.bitmap as any).close();
-            if (historyIndexRef.current > 0) historyIndexRef.current--;
-            if (markedFrameRef.current && markedFrameRef.current.index > 0) {
-              markedFrameRef.current.index--;
-              setMarkedFrame({ ...markedFrameRef.current });
-            }
-          }
-        }
-        if (!hasFrameRef.current) {
-          hasFrameRef.current = true;
-          setHasFrame(true);
-        }
-        if (isLiveRef.current) {
-          if (timestamp < lastLiveRenderedTsRef.current - 5.0) lastLiveRenderedTsRef.current = 0;
-          if (timestamp >= lastLiveRenderedTsRef.current) {
-            lastLiveRenderedTsRef.current = timestamp;
-            renderFrame(bitmap);
-          }
-        }
-      } catch {}
+      // Socket.IO binary fallback vẫn dùng chung protocol parser/sequence logic.
+      enqueueIncoming(arrayBuffer);
     };
 
     // Khi kết thúc ván: XÓA SẠCH TOÀN BỘ BỘ ĐỆM VÀ GIẢI PHÓNG RAM 100%
@@ -740,6 +773,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       });
       frameBitmapsRef.current = [];
       historyIndexRef.current = -1;
+      decodeQueueRef.current = [];
+      lastReceivedSeqRef.current = null;
+      receivedGapCountRef.current = 0;
+      duplicateFrameCountRef.current = 0;
+      generatedSeqRef.current = 0;
       setBufferCount(0);
       setHistoryIndex(-1);
       setIsLive(true);
@@ -775,49 +813,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [socket, roomId]);
 
-  // Vòng lặp phát Slow-Motion: dùng "đồng hồ ảo" bám theo TIMESTAMP THẬT của từng frame (thời điểm
-  // quay thực tế trên iPhone) thay vì đếm "1 frame mỗi tick" như trước. Lý do đổi cách này:
-  //
-  // 1) MƯỢT: chạy theo requestAnimationFrame (đồng bộ khung hình trình duyệt, ~60Hz+) thay vì
-  //    setInterval — setInterval bị trôi/giật khi tab bận (đang decode JPEG, GC...), còn rAF được
-  //    trình duyệt tự canh nhịp render nên chuyển động mượt hơn hẳn.
-  // 2) ĐÚNG TỐC ĐỘ: trước đây giả định nguồn quay cố định ~60fps (baseIntervalMs = 16.6) để suy ra
-  //    interval, nhưng camera thực tế quay 120fps hoặc 240fps (thậm chí dao động) — nên "0.5x" hiển
-  //    thị không phải 0.5x thật. Cách mới: mỗi frame nhận từ iPhone có kèm timestamp Unix thật khi
-  //    quay. Mỗi khung hình trình duyệt (tick), ta CỘNG DỒN vào "đồng hồ ảo" (sourceTimeRef) một
-  //    lượng = thời gian thực vừa trôi qua (dtSec) × tốc độ TỨC THỜI hiện tại (currentRateRef —
-  //    đang tự "ease" dần về tốc độ mục tiêu, xem mục 3), rồi hiển thị đúng frame gần nhất có
-  //    timestamp <= đồng hồ ảo đó. Cách cộng dồn liên tục này (thay vì tính từ một điểm neo cố
-  //    định với tốc độ không đổi như bản trước) cho phép tốc độ phát TRÔI MƯỢT theo thời gian mà
-  //    vẫn bám đúng timestamp nguồn — không phụ thuộc biết trước fps nguồn là 120/240fps hay dao
-  //    động do mạng.
-  // 3) RAMP MƯỢT KIỂU IPHONE: video Slo-Mo do iPhone xuất ra không đổi tốc độ đột ngột — đầu/cuối
-  //    chạy tốc độ thường, đoạn giữa chậm dần rồi nhanh dần lại. Ta mô phỏng bằng cách KHÔNG dùng
-  //    thẳng tốc độ mục tiêu (playbackRateRef) để tính đồng hồ ảo, mà dùng currentRateRef — một
-  //    giá trị "đuổi theo" playbackRateRef.current mỗi khung hình theo hàm mũ (ease). Nhờ vậy khi
-  //    người dùng bấm đổi tốc độ, chuyển động trôi êm dần sang tốc độ mới thay vì giật cục, và
-  //    quan trọng nhất: KHÔNG có khung hình nào bị lướt/bỏ qua để "tua" tới vị trí mới — chỉ có
-  //    tốc độ hiển thị thay đổi dần theo thời gian thực.
-  // LƯU Ý: dependency chỉ còn [isPlaying, isLive] — CỐ TÌNH bỏ playbackRate ra khỏi mảng phụ
-  // thuộc. Nếu để playbackRate trong đó, mỗi lần bấm đổi tốc độ effect sẽ hủy & chạy lại từ đầu,
-  // mất hết trạng thái currentRateRef/sourceTimeRef đang có -> tốc độ đổi ĐỘT NGỘT thay vì êm.
-  // Thay vào đó, tick() đọc playbackRateRef.current (ref, không phải state) mỗi khung hình để biết
-  // tốc độ MỤC TIÊU mới nhất, rồi tự "đuổi theo" dần — đúng cơ chế ramp mượt.
+  // Vòng lặp phát Replay/Slow-Mo: playhead chạy theo timestamp nguồn.
+  // Không dùng FPS giả định để nhảy index; index chỉ được tăng khi playhead thực sự vượt timestamp
+  // của frame kế tiếp. Điều này giữ đúng thứ tự kể cả timestamp có jitter.
   useEffect(() => {
     if (!isPlaying || isLive) return;
 
     let rafId: number;
     let lastMs = performance.now();
     let lastUiUpdateMs = 0;
-
-    // Tốc độ hội tụ về target mỗi giây (khoảng 0.3 - 0.4s để ease mượt sang tốc độ slow-mo)
     const EASE_PER_SEC = 5;
 
     const tick = (nowMs: number) => {
       const dtMs = Math.min(100, Math.max(0, nowMs - lastMs));
       lastMs = nowMs;
-
       const history = frameBitmapsRef.current;
+
       if (history.length === 0) {
         rafId = requestAnimationFrame(tick);
         return;
@@ -828,70 +839,44 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const easeAmount = 1 - Math.exp(-EASE_PER_SEC * dtSec);
       currentRateRef.current += (targetRate - currentRateRef.current) * easeAmount;
 
-      // CHẾ ĐỘ BẮT KỊP LIVE (catch-up, r > 1):
-      if (isCatchingUpRef.current) {
-        let cur = historyIndexRef.current < 0 ? 0 : historyIndexRef.current;
-        if (cur >= history.length - 1) {
-          jumpToLive(false);
-          return;
-        }
-        const srcFps = detectedSourceFpsRef.current || 240;
-        const framesToAdvance = Math.max(1, Math.round((currentRateRef.current * dtMs) / (1000 / srcFps)));
-        const next = Math.min(history.length - 1, cur + framesToAdvance);
-        historyIndexRef.current = next;
-        if (nowMs - lastUiUpdateMs > 66) {
-          lastUiUpdateMs = nowMs;
-          setHistoryIndex(next);
-        }
-        renderFrame(history[next].bitmap);
-        rafId = requestAnimationFrame(tick);
-        return;
+      let idx = historyIndexRef.current < 0 ? 0 : historyIndexRef.current;
+      idx = Math.max(0, Math.min(history.length - 1, idx));
+
+      if (sourceTimeRef.current === null) {
+        sourceTimeRef.current = history[idx].timestamp;
       }
 
-      // CHẾ ĐỘ PHÁT CHẬM SLOW-MOTION:
-      // Chuẩn Slo-Mo iOS: Phát mượt mà 60 FPS (hoặc 30 FPS) theo chu kỳ hiển thị màn hình,
-      // không phụ thuộc vào jitter/độ trễ mạng giữa các gói tin.
-      // BẢO ĐẢM 100% CÁC KHUNG HÌNH LIỀN KỀ NHAU (idx -> idx + 1), KHÔNG BỎ QUA BẤT KỲ KHUNG HÌNH NÀO.
-      frameTimeAccumulatorRef.current += dtMs;
+      if (isCatchingUpRef.current) {
+        sourceTimeRef.current += dtSec * Math.max(1, currentRateRef.current);
+      } else {
+        sourceTimeRef.current += dtSec * Math.max(0.01, Math.min(1, currentRateRef.current));
+      }
 
-      const recordedFps = detectedSourceFpsRef.current || 240;
-      const effectiveRate = Math.max(0.01, Math.min(1.0, currentRateRef.current));
-      // Tốc độ khung hình hiển thị (target display FPS):
-      // Ví dụ: quay 240fps với tốc độ 0.25x -> target 60 FPS hiển thị (16.67ms/frame).
-      // Quay 60fps với tốc độ 0.5x -> target 30 FPS hiển thị (33.33ms/frame).
-      const targetPlaybackFps = Math.max(10, Math.min(120, recordedFps * effectiveRate));
-      const frameDisplayMs = 1000 / targetPlaybackFps;
+      // Tiến qua đúng từng frame theo timestamp. Nếu rAF bị trễ, vòng while xử lý sequence liên tiếp
+      // trong cùng tick; không dùng phép tính idx += N dựa trên FPS ước lượng.
+      while (idx + 1 < history.length && history[idx + 1].timestamp <= sourceTimeRef.current) {
+        idx++;
+      }
 
-      let idx = historyIndexRef.current < 0 ? 0 : historyIndexRef.current;
-      if (idx + 1 < history.length) {
-        if (frameTimeAccumulatorRef.current >= frameDisplayMs) {
-          frameTimeAccumulatorRef.current -= frameDisplayMs;
-          if (frameTimeAccumulatorRef.current > frameDisplayMs * 2) {
-            frameTimeAccumulatorRef.current = 0;
-          }
-
-          idx += 1;
-          historyIndexRef.current = idx;
-          renderFrame(history[idx].bitmap);
-
-          // Throttled UI update để giao diện không bị drop FPS vì re-render liên tục
-          if (nowMs - lastUiUpdateMs > 66) {
-            lastUiUpdateMs = nowMs;
-            setHistoryIndex(idx);
-          }
+      if (idx !== historyIndexRef.current) {
+        historyIndexRef.current = idx;
+        renderFrame(history[idx].bitmap);
+        if (nowMs - lastUiUpdateMs > 66) {
+          lastUiUpdateMs = nowMs;
+          setHistoryIndex(idx);
         }
+      }
+
+      if (isCatchingUpRef.current && idx >= history.length - 1) {
+        jumpToLive(false);
+        return;
       }
 
       rafId = requestAnimationFrame(tick);
     };
 
     rafId = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(rafId);
-      if (historyIndexRef.current >= 0) {
-        setHistoryIndex(historyIndexRef.current);
-      }
-    };
+    return () => cancelAnimationFrame(rafId);
   }, [isPlaying, isLive]);
 
   // Bật / Tắt Phát
