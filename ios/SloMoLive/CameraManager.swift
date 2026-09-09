@@ -62,9 +62,15 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     private func rebuildLiveSession() {
-        // AudioConfiguration(nil) = không ghi audio; chỉ phát video Slo-Mo. Nếu sau này muốn kèm
-        // mic thì đổi sang LFLiveAudioConfiguration.default().
-        let audioCfg: LFLiveAudioConfiguration? = nil
+        // QUAN TRỌNG — FIX CRASH: trước đây truyền `nil` ở đây, kỳ vọng LFLiveSession xử lý như
+        // failable init (trả về nil để guard let bắt được). Thực tế bản LFLiveKit đang dùng ném
+        // NSException ('LFLiveSession init error', reason: 'audioConfiguration is nil') khi gặp
+        // nil — NSException từ Objective-C KHÔNG bắt được bằng guard/try-catch của Swift, nên app
+        // luôn abort (SIGABRT) ngay khi bấm Bắt đầu Live, bất kể có guard let hay không.
+        // Dùng audio config mặc định (không nil) để thoả initializer; server (mediaServer.ts) vẫn
+        // tự tổng hợp audio câm (anullsrc) như trước, vì ta không gọi pushAudio() ở đâu cả nên
+        // track audio thực tế không có dữ liệu — video vẫn "thuần" Slo-Mo như thiết kế ban đầu.
+        let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
 
         // VideoConfiguration: dùng .high3 (1080p nếu thiết bị hỗ trợ) để giữ chi tiết. LFLiveKit
         // sẽ tự lấy FPS từ AVCaptureVideoDataOutput của ta (đã set 120/240), encoder tạo GOP tương
@@ -299,9 +305,17 @@ public class CameraManager: NSObject, ObservableObject {
         // frame ngay khi session sẵn sàng, tránh race condition với delegate didChangeState.
         self.isStreamingAtomic = true
 
-        session.startLive(stream)
-        DispatchQueue.main.async {
-            self.isStreaming = true
+        // QUAN TRỌNG: session.startLive() thực hiện DNS resolve + TCP connect RTMP bên trong, có thể
+        // BLOCK thread gọi vào cho tới khi timeout (mặc định hệ thống ~60-75s) nếu server không
+        // reachable (firewall, sai host, mạng chặn...). Trước đây gọi trực tiếp trên main thread
+        // (từ action của nút bấm trong ContentView) -> khi RTMP không kết nối được, UI bị đơ hoàn
+        // toàn, người dùng tưởng app crash và phải tự vuốt tắt. Đẩy ra sessionQueue để dù có treo
+        // cũng chỉ treo background queue, UI vẫn phản hồi được (ví dụ vẫn bấm được nút Dừng/Hủy).
+        sessionQueue.async { [weak self] in
+            session.startLive(stream)
+            DispatchQueue.main.async {
+                self?.isStreaming = true
+            }
         }
     }
 
