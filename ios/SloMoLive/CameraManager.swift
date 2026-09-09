@@ -68,7 +68,15 @@ public class CameraManager: NSObject, ObservableObject {
         // đúng case đang có trong bản LFLiveKit cài trong project (có thể khác giữa các fork).
         let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3)
 
-        let session = LFLiveSession(audioConfiguration: audioCfg, videoConfiguration: videoCfg)
+        // LFLiveSession(audioConfiguration:videoConfiguration:) là initializer failable -> trả về
+        // LFLiveSession?. Phải unwrap trước khi set property, nếu không compiler báo lỗi truy cập
+        // member trên optional chưa unwrap.
+        guard let session = LFLiveSession(audioConfiguration: audioCfg, videoConfiguration: videoCfg) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Không khởi tạo được LFLiveSession (audio/video configuration không hợp lệ)."
+            }
+            return
+        }
         // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
         session.captureDevicePosition = AVCaptureDevice.Position.back
         liveSession = session
