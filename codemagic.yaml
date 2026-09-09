@@ -8,12 +8,27 @@ workflows:
         XCODE_PROJECT: "ios/SloMoLive.xcodeproj"
         XCODE_SCHEME: "SloMoLive"
       xcode: latest
+      cocoapods: default
     scripts:
+      - name: Install CocoaPods dependencies
+        script: |
+          set -e
+          echo "=== COMMIT=$(git rev-parse --short HEAD) ==="
+          echo "=== YAML_DEBUG_START ==="
+          sed -n '1,40p' codemagic.yaml
+          echo "=== YAML_DEBUG_END ==="
+          cd ios
+          ls -la Podfile
+          pod install --repo-update 2>&1 | tee $HOME/pod_install.log
+          ls -la SloMoLive.xcworkspace || echo "WORKSPACE_MISSING"
       - name: Build iOS Application (.app)
         script: |
+          set -e
+          echo "=== Building with workspace ==="
           cd ios
+          ls -la SloMoLive.xcworkspace
           xcodebuild build \
-            -project SloMoLive.xcodeproj \
+            -workspace SloMoLive.xcworkspace \
             -scheme SloMoLive \
             -configuration Release \
             -sdk iphoneos \
