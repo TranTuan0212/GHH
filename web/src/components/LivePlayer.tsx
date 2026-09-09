@@ -234,14 +234,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     fetch('/api/server-info')
       .then((res) => res.json())
       .then((data) => {
+        console.log('[LivePlayer] /api/server-info trả về:', data);
         if (data && data.serverUrl) {
           setDetectedServerUrl(resolveServerUrl(data.serverUrl));
         }
         if (data && data.hlsBaseUrl) {
           setHlsBaseUrl(data.hlsBaseUrl);
+        } else {
+          console.warn('[LivePlayer] /api/server-info KHÔNG có hlsBaseUrl — video sẽ không thể load vì thiếu URL gốc HLS.');
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error('[LivePlayer] Gọi /api/server-info thất bại (server chưa chạy, sai URL, hoặc CORS):', err);
+      });
   }, []);
 
   const handleCopyServerUrl = () => {
@@ -257,6 +262,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const handleInitialState = (data: any) => {
       if (data && data.roomId && roomId && data.roomId !== roomId) return;
+      console.log('[LivePlayer] Socket initial_state:', data);
       if (data && data.serverUrl) {
         setDetectedServerUrl(resolveServerUrl(data.serverUrl));
       }
@@ -285,55 +291,154 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Kết nối HLS: server slice .ts dài 1s, playlist .m3u8 giữ toàn bộ segment -> DVR window tự nhiên.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !stream?.streamKey || !hlsBaseUrl) return;
+    if (!video || !stream?.streamKey || !hlsBaseUrl) {
+      console.log('[LivePlayer] Chưa đủ điều kiện load video:', {
+        hasVideoEl: !!video,
+        streamKey: stream?.streamKey || '(chưa có)',
+        hlsBaseUrl: hlsBaseUrl || '(chưa có)'
+      });
+      return;
+    }
 
     const playlistUrl = `${hlsBaseUrl}/${stream.streamKey}/index.m3u8`;
+    console.log('[LivePlayer] === Bắt đầu load HLS ===');
+    console.log('[LivePlayer] playlistUrl:', playlistUrl);
 
-    // Trình duyệt đã hỗ trợ HLS natively (Safari) thì dùng luôn src, không cần hls.js.
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playlistUrl;
-      return;
-    }
+    let cancelled = false;
+    let hlsInstance: Hls | null = null;
+    let videoEventCleanup: (() => void) | null = null;
 
-    if (!Hls.isSupported()) {
-      console.error('[LivePlayer] Trình duyệt không hỗ trợ MSE / HLS.js');
-      return;
-    }
-
-    const hls = new Hls({
-      // DVR window: playlist liệt kê toàn bộ segment từ đầu phiên (hls_list_size=0 trong FFmpeg),
-      // hls.js tự biết seek đến bất kỳ timestamp nào trong khoảng [oldest, live].
-      liveSyncDurationCount: 3,
-      enableWorker: true,
-      lowLatencyMode: false
-    });
-    hlsRef.current = hls;
-    hls.loadSource(playlistUrl);
-    hls.attachMedia(video);
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      setHasFrame(true);
-      video.play().catch(() => {});
-    });
-
-    hls.on(Hls.Events.ERROR, (_e, data) => {
-      if (data.fatal) {
-        switch (data.type) {
-          case Hls.ErrorTypes.NETWORK_ERROR:
-            hls.startLoad();
-            break;
-          case Hls.ErrorTypes.MEDIA_ERROR:
-            hls.recoverMediaError();
-            break;
-          default:
-            hls.destroy();
-            break;
+    // QUAN TRỌNG: ngay sau khi RTMP bắt đầu publish, FFmpeg cần khoảng 1-3 giây để ghi xong
+    // segment .ts + playlist .m3u8 ĐẦU TIÊN (hls_time=1). Nếu fetch playlist ngay lập tức sẽ
+    // luôn ra 404 dù server hoàn toàn khỏe mạnh — đây chính là nguyên nhân video hay không lên
+    // hình dù stream đã LIVE. Nhánh HLS native (Safari/Edge) đặc biệt dễ dính vì KHÔNG có cơ chế
+    // tự retry như hls.js, nên phải tự chờ & thử lại thủ công trước khi gắn playlist cho player.
+    const waitForPlaylistReady = async (): Promise<boolean> => {
+      const maxAttempts = 12;
+      const intervalMs = 1000;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (cancelled) return false;
+        try {
+          const res = await fetch(playlistUrl, { cache: 'no-store' });
+          console.log(`[LivePlayer] Thử playlist .m3u8 (lần ${attempt}/${maxAttempts}) -> status ${res.status}`);
+          if (res.ok) return true;
+        } catch (err) {
+          console.warn(`[LivePlayer] Thử playlist .m3u8 (lần ${attempt}/${maxAttempts}) lỗi network:`, err);
         }
+        await new Promise((r) => setTimeout(r, intervalMs));
       }
-    });
+      return false;
+    };
+
+    (async () => {
+      const ready = await waitForPlaylistReady();
+      if (cancelled) return;
+
+      if (!ready) {
+        console.error('[LivePlayer] Playlist .m3u8 KHÔNG sẵn sàng sau nhiều lần thử (~12s). Có thể: RTMP chưa publish thành công, hoặc stream đã dừng trước khi kịp tạo file. Kiểm tra log server phần [MediaServer].');
+        return;
+      }
+
+      console.log('[LivePlayer] Playlist đã sẵn sàng, bắt đầu gắn vào trình phát.');
+
+      // Trình duyệt đã hỗ trợ HLS natively (Safari, và một số bản Edge/Chromium mới) thì dùng
+      // luôn src, không cần hls.js.
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        console.log('[LivePlayer] Dùng HLS native của trình duyệt, không qua hls.js.');
+        video.src = playlistUrl;
+        return;
+      }
+
+      if (!Hls.isSupported()) {
+        console.error('[LivePlayer] Trình duyệt không hỗ trợ MSE / HLS.js — không thể phát video trên trình duyệt này.');
+        return;
+      }
+
+      const hls = new Hls({
+        // DVR window: playlist liệt kê toàn bộ segment từ đầu phiên (hls_list_size=0 trong FFmpeg),
+        // hls.js tự biết seek đến bất kỳ timestamp nào trong khoảng [oldest, live].
+        liveSyncDurationCount: 3,
+        enableWorker: true,
+        lowLatencyMode: false,
+        debug: false
+      });
+      hlsInstance = hls;
+      hlsRef.current = hls;
+      hls.loadSource(playlistUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => console.log('[LivePlayer][hls.js] MEDIA_ATTACHED — video element đã gắn vào hls.js'));
+      hls.on(Hls.Events.MANIFEST_LOADING, () => console.log('[LivePlayer][hls.js] MANIFEST_LOADING — đang tải playlist...'));
+      hls.on(Hls.Events.MANIFEST_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] MANIFEST_LOADED — playlist tải xong, số level:', data.levels?.length));
+      hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] LEVEL_LOADED — số segment trong playlist:', data.details?.fragments?.length, '| live:', data.details?.live));
+      hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
+      hls.on(Hls.Events.FRAG_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url));
+      // Lỗi tải segment .ts (fragLoadError) không có event riêng — nó báo qua Hls.Events.ERROR chung
+      // bên dưới với data.details === 'fragLoadError', đã được log đầy đủ ở đó.
+
+      hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
+        console.log('[LivePlayer][hls.js] MANIFEST_PARSED — sẵn sàng phát. Số level:', data.levels?.length);
+        setHasFrame(true);
+        video.play()
+          .then(() => console.log('[LivePlayer] video.play() thành công'))
+          .catch((err) => console.error('[LivePlayer] video.play() bị trình duyệt chặn (autoplay policy?) hoặc lỗi khác:', err));
+      });
+
+      hls.on(Hls.Events.ERROR, (_e, data) => {
+        // Log MỌI lỗi, kể cả không fatal — trước đây bị bỏ qua hoàn toàn, nên không biết tại sao
+        // video giật/không lên hình dù cuối cùng không "chết hẳn".
+        console.error('[LivePlayer][hls.js] ERROR:', {
+          type: data.type,
+          details: data.details,
+          fatal: data.fatal,
+          url: (data as any).url,
+          response: (data as any).response,
+          reason: (data as any).reason
+        });
+        if (data.fatal) {
+          console.error('[LivePlayer][hls.js] Đây là lỗi FATAL — hls.js sẽ tự hồi phục hoặc dừng hẳn tuỳ loại lỗi.');
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.warn('[LivePlayer][hls.js] NETWORK_ERROR fatal -> gọi hls.startLoad() để thử tải lại playlist.');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.warn('[LivePlayer][hls.js] MEDIA_ERROR fatal -> gọi hls.recoverMediaError() (thường do lỗi decode/codec).');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error('[LivePlayer][hls.js] Lỗi fatal không tự hồi phục được -> destroy hls instance. Video sẽ đứng hình vĩnh viễn từ đây, cần load lại trang.');
+              hls.destroy();
+              break;
+          }
+        }
+      });
+
+      // Log toàn bộ sự kiện native của thẻ <video> để biết chính xác trạng thái decode/buffer thật sự,
+      // vì đôi khi hls.js không báo lỗi gì nhưng <video> vẫn không render được frame nào.
+      const videoEvents = ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'playing', 'waiting', 'stalled', 'suspend', 'abort', 'emptied', 'error'];
+      const onVideoEvent = (ev: Event) => {
+        if (ev.type === 'error') {
+          console.error('[LivePlayer][<video>] error — MediaError code:', video.error?.code, 'message:', video.error?.message);
+        } else {
+          console.log(`[LivePlayer][<video>] ${ev.type}`, {
+            readyState: video.readyState,
+            networkState: video.networkState,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            currentTime: video.currentTime
+          });
+        }
+      };
+      videoEvents.forEach((evt) => video.addEventListener(evt, onVideoEvent));
+      videoEventCleanup = () => videoEvents.forEach((evt) => video.removeEventListener(evt, onVideoEvent));
+    })();
 
     return () => {
-      hls.destroy();
+      console.log('[LivePlayer] Cleanup HLS instance cho streamKey:', stream.streamKey);
+      cancelled = true;
+      if (videoEventCleanup) videoEventCleanup();
+      if (hlsInstance) hlsInstance.destroy();
       hlsRef.current = null;
     };
   }, [stream?.streamKey, hlsBaseUrl]);
@@ -653,19 +758,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </div>
         ))}
 
-        {hasFrame ? (
-          <video
-            ref={videoRef}
-            className="w-full h-full object-contain bg-black"
-            style={{
-              transform: `rotate(${rotation}deg)`,
-              transition: 'transform 0.2s ease-in-out'
-            }}
-            playsInline
-            muted={isMuted}
-            autoPlay
-          />
-        ) : (
+        {/* QUAN TRỌNG: thẻ <video> phải LUÔN mount trong DOM, không được conditional-render theo
+            hasFrame — vì effect khởi tạo HLS cần videoRef.current tồn tại TRƯỚC khi có frame đầu
+            tiên. Nếu ẩn video đằng sau `hasFrame ? ... : ...` sẽ tạo deadlock: video chỉ mount khi
+            hasFrame=true, nhưng hasFrame chỉ được set true SAU khi HLS đã load được vào video đó. */}
+        <video
+          ref={videoRef}
+          className="w-full h-full object-contain bg-black"
+          style={{
+            transform: `rotate(${rotation}deg)`,
+            transition: 'transform 0.2s ease-in-out',
+            display: hasFrame ? 'block' : 'none'
+          }}
+          playsInline
+          muted={isMuted}
+          autoPlay
+        />
+        {!hasFrame && (
           <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500">
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center text-indigo-400 animate-pulse">
               <Camera className="w-5 h-5 sm:w-6 sm:h-6" />

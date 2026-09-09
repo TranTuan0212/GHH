@@ -89,6 +89,18 @@ public class CameraManager: NSObject, ObservableObject {
         // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
         session.captureDevicePosition = AVCaptureDevice.Position.back
 
+        // QUAN TRỌNG — FIX "RTMP kết nối nhưng không frame nào tới server": mặc định LFLiveSession
+        // tự quản lý capture nội bộ (captureType = .captureAudio | .captureVideo, tức tự bật
+        // camera/mic RIÊNG của nó). Vì code này tự dựng AVCaptureSession khác và gọi
+        // liveSession?.pushVideo(pixelBuffer) thủ công (xem captureOutput bên dưới), nếu không set
+        // captureType = .inputVideo thì LFLiveKit vẫn nghĩ nó phải tự capture -> ÂM THẦM BỎ QUA mọi
+        // frame được push tay vào. Hậu quả quan sát được: RTMP handshake với server vẫn thành công
+        // (không cần frame để xác nhận), delegate báo .start bình thường, nhưng FFmpeg phía server
+        // không bao giờ nhận được packet video nào để tạo file .ts/.m3u8 — treo vô thời hạn ở bước
+        // dò định dạng, không có lỗi rõ ràng nào cả. Không capture audio nội bộ (server tự tổng hợp
+        // audio câm), nên KHÔNG bật .captureAudio ở đây.
+        session.captureType = .inputVideo
+
         // QUAN TRỌNG: PHẢI set delegate. Nếu delegate = nil, một số bản LFLiveKit (đặc biệt fork đã
         // vá cho iOS 14+) sẽ crash khi gọi sessionDidChangeState / session:didFailWithError mà
         // delegate chưa ai implement. Đây là một trong những nguyên nhân crash khi bấm Start Live.

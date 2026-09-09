@@ -31,6 +31,15 @@ function getPrimaryIp(): string {
  * Xem chi tiết quản lý DVR window ở mediaServer.ts.
  */
 
+function resolveHlsBaseUrl(req: AuthRequest): string {
+  const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  const host = (req.headers.host as string) || 'localhost:4000';
+  // QUAN TRỌNG: /live được proxy qua chính port 4000 (xem index.ts) nên base URL này luôn
+  // cùng origin/protocol với trang web -> không còn Mixed Content / CORS private-network.
+  return `${proto}://${host}/live`;
+}
+
 // POST /api/stream/start
 streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) => {
   if (req.user?.platform !== 'mobile') {
@@ -58,7 +67,7 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
     username: req.user.username,
     streamKey,
     status: 'LIVE',
-    hlsPlaylistUrl: `http://${rtmpHost}:8000/live/${streamKey}/index.m3u8`.replace('rtmp://', 'http://'),
+    hlsPlaylistUrl: `${resolveHlsBaseUrl(req)}/${streamKey}/index.m3u8`,
     vodUrl: '',
     startedAt: new Date().toISOString()
   };

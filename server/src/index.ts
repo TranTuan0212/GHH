@@ -36,6 +36,23 @@ const PORT = parseInt(process.env.PORT || '4000');
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+// TEMP DEBUG LOGGING — giúp xác định request /api có tới server không, tới qua host nào,
+// và mất bao lâu để trả response. Xoá sau khi debug xong.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api')) return next();
+  const start = Date.now();
+  console.log(`[REQ] ${req.method} ${req.path} | host=${req.headers.host} | from=${req.ip}`);
+  res.on('finish', () => {
+    console.log(`[RES] ${req.method} ${req.path} | status=${res.statusCode} | ${Date.now() - start}ms`);
+  });
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      console.log(`[REQ-DROPPED] ${req.method} ${req.path} | client closed connection after ${Date.now() - start}ms`);
+    }
+  });
+  next();
+});
+
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err.type === 'request.aborted' || err.code === 'ECONNRESET' || err.message === 'request aborted') {
     return res.status(400).end();
@@ -66,7 +83,7 @@ app.get('/api/server-info', (req, res) => {
     serverUrl: `http://${primaryIp}:${PORT}`,
     // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
     rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
-    hlsBaseUrl: `http://${rtmpHost}:8000/live`,
+    hlsBaseUrl: resolveHlsBaseUrl(req),
     port: PORT
   });
 });
@@ -100,7 +117,51 @@ function resolveRtmpHostForClient(req: express.Request): { rtmpHost: string; rtm
   return { rtmpHost: primaryIp, rtmpPort: 1935 };
 }
 
-// Serve Web Frontend Static Files
+/**
+ * QUAN TRỌNG: proxy /live/* (HLS .m3u8 + .ts do NMS/ffmpeg sinh ra ở port 8000 nội bộ) qua
+ * chính port 4000 này. Lý do:
+ *   - Cloudflare Quick Tunnel chỉ forward 1 port (4000). Nếu trả về link
+ *     "http://<lan-ip>:8000/live/..." thì trình duyệt (đang mở trang qua HTTPS tunnel) sẽ
+ *     bị chặn bởi Mixed Content (http trong trang https) VÀ CORS Private Network Access
+ *     (domain public không được phép gọi thẳng vào IP LAN riêng).
+ *   - Proxy qua cùng port/host mà trình duyệt đang kết nối -> luôn same-origin, same-protocol,
+ *     không còn Mixed Content, không còn CORS/private-network nữa, không cần mở thêm tunnel.
+ */
+app.use('/live', (req, res) => {
+  const targetPath = req.originalUrl; // đã bao gồm /live/...
+  const proxyReq = http.request(
+    {
+      hostname: 'localhost',
+      port: 8000,
+      path: targetPath,
+      method: req.method,
+      headers: { ...req.headers, host: 'localhost:8000' }
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+      proxyRes.pipe(res, { end: true });
+    }
+  );
+  proxyReq.on('error', (err) => {
+    console.error('[HLS Proxy] Lỗi khi proxy tới localhost:8000:', err.message);
+    if (!res.headersSent) res.status(502).json({ error: 'HLS media server (port 8000) không phản hồi.' });
+  });
+  req.pipe(proxyReq, { end: true });
+});
+
+/**
+ * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
+ * host:port + protocol với chính request đang gọi /api/... -> nhờ có proxy /live ở trên nên
+ * điều này đúng cho cả 3 trường hợp: LAN, Cloudflare tunnel (HTTPS), hay override thủ công.
+ */
+function resolveHlsBaseUrl(req: { headers: any; protocol?: string }): string {
+  const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  const host = (req.headers.host as string) || `localhost:${PORT}`;
+  return `${proto}://${host}/live`;
+}
+
+
 const webDistPath = path.resolve(__dirname, '../../web/dist');
 app.use(express.static(webDistPath));
 
@@ -158,7 +219,8 @@ io.on('connection', (socket) => {
     const primaryIp = ips[0] || 'localhost';
     // QUAN TRỌNG: dùng resolveRtmpHostForClient để khi mobile kết nối qua tunnel thì socket cũng
     // nhận được URL đúng dạng tunnel, không phải IP LAN.
-    const { rtmpHost, rtmpPort } = resolveRtmpHostForClient({ headers: socket.handshake.headers } as any);
+    const fakeReq = { headers: socket.handshake.headers } as any;
+    const { rtmpHost, rtmpPort } = resolveRtmpHostForClient(fakeReq);
 
     socket.emit('initial_state', {
       roomId,
@@ -169,7 +231,7 @@ io.on('connection', (socket) => {
       serverIps: ips,
       serverUrl: `http://${primaryIp}:${PORT}`,
       rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
-      hlsBaseUrl: `http://${rtmpHost}:8000/live`
+      hlsBaseUrl: resolveHlsBaseUrl(fakeReq)
     });
   });
 
