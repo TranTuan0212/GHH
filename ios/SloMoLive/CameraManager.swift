@@ -31,6 +31,12 @@ public class CameraManager: NSObject, ObservableObject {
 
     private var streamEpochOffset: TimeInterval?
 
+    /// Public read-only accessor cho captureSession, để ContentView có thể tạo
+    /// AVCaptureVideoPreviewLayer(session:) mà không cần captureSession là public var.
+    public var session: AVCaptureSession {
+        captureSession
+    }
+
     // LFLiveSession đẩy RTMP ra ngoài; cấu hình ở đây để map đúng FPS nguồn -> segment chứa đủ
     // frame 120/240 bên trong (không downsample). audioConfig = nil để tắt audio track, chỉ phát video
     // Slo-Mo thuần.
@@ -57,11 +63,11 @@ public class CameraManager: NSObject, ObservableObject {
         // LFLiveVideoQuality.High để giữ chi tiết khi zoom/xem lại. Frame rate để "raw capture"
         // — LFLiveKit sẽ lấy đúng FPS từ AVCaptureVideoDataOutput của ta (đã set 120/240), encoder
         // sẽ tạo GOP tương ứng. KHÔNG ép rate ở đây để tránh re-sample frame.
-        let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: LFLiveVideoQuality.High)
+        let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: LFLiveVideoQuality_High)
 
         let session = LFLiveSession(audioConfiguration: audioCfg, videoConfiguration: videoCfg)
         // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
-        session.captureDevicePosition = .back
+        session.captureDevicePosition = AVCaptureDevice.Position.back
         liveSession = session
     }
 
@@ -260,9 +266,12 @@ public class CameraManager: NSObject, ObservableObject {
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard isStreaming else { return }
-        // Đẩy nguyên CMSampleBuffer cho LFLiveKit -> H.264 HW encoder -> RTMP. KHÔNG giải mã ra CIImage,
-        // KHÔNG nén JPEG, KHÔNG gửi qua WebSocket. Toàn bộ frame 120/240 được giữ nguyên trong
-        // segment video .ts sinh ra phía server — đây là đơn vị lưu trữ DVR duy nhất.
-        liveSession?.pushVideo(sampleBuffer)
+        // LFLiveKit.pushVideo(_:) nhận CVPixelBuffer, không nhận CMSampleBuffer trực tiếp. Ta chỉ
+        // lấy image buffer đã có sẵn trong sampleBuffer (không decode/convert format gì thêm, đã ở
+        // dạng BGRA theo videoSettings) rồi đưa cho LFLiveKit tự encode H.264 nội bộ. KHÔNG nén
+        // JPEG, KHÔNG gửi qua WebSocket. Toàn bộ frame 120/240 vẫn được giữ nguyên trong segment
+        // video .ts sinh ra phía server — đây là đơn vị lưu trữ DVR duy nhất.
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        liveSession?.pushVideo(pixelBuffer)
     }
 }

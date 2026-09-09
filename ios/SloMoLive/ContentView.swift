@@ -144,7 +144,7 @@ struct ContentView: View {
             } else {
                 // Live Stream Camera Preview View
                 ZStack {
-                    CameraPreviewView(session: cameraManager.captureSession)
+                    CameraPreviewView(session: cameraManager.session)
                         .edgesIgnoringSafeArea(.all)
 
                     // Overlay Status Bar
