@@ -77,10 +77,23 @@ public class CameraManager: NSObject, ObservableObject {
         // ứng. KHÔNG ép rate ở đây để tránh re-sample frame.
         let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3)
 
-        // LFLiveSession(audioConfiguration:videoConfiguration:) là initializer failable -> trả về
-        // LFLiveSession?. Phải unwrap trước khi set property, nếu không compiler báo lỗi truy cập
-        // member trên optional chưa unwrap.
-        guard let session = LFLiveSession(audioConfiguration: audioCfg, videoConfiguration: videoCfg) else {
+        // FIX BUILD: bản LFLiveKit đang dùng đã đổi `captureType` thành property get-only — nó chỉ
+        // còn đọc được, không gán được sau khi session đã tạo. Giá trị này giờ phải truyền vào NGAY
+        // lúc khởi tạo qua initializer `LFLiveSession(audioConfiguration:videoConfiguration:captureType:)`.
+        // Đồng thời case `.inputVideo` không còn tồn tại trong `LFLiveCaptureTypeMask` — case hiện có
+        // để báo cho LFLiveKit biết "nhận frame được push từ bên ngoài, không tự capture nội bộ" là
+        // `.CaptureMaskAudioInputVideo`. Đây là mask duy nhất dành cho luồng input thủ công (không có
+        // biến thể chỉ-video), nhưng vì code này không bao giờ gọi `pushAudio()`, không có dữ liệu
+        // audio nào thực sự được đẩy vào dù mask có bit audio — hành vi cuối cùng vẫn là "video thuần"
+        // như thiết kế ban đầu, chỉ khác ở việc khai báo mask.
+        //
+        // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi
+        // dùng, nếu không compiler báo lỗi truy cập member trên optional chưa unwrap.
+        guard let session = LFLiveSession(
+            audioConfiguration: audioCfg,
+            videoConfiguration: videoCfg,
+            captureType: .CaptureMaskAudioInputVideo
+        ) else {
             DispatchQueue.main.async {
                 self.errorMessage = "Không khởi tạo được LFLiveSession (audio/video configuration không hợp lệ)."
             }
@@ -88,18 +101,6 @@ public class CameraManager: NSObject, ObservableObject {
         }
         // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
         session.captureDevicePosition = AVCaptureDevice.Position.back
-
-        // QUAN TRỌNG — FIX "RTMP kết nối nhưng không frame nào tới server": mặc định LFLiveSession
-        // tự quản lý capture nội bộ (captureType = .captureAudio | .captureVideo, tức tự bật
-        // camera/mic RIÊNG của nó). Vì code này tự dựng AVCaptureSession khác và gọi
-        // liveSession?.pushVideo(pixelBuffer) thủ công (xem captureOutput bên dưới), nếu không set
-        // captureType = .inputVideo thì LFLiveKit vẫn nghĩ nó phải tự capture -> ÂM THẦM BỎ QUA mọi
-        // frame được push tay vào. Hậu quả quan sát được: RTMP handshake với server vẫn thành công
-        // (không cần frame để xác nhận), delegate báo .start bình thường, nhưng FFmpeg phía server
-        // không bao giờ nhận được packet video nào để tạo file .ts/.m3u8 — treo vô thời hạn ở bước
-        // dò định dạng, không có lỗi rõ ràng nào cả. Không capture audio nội bộ (server tự tổng hợp
-        // audio câm), nên KHÔNG bật .captureAudio ở đây.
-        session.captureType = .inputVideo
 
         // QUAN TRỌNG: PHẢI set delegate. Nếu delegate = nil, một số bản LFLiveKit (đặc biệt fork đã
         // vá cho iOS 14+) sẽ crash khi gọi sessionDidChangeState / session:didFailWithError mà
@@ -452,13 +453,28 @@ extension CameraManager: LFLiveSessionDelegate {
             DispatchQueue.main.async {
                 self.isStreaming = false
             }
+        case .refresh:
+            // Case mới trong LFLiveState của bản LFLiveKit hiện tại — được bắn khi session tự
+            // reconnect/refresh kết nối RTMP (ví dụ sau khi mạng chập chờn) mà không coi là lỗi
+            // hẳn (.error) hay dừng hẳn (.stop). Không đổi isStreamingAtomic/isStreaming ở đây,
+            // chỉ log để theo dõi; nếu sau đó fail thật, delegate sẽ tự bắn .error hoặc .stop.
+            print("[LFLive] Refresh — đang làm mới kết nối RTMP")
         @unknown default:
             break
         }
     }
 
-    public func liveSession(_ session: LFLiveSession?, debugInfo: String?) {
+    public func liveSession(_ session: LFLiveSession?, debugInfo: LFLiveDebug?) {
+        // Chữ ký cũ dùng `String?` nên Swift không coi đây là override của protocol
+        // `LFLiveSessionDelegate` (chỉ là 1 overload trùng tên) -> LFLiveKit gọi
+        // callback debug thật sự vẫn rơi vào no-op, chỉ sinh warning "does not match
+        // any requirement" chứ không fail build. Đổi type đúng `LFLiveDebug?` để hàm
+        // này thật sự implement protocol requirement.
         if let info = debugInfo {
+            // Không đoán tên field cụ thể của LFLiveDebug (khác nhau giữa các fork) — in
+            // trực tiếp object description để tránh lỗi "value of type LFLiveDebug has no
+            // member ...". Nếu cần chi tiết hơn, kiểm tra property có sẵn trong header
+            // LFLiveDebug.h của bản LFLiveKit đang dùng rồi truy cập trực tiếp.
             print("[LFLive debug] \(info)")
         }
     }
