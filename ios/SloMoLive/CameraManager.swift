@@ -82,7 +82,8 @@ public class CameraManager: NSObject, ObservableObject {
         // lúc khởi tạo qua initializer `LFLiveSession(audioConfiguration:videoConfiguration:captureType:)`.
         // Đồng thời case `.inputVideo` không còn tồn tại trong `LFLiveCaptureTypeMask` — case hiện có
         // để báo cho LFLiveKit biết "nhận frame được push từ bên ngoài, không tự capture nội bộ" là
-        // `.CaptureMaskAudioInputVideo`. Đây là mask duy nhất dành cho luồng input thủ công (không có
+        // `.captureMaskAudioInputVideo` (Swift 3+ đã lowercase hoá tên case so với bản Objective-C
+        // `LFLiveCaptureMaskAudioInputVideo` cũ). Đây là mask duy nhất dành cho luồng input thủ công (không có
         // biến thể chỉ-video), nhưng vì code này không bao giờ gọi `pushAudio()`, không có dữ liệu
         // audio nào thực sự được đẩy vào dù mask có bit audio — hành vi cuối cùng vẫn là "video thuần"
         // như thiết kế ban đầu, chỉ khác ở việc khai báo mask.
@@ -92,7 +93,7 @@ public class CameraManager: NSObject, ObservableObject {
         guard let session = LFLiveSession(
             audioConfiguration: audioCfg,
             videoConfiguration: videoCfg,
-            captureType: .CaptureMaskAudioInputVideo
+            captureType: .captureMaskAudioInputVideo
         ) else {
             DispatchQueue.main.async {
                 self.errorMessage = "Không khởi tạo được LFLiveSession (audio/video configuration không hợp lệ)."
