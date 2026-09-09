@@ -5,11 +5,17 @@ workflows:
     instance_type: mac_mini_m1
     environment:
       xcode: latest
+      cocoapods: default
     scripts:
+      - name: Install CocoaPods dependencies
+        script: |
+          cd $CM_REPO_DIR/ios
+          pod install --repo-update
       - name: Build iOS Application (.app)
         script: |
+          cd $CM_REPO_DIR/ios
           xcodebuild build \
-            -project SloMoLive.xcodeproj \
+            -workspace SloMoLive.xcworkspace \
             -scheme SloMoLive \
             -configuration Release \
             -sdk iphoneos \
