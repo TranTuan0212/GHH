@@ -9,11 +9,17 @@ workflows:
     scripts:
       - name: Install CocoaPods dependencies
         script: |
+          set -e
+          echo "=== Codemagic build $(git rev-parse --short HEAD) ==="
           cd $CM_REPO_DIR/ios
+          ls -la Podfile
           pod install --repo-update
       - name: Build iOS Application (.app)
         script: |
+          set -e
+          echo "=== Building with workspace ==="
           cd $CM_REPO_DIR/ios
+          ls -la SloMoLive.xcworkspace
           xcodebuild build \
             -workspace SloMoLive.xcworkspace \
             -scheme SloMoLive \
