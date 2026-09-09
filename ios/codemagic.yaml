@@ -3,6 +3,15 @@ workflows:
     name: iOS SloMo 240fps Live Stream App
     max_build_duration: 60
     instance_type: mac_mini_m1
+    triggering:
+      branch_patterns:
+        - pattern: main
+          source: true
+      cancel_previous_runs: true
+    caching:
+      cache_default_paths:
+        - ~/.cocoapods
+        - ios/Pods
     environment:
       xcode: latest
       cocoapods: default
@@ -10,10 +19,14 @@ workflows:
       - name: Install CocoaPods dependencies
         script: |
           set -e
-          echo "=== Codemagic build $(git rev-parse --short HEAD) ==="
+          echo "=== COMMIT=$(git rev-parse --short HEAD) ==="
+          echo "=== YAML_DEBUG_START ==="
+          sed -n '1,40p' $CM_REPO_DIR/ios/codemagic.yaml
+          echo "=== YAML_DEBUG_END ==="
           cd $CM_REPO_DIR/ios
           ls -la Podfile
-          pod install --repo-update
+          pod install --repo-update 2>&1 | tee $HOME/pod_install.log
+          ls -la SloMoLive.xcworkspace || echo "WORKSPACE_MISSING"
       - name: Build iOS Application (.app)
         script: |
           set -e
