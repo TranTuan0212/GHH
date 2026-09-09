@@ -60,10 +60,13 @@ public class CameraManager: NSObject, ObservableObject {
         let audioCfg: LFLiveAudioConfiguration? = nil
 
         // VideoConfiguration: defaultQuality = LFLiveVideoQuality_Default (720p), ta dùng
-        // LFLiveVideoQuality.High để giữ chi tiết khi zoom/xem lại. Frame rate để "raw capture"
-        // — LFLiveKit sẽ lấy đúng FPS từ AVCaptureVideoDataOutput của ta (đã set 120/240), encoder
-        // sẽ tạo GOP tương ứng. KHÔNG ép rate ở đây để tránh re-sample frame.
-        let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: LFLiveVideoQuality_High)
+        // .high3 (mức cao nhất trong nhóm High) để giữ chi tiết khi zoom/xem lại. Frame rate để
+        // "raw capture" — LFLiveKit sẽ lấy đúng FPS từ AVCaptureVideoDataOutput của ta (đã set
+        // 120/240), encoder sẽ tạo GOP tương ứng. KHÔNG ép rate ở đây để tránh re-sample frame.
+        // Lưu ý: enum của LFLiveKit KHÔNG có case đơn "High" — chỉ có Low1/2/3, Medium1/2/3,
+        // High1/2/3, Default. Nếu Xcode vẫn báo lỗi member, gõ ".high" rồi để autocomplete gợi ý
+        // đúng case đang có trong bản LFLiveKit cài trong project (có thể khác giữa các fork).
+        let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3)
 
         let session = LFLiveSession(audioConfiguration: audioCfg, videoConfiguration: videoCfg)
         // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
