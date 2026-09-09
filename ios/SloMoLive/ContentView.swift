@@ -37,19 +37,9 @@ struct ContentView: View {
     @State private var passwordInput = "user123"
     @State private var isFakeLocked = false
 
-    // Cho phép user override host:port RTMP khi server trả về IP LAN nhưng user đang 5G/tunnel.
-    // Ví dụ: nếu server chỉ trả "rtmp://192.168.1.5:1935/live" (LAN), nhưng user đang 5G và
-    // có tunnel TCP cho port 1935 -> hostname sẽ là "<tunnel-id>.trycloudflare.com".
-    @State private var customRtmpHost: String = "" {
-        didSet {
-            UserDefaults.standard.set(customRtmpHost, forKey: "custom_rtmp_host")
-        }
-    }
-    @State private var customRtmpPort: String = "1935" {
-        didSet {
-            UserDefaults.standard.set(customRtmpPort, forKey: "custom_rtmp_port")
-        }
-    }
+    // customRtmpHost / customRtmpPort giờ sống trong networkManager (đã @Published + lưu
+    // UserDefaults ở đó) để NetworkManager.startStream() có thể đọc và gửi lên server qua
+    // header X-RTMP-Host / X-RTMP-Port. Xem NetworkManager.swift.
 
     var body: some View {
         ZStack {
@@ -124,7 +114,7 @@ struct ContentView: View {
                                     .font(.caption2)
                                     .fontWeight(.semibold)
                                     .foregroundColor(.gray)
-                                TextField("vd: tunnel-xyz.trycloudflare.com", text: $customRtmpHost)
+                                TextField("vd: tunnel-xyz.trycloudflare.com", text: $networkManager.customRtmpHost)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                                     .autocapitalization(.none)
                                     .disableAutocorrection(true)
@@ -132,7 +122,7 @@ struct ContentView: View {
                                     Text("Port: ")
                                         .font(.caption2)
                                         .foregroundColor(.gray)
-                                    TextField("1935", text: $customRtmpPort)
+                                    TextField("1935", text: $networkManager.customRtmpPort)
                                         .textFieldStyle(RoundedBorderTextFieldStyle())
                                         .keyboardType(.numberPad)
                                         .frame(maxWidth: 100)

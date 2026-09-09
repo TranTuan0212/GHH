@@ -20,9 +20,29 @@ public class NetworkManager: ObservableObject {
     @Published public var hlsPlaylistUrl: String? = nil
     @Published public var errorMessage: String? = nil
 
+    /// Override host:port RTMP khi server trả về IP LAN nhưng user đang 5G/tunnel
+    /// (vd: Pinggy TCP tunnel cho port 1935). Được gửi lên server qua header
+    /// X-RTMP-Host / X-RTMP-Port trong startStream() để server trả đúng rtmpIngestUrl.
+    @Published public var customRtmpHost: String = "" {
+        didSet {
+            UserDefaults.standard.set(customRtmpHost, forKey: "custom_rtmp_host")
+        }
+    }
+    @Published public var customRtmpPort: String = "" {
+        didSet {
+            UserDefaults.standard.set(customRtmpPort, forKey: "custom_rtmp_port")
+        }
+    }
+
     private init() {
         if let saved = UserDefaults.standard.string(forKey: "saved_server_url"), !saved.isEmpty {
             self.serverURL = saved
+        }
+        if let savedHost = UserDefaults.standard.string(forKey: "custom_rtmp_host") {
+            self.customRtmpHost = savedHost
+        }
+        if let savedPort = UserDefaults.standard.string(forKey: "custom_rtmp_port") {
+            self.customRtmpPort = savedPort
         }
     }
 
@@ -127,6 +147,18 @@ public class NetworkManager: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        // Nếu user điền RTMP Host Override (vd: dùng 5G + Pinggy tunnel cho port 1935),
+        // gửi kèm header để server ưu tiên trả về host:port này thay vì tự đoán từ Host header
+        // của request HTTP (thường sai vì HTTP và RTMP có thể đi qua 2 tunnel khác nhau).
+        let trimmedHost = customRtmpHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedHost.isEmpty {
+            request.setValue(trimmedHost, forHTTPHeaderField: "X-RTMP-Host")
+            let trimmedPort = customRtmpPort.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedPort.isEmpty {
+                request.setValue(trimmedPort, forHTTPHeaderField: "X-RTMP-Port")
+            }
+        }
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
