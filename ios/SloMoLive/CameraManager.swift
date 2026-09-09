@@ -315,9 +315,16 @@ public class CameraManager: NSObject, ObservableObject {
         let stream = LFLiveStreamInfo()
         stream.url = url
 
-        // Cập nhật atomic flag TRƯỚC khi startLive để captureOutput (background queue) bắt đầu push
-        // frame ngay khi session sẵn sàng, tránh race condition với delegate didChangeState.
-        self.isStreamingAtomic = true
+        // QUAN TRỌNG — FIX STREAM RỖNG: KHÔNG set isStreamingAtomic = true ở đây. Nếu set sớm,
+        // captureOutput (chạy 240fps trên videoOutputQueue) sẽ đổ pixel buffer vào LFLiveKit ngay
+        // lập tức, TRƯỚC khi RTMP handshake xong và session chuyển sang state .start. LFLiveKit (Obj-C)
+        // chỉ thực sự encode + đẩy frames ra RTMP khi state == .start; tất cả frames nhận được trước
+        // đó bị drop hoàn toàn, dẫn đến playlist chỉ có 1 segment rỗng (00000.ts trống) hoặc không có
+        // segment nào.
+        //
+        // Đặt isStreamingAtomic = true CHỈ KHI delegate báo liveStateDidChange(.start) — tức là
+        // lúc đó RTMP connection đã sẵn sàng nhận frames, encode H.264 mới chạy thật sự.
+        // self.isStreamingAtomic = true  ← (XÓA, đã chuyển xuống delegate)
 
         // QUAN TRỌNG: session.startLive() thực hiện DNS resolve + TCP connect RTMP bên trong, có thể
         // BLOCK thread gọi vào cho tới khi timeout (mặc định hệ thống ~60-75s) nếu server không
@@ -438,8 +445,12 @@ extension CameraManager: LFLiveSessionDelegate {
             print("[LFLive] Pending — đang kết nối RTMP server")
         case .start:
             print("[LFLive] Start — đang live")
+            // CHỈ ở đây mới bật atomic flag — LFLiveKit đã handshake xong, RTMP socket sẵn sàng nhận
+            // frames. captureOutput từ giờ mới được phép pushVideo() vào session.
+            self.isStreamingAtomic = true
             DispatchQueue.main.async {
                 self.errorMessage = nil
+                self.isStreaming = true
             }
         case .error:
             print("[LFLive] Error — kết nối RTMP thất bại")

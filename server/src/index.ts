@@ -126,9 +126,15 @@ function resolveRtmpHostForClient(req: express.Request): { rtmpHost: string; rtm
  *     (domain public không được phép gọi thẳng vào IP LAN riêng).
  *   - Proxy qua cùng port/host mà trình duyệt đang kết nối -> luôn same-origin, same-protocol,
  *     không còn Mixed Content, không còn CORS/private-network nữa, không cần mở thêm tunnel.
+ *
+ * NMS serve mediaroot tại port 8000 với path prefix /live/ (vd: /live/<streamKey>/index.m3u8),
+ * nên proxy chỉ cần forward nguyên originalUrl tới localhost:8000 là đúng.
  */
 app.use('/live', (req, res) => {
-  const targetPath = req.originalUrl; // đã bao gồm /live/...
+  const targetPath = req.originalUrl; // vd "/live/live_user-uuid-0002_xxx/index.m3u8"
+
+  console.log(`[HLS Proxy] Forwarding: ${targetPath} -> localhost:8000${targetPath}`);
+
   const proxyReq = http.request(
     {
       hostname: 'localhost',

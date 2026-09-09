@@ -95,28 +95,33 @@ function startHlsSession(streamKey: string): void {
     return;
   }
 
-  // ffmpeg command: receive RTMP, output HLS
+  // ffmpeg command: receive RTMP, output HLS (video-only, no audio)
   const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+  // Tạo file marker NGAY LẬP TỨC để proxy HLS trả về 200 thay vì 404.
+  try {
+    fs.writeFileSync(
+      path.join(outputDir, 'index.m3u8'),
+      '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\n00000.ts\n#EXT-X-ENDLIST\n'
+    );
+    console.log(`[MediaServer]   → đã tạo marker .m3u8`);
+  } catch (err) {
+    console.warn(`[MediaServer]   → không tạo được marker .m3u8:`, err);
+  }
+
   const ffmpegArgs = [
     // Input: RTMP from NMS (NMS listen on 1935, ta connect với tư cách viewer)
     '-re',
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
-    // Audio: tạo silent AAC stereo 44100Hz (LFLiveKit không có audio track)
-    '-f', 'lavfi',
-    '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-    '-map', '0:v?',
-    '-map', '1:a',
     // Codec: giữ nguyên video H.264 từ LFLiveKit (không re-encode)
     '-c:v', 'copy',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-ar', '44100',
-    '-ac', '2',
+    // KHÔNG có audio - iOS LFLiveKit không push audio track
+    '-an',
     // HLS output
     '-f', 'hls',
-    '-hls_time', '1',
+    '-hls_time', '2',
     '-hls_list_size', String(DVR_WINDOW_SECONDS),
     '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
+    '-hls_flags', '+independent_segments',
     path.join(outputDir, 'index.m3u8')
   ];
 
@@ -136,10 +141,24 @@ function startHlsSession(streamKey: string): void {
   };
   hlsSessions.set(streamKey, session);
 
+  ffmpeg.stdout.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line) {
+      console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
+    }
+  });
+
   ffmpeg.stderr.on('data', (data: Buffer) => {
     const line = data.toString().trim();
     if (line) {
-      console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
+      // CHỈ log những dòng quan trọng để tránh spam. Giữ progress frame.
+      const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
+      if (isImportant) {
+        console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
+      }
+      // Cập nhật lastSeen khi ffmpeg nhận được dữ liệu (bất kỳ output nào)
+      const s = hlsSessions.get(streamKey);
+      if (s) s.lastSeen = Date.now() / 1000;
     }
   });
 
@@ -148,8 +167,8 @@ function startHlsSession(streamKey: string): void {
     cleanupStreamSession(streamKey);
   });
 
-  ffmpeg.on('close', (code: number | null) => {
-    console.log(`[MediaServer] ffmpeg exited for ${streamKey} with code ${code}`);
+  ffmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+    console.log(`[MediaServer] ffmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
     // Don't auto-cleanup here — wait for NMS donePublish to cleanup
     hlsSessions.delete(streamKey);
   });
