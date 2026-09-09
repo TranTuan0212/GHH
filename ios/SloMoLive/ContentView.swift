@@ -216,13 +216,25 @@ struct ContentView: View {
                                     locationManager.stopTracking()
                                     networkManager.stopStream()
                                 } else {
-                                    networkManager.startStream { streamId in
-                                        if streamId != nil {
-                                            cameraManager.startLiveStream()
-                                            locationManager.startTracking()
-                                            locationManager.onGpsUpdated = { lat, lng in
-                                                networkManager.sendGPS(lat: lat, lng: lng)
-                                            }
+                                    networkManager.startStream { ok in
+                                        guard ok,
+                                              let ingestUrl = networkManager.rtmpIngestUrl,
+                                              let key = networkManager.streamKey else {
+                                            return
+                                        }
+                                        // ingestUrl dạng "rtmp://<host>:1935/live" -> tách ra host + port
+                                        // rồi truyền cho CameraManager để khởi tạo LFLiveSession.
+                                        let stripped = ingestUrl
+                                            .replacingOccurrences(of: "rtmp://", with: "")
+                                            .replacingOccurrences(of: "/live", with: "")
+                                        let parts = stripped.split(separator: ":")
+                                        let host = String(parts[0])
+                                        let port = parts.count > 1 ? Int(parts[1]) ?? 1935 : 1935
+                                        cameraManager.configureRtmp(serverHost: host, port: port, streamKey: key)
+                                        cameraManager.startLiveStream()
+                                        locationManager.startTracking()
+                                        locationManager.onGpsUpdated = { lat, lng in
+                                            networkManager.sendGPS(lat: lat, lng: lng)
                                         }
                                     }
                                 }

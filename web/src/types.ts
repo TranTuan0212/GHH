@@ -27,6 +27,8 @@ export interface StreamSession {
   status: 'LIVE' | 'ENDED';
   roomId?: string;
   vodUrl?: string;
+  // URL playlist HLS do server (NMS + FFmpeg) sinh ra, web player tự fetch bằng hls.js.
+  hlsPlaylistUrl?: string;
   startedAt: string;
   endedAt?: string;
 }

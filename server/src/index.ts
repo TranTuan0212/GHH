@@ -4,11 +4,9 @@ import cors from 'cors';
 import os from 'os';
 import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
-import { WebSocketServer, WebSocket } from 'ws';
-import { parse as parseUrl } from 'url';
 import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
-import { streamRouter, setSocketServer, getDvrBuffer, getDvrBinaryBuffer, latestLiveFrames } from './routes/stream';
+import { streamRouter, setSocketServer } from './routes/stream';
 import { db } from './db';
 import { startNativeMediaServer } from './mediaServer';
 
@@ -38,7 +36,6 @@ const PORT = parseInt(process.env.PORT || '4000');
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Gracefully catch aborted HTTP requests without polluting terminal
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err.type === 'request.aborted' || err.code === 'ECONNRESET' || err.message === 'request aborted') {
     return res.status(400).end();
@@ -65,6 +62,9 @@ app.get('/api/server-info', (req, res) => {
     ips,
     primaryIp,
     serverUrl: `http://${primaryIp}:${PORT}`,
+    // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
+    rtmpIngestUrl: `rtmp://${primaryIp}:1935/live`,
+    hlsBaseUrl: `http://${primaryIp}:8000/live`,
     port: PORT
   });
 });
@@ -81,7 +81,6 @@ app.get('*', (req, res, next) => {
   });
 });
 
-// Helper to get Local LAN IP Address
 function getLocalIpAddresses() {
   const interfaces = os.networkInterfaces();
   const addresses: string[] = [];
@@ -95,7 +94,6 @@ function getLocalIpAddresses() {
   return addresses;
 }
 
-// Format and normalize clean data item tags (No gambling references)
 function normalizeDataItem(rawStr: string): string {
   let s = rawStr.trim();
   if (!s) return '';
@@ -103,16 +101,16 @@ function normalizeDataItem(rawStr: string): string {
   return s.toUpperCase();
 }
 
-// Socket.io Realtime Sync với phân tách Room theo tài khoản
+// Socket.io chỉ lo: room join, card add/edit/delete, GPS, stream lifecycle.
+// Toàn bộ video đi qua NMS/RTMP -> HLS (.ts + .m3u8) và web player tự fetch playlist, không
+// broadcast frame qua socket nữa.
 io.on('connection', (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
 
-  // Khi client kết nối, gia nhập Room của tài khoản tương ứng
   socket.on('join_room', (data) => {
     const roomId = data?.roomId || 'default';
     const role = data?.role;
 
-    // Rời khỏi các room cũ (trừ chính socket.id)
     Array.from(socket.rooms).forEach((r) => {
       if (r !== socket.id) socket.leave(r);
     });
@@ -134,31 +132,11 @@ io.on('connection', (socket) => {
       latestGps: latestGps || null,
       cardEntries,
       groupNames: db.getGroupNames(roomId),
-      latestFrame: latestLiveFrames[roomId] || null,
-      dvrFrames: getDvrBuffer(roomId),
       serverIps: ips,
-      serverUrl: `http://${primaryIp}:${PORT}`
+      serverUrl: `http://${primaryIp}:${PORT}`,
+      rtmpIngestUrl: `rtmp://${primaryIp}:1935/live`,
+      hlsBaseUrl: `http://${primaryIp}:8000/live`
     });
-  });
-
-  // Mobile gửi khung hình Live 240fps cho Room của mình
-  socket.on('send_video_frame', (data) => {
-    if (data && data.frame) {
-      const roomId = data.roomId || data.userId || 'default';
-      const frameObj = {
-        roomId,
-        frame: data.frame,
-        timestamp: data.timestamp || Date.now()
-      };
-      latestLiveFrames[roomId] = frameObj;
-      const buffer = getDvrBuffer(roomId);
-      buffer.push(frameObj);
-      if (buffer.length > 1800) buffer.shift();
-
-      // Chỉ gửi cho người xem trong Room này và Admin
-      io.to(`room_${roomId}`).emit('live_frame_received', frameObj);
-      io.to('room_admin').emit('live_frame_received', frameObj);
-    }
   });
 
   socket.on('send_gps', (data) => {
@@ -179,7 +157,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Phân loại dữ liệu cho Room
   socket.on('add_card', (data) => {
     const { cardValue, groupCount, userId, roomId, targetGroup } = data;
     const targetRoomId = roomId || userId || 'default';
@@ -259,30 +236,9 @@ io.on('connection', (socket) => {
     io.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   });
 
-  socket.on('send_binary_frame', (data: any) => {
-    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    if (buf && buf.length >= 16) {
-      const magic = buf.readUInt32BE(0);
-      if (magic === 0x534C4F4D) {
-        const roomId = (socket as any).roomId || 'default';
-        const ring = getDvrBinaryBuffer(roomId);
-        ring.push(buf);
-        if (ring.length > 1200) ring.shift();
-        io.to(`room_${roomId}`).emit('binary_frame_received', buf);
-        io.to('room_admin').emit('binary_frame_received', buf);
-      }
-    }
-  });
-
   socket.on('finish_round', (data) => {
     const targetRoomId = data?.roomId || data?.userId || 'default';
     db.clearCardEntries(targetRoomId);
-    const buffer = getDvrBuffer(targetRoomId);
-    buffer.length = 0;
-    const binBuffer = getDvrBinaryBuffer(targetRoomId);
-    binBuffer.length = 0;
-    lastIncomingSeqByRoom[targetRoomId] = null;
-    incomingGapCountByRoom[targetRoomId] = 0;
     io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
     io.to('room_admin').emit('round_finished', { roomId: targetRoomId });
@@ -315,160 +271,16 @@ io.on('connection', (socket) => {
   });
 });
 
-// ==========================================
-// Native High-Speed Binary WebSocket Server
-// Đường truyền nhị phân siêu tốc 120fps/240fps (Zero JSON, Zero Smearing, Auto-Purge RAM)
-// ==========================================
-interface BinaryClient extends WebSocket {
-  roomId?: string;
-  role?: 'mobile' | 'web' | 'admin';
-  isAlive?: boolean;
-  outQueue?: Buffer[];
-  isSendingQueue?: boolean;
-}
-
-// Độ trễ tối đa cho phép so với thời điểm quay thực tế (ms). Trong ngưỡng này KHÔNG mất frame,
-// chỉ chấp nhận trễ; vượt ngưỡng mới bắt đầu loại bỏ frame cũ nhất của RIÊNG client đó (không
-// ảnh hưởng tới các viewer khác đang xem mượt).
-const lastIncomingSeqByRoom: Record<string, number | null> = {};
-const incomingGapCountByRoom: Record<string, number> = {};
-const MAX_CLIENT_QUEUE_FRAMES = 7200;
-
-// Xếp hàng một frame cho từng client, gửi tuần tự đúng thứ tự. Không tự ý drop frame.
-function enqueueForClient(client: BinaryClient, data: Buffer) {
-  if (!client.outQueue) client.outQueue = [];
-  client.outQueue.push(data);
-
-  // Không drop frame âm thầm. Nếu một viewer thực sự không thể theo kịp quá lâu,
-  // đóng viewer đó để bảo vệ RAM/server; nguồn và các viewer khác vẫn tiếp tục nguyên vẹn.
-  if (client.outQueue.length > MAX_CLIENT_QUEUE_FRAMES) {
-    console.warn(`[Binary] Viewer queue quá lớn (${client.outQueue.length}), đóng viewer chậm để tránh OOM.`);
-    try { client.close(1013, 'Viewer quá chậm để giữ toàn bộ frame'); } catch {}
-    client.outQueue = [];
-    return;
-  }
-
-  drainClientQueue(client);
-}
-
-function drainClientQueue(client: BinaryClient) {
-  if (client.isSendingQueue) return;
-  if (!client.outQueue || client.outQueue.length === 0) return;
-  if (client.readyState !== WebSocket.OPEN) return;
-
-  client.isSendingQueue = true;
-  const next = client.outQueue.shift()!;
-  client.send(next, { binary: true }, (err) => {
-    client.isSendingQueue = false;
-    if (err) {
-      // Gửi lỗi: đưa frame trở lại đầu hàng đợi của chính client này để thử lại
-      client.outQueue!.unshift(next);
-    }
-    drainClientQueue(client);
-  });
-}
-
-const wssBinary = new WebSocketServer({ noServer: true });
-
-server.on('upgrade', (request, socket, head) => {
-  const parsed = parseUrl(request.url || '');
-  if (parsed.pathname === '/stream/binary') {
-    wssBinary.handleUpgrade(request, socket, head, (ws) => {
-      wssBinary.emit('connection', ws, request);
-    });
-  }
-});
-
-wssBinary.on('connection', (ws: BinaryClient, request) => {
-  const query = parseUrl(request.url || '', true).query;
-  const roomId = (query.roomId as string) || 'default';
-  const role = (query.role as string) || 'web';
-
-  ws.roomId = roomId;
-  ws.role = role as any;
-  ws.isAlive = true;
-
-  ws.on('pong', () => {
-    ws.isAlive = true;
-  });
-
-  // Khi Web viewer kết nối: gửi ngay 1 frame nhị phân mới nhất nếu có để hiện hình tức thì
-  if (role === 'web') {
-    const binBuf = getDvrBinaryBuffer(roomId);
-    if (binBuf.length > 0) {
-      enqueueForClient(ws, binBuf[binBuf.length - 1]);
-    }
-  }
-
-  ws.on('message', (data: any, isBinary: boolean) => {
-    if (!isBinary || !Buffer.isBuffer(data) || data.length < 16) return;
-
-    // Kiểm tra magic header: 0x534C4F4D ("SLOM")
-    const magic = data.readUInt32BE(0);
-    if (magic !== 0x534C4F4D) return;
-
-    const targetRoomId = ws.roomId || 'default';
-
-    // Theo dõi sequence tại server để phát hiện mất frame trên đường iPhone -> server.
-    // Chỉ ghi nhận gap, không tự ý bỏ frame.
-    const incomingSeq = data.readUInt32BE(4);
-    const lastIncomingSeq = lastIncomingSeqByRoom[targetRoomId];
-    if (lastIncomingSeq !== null && lastIncomingSeq !== undefined) {
-      const delta = (incomingSeq - lastIncomingSeq) >>> 0;
-      if (delta > 1 && delta < 0x80000000) {
-        const missing = delta - 1;
-        incomingGapCountByRoom[targetRoomId] = (incomingGapCountByRoom[targetRoomId] || 0) + missing;
-        console.warn(`[Binary] FRAME GAP room=${targetRoomId} expected=${(lastIncomingSeq + 1) >>> 0} received=${incomingSeq} missing=${missing}`);
-      }
-    }
-    lastIncomingSeqByRoom[targetRoomId] = incomingSeq;
-
-    // Ring buffer binary chỉ dùng làm cache/reconnect ngắn; replay chính nằm ở phía viewer.
-    // Tự động giải phóng frame cũ nhất khỏi RAM để không bao giờ bị tràn nhớ!
-    const buf = getDvrBinaryBuffer(targetRoomId);
-    buf.push(data);
-    if (buf.length > 2400) {
-      buf.shift();
-    }
-
-    // Broadcast nhị phân cho tất cả Web viewer trong Room này và Admin, mỗi client có hàng đợi
-    // riêng để: (1) không mất frame khi client đó tạm chậm hơn nguồn stream, (2) không để 1 client
-    // chậm làm chậm/ảnh hưởng tới các client khác, (3) giữ đúng thứ tự khung hình.
-    wssBinary.clients.forEach((client: BinaryClient) => {
-      if (
-        client !== ws &&
-        client.readyState === WebSocket.OPEN &&
-        (client.roomId === targetRoomId || client.role === 'admin')
-      ) {
-        enqueueForClient(client, data);
-      }
-    });
-  });
-
-  ws.on('error', () => {});
-  ws.on('close', () => {
-    ws.outQueue = [];
-  });
-});
-
-const binaryPingInterval = setInterval(() => {
-  wssBinary.clients.forEach((client: BinaryClient) => {
-    if (!client.isAlive) return client.terminate();
-    client.isAlive = false;
-    try {
-      client.ping();
-    } catch {}
-  });
-}, 30000);
-
-// Start Native RTMP/HLS Media Server
+// Start Native RTMP/HLS Media Server — đây là nơi duy nhất lưu trữ video (segment .ts + playlist .m3u8).
 startNativeMediaServer();
 
 server.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIpAddresses();
-  console.log(`🚀 Backend Server running on port ${PORT} (Bound to 0.0.0.0)`);
-  console.log(`📌 Địa chỉ kết nối từ iPhone trong cùng mạng Wi-Fi:`);
+  console.log(`Backend Server running on port ${PORT} (Bound to 0.0.0.0)`);
+  console.log(`Địa chỉ kết nối từ iPhone trong cùng mạng Wi-Fi:`);
   ips.forEach(ip => {
-    console.log(`   👉 http://${ip}:${PORT}`);
+    console.log(`   -> http://${ip}:${PORT}`);
+    console.log(`   -> RTMP ingest: rtmp://${ip}:1935/live`);
+    console.log(`   -> HLS playlist: http://${ip}:8000/live/<streamKey>/index.m3u8`);
   });
 });

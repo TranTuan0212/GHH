@@ -1,86 +1,37 @@
 import { Router, Response } from 'express';
 import { db, CardEntry, GpsLog, StreamSession } from '../db';
 import { authMiddleware, AuthRequest } from './auth';
+import os from 'os';
+import { cleanupStreamSession } from '../mediaServer';
 
 export const streamRouter = Router();
 
-// Store latest live frame buffer for instant Web DVR playback per room
-export const dvrFrameBuffers: { [roomId: string]: { frame: string; timestamp: number }[] } = {};
-export const latestLiveFrames: { [roomId: string]: { frame: string; timestamp: number } | null } = {};
-export const dvrBinaryBuffers: { [roomId: string]: Buffer[] } = {};
-
-export function getDvrBuffer(roomId: string = 'default') {
-  if (!dvrFrameBuffers[roomId]) {
-    dvrFrameBuffers[roomId] = [];
-  }
-  return dvrFrameBuffers[roomId];
-}
-
-export function getDvrBinaryBuffer(roomId: string = 'default') {
-  if (!dvrBinaryBuffers[roomId]) {
-    dvrBinaryBuffers[roomId] = [];
-  }
-  return dvrBinaryBuffers[roomId];
-}
-
-// Fallback exports for index.ts
-export const dvrFrameBuffer = getDvrBuffer('default');
-export let latestLiveFrame: { frame: string; timestamp: number } | null = null;
-
-// Socket.io instance placeholder (set in index.ts)
 let globalIo: any = null;
 export function setSocketServer(io: any) {
   globalIo = io;
 }
 
-// POST /api/stream/frame - Mobile iOS client uploads video frame
-streamRouter.post('/frame', authMiddleware, (req: AuthRequest, res: Response) => {
-  const { frame, timestamp } = req.body;
-  const roomId = req.user?.id || req.body.roomId || 'default';
-  if (!frame) {
-    return res.status(400).json({ error: 'Thiếu dữ liệu khung hình video.' });
+function getPrimaryIp(): string {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
   }
+  return 'localhost';
+}
 
-  const frameObj = {
-    roomId,
-    frame,
-    timestamp: timestamp || Date.now()
-  };
+/**
+ * Video segment storage: toàn bộ .ts + .m3u8 do NMS/FFmpeg sinh ra tại:
+ *   <media_root>/live/<streamKey>/
+ *
+ * Đơn vị lưu trữ = segment video đã nén. Không còn buffer ảnh rời trong RAM.
+ * Xem chi tiết quản lý DVR window ở mediaServer.ts.
+ */
 
-  latestLiveFrames[roomId] = frameObj;
-  latestLiveFrame = frameObj;
-  const buffer = getDvrBuffer(roomId);
-  buffer.push(frameObj);
-  // Keep last 1800 frames (~30 seconds - 1 min of high quality DVR frame buffer)
-  if (buffer.length > 1800) {
-    buffer.shift();
-  }
-
-  if (globalIo) {
-    globalIo.to(`room_${roomId}`).emit('live_frame_received', frameObj);
-    globalIo.to('room_admin').emit('live_frame_received', frameObj);
-  }
-
-  res.json({ status: 'ok' });
-});
-
-// GET /api/stream/active - Public or authenticated info about current live stream
-streamRouter.get('/active', (req, res) => {
-  const targetRoomId = (req.query.roomId as string) || (req.query.userId as string);
-  const activeStream = db.getActiveStream(targetRoomId);
-  const latestGps = db.getLatestGpsLog(targetRoomId);
-  const cardEntries = db.getCardEntries(targetRoomId);
-
-  res.json({
-    roomId: targetRoomId || 'default',
-    stream: activeStream || null,
-    gps: latestGps || null,
-    cardEntries,
-    latestFrame: (targetRoomId && latestLiveFrames[targetRoomId]) || latestLiveFrame
-  });
-});
-
-// POST /api/stream/start - Mobile starts streaming
+// POST /api/stream/start
 streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) => {
   if (req.user?.platform !== 'mobile') {
     return res.status(403).json({ error: 'Chỉ ứng dụng iOS di động mới có quyền khởi tạo Live Stream!' });
@@ -88,23 +39,21 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
 
   const roomId = req.user.id;
   const streamKey = 'live_' + roomId + '_' + Date.now();
+  const primaryIp = getPrimaryIp();
+
   const newStream: StreamSession = {
     id: 'stream-' + Date.now(),
     userId: roomId,
     username: req.user.username,
     streamKey,
     status: 'LIVE',
+    hlsPlaylistUrl: `http://${primaryIp}:8000/live/${streamKey}/index.m3u8`,
     vodUrl: '',
     startedAt: new Date().toISOString()
   };
 
   db.createStreamSession(newStream);
   db.clearCardEntries(roomId);
-  const buffer = getDvrBuffer(roomId);
-  buffer.length = 0;
-  const binaryBuffer = getDvrBinaryBuffer(roomId);
-  binaryBuffer.length = 0;
-  latestLiveFrames[roomId] = null;
 
   if (globalIo) {
     globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
@@ -112,26 +61,35 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
   }
 
   res.json({
-    message: 'Khởi tạo luồng Live Stream 240fps thành công cho Room.',
+    message: 'Khởi tạo luồng Live Stream 240fps thành công.',
     stream: newStream,
-    rtmpIngestUrl: `rtmp://localhost:1935/live/${streamKey}`
+    rtmpIngestUrl: `rtmp://${primaryIp}:1935/live`,
+    streamKey
   });
 });
 
-// POST /api/stream/end - Mobile ends streaming
+// POST /api/stream/end — cleanup segment files + end session
 streamRouter.post('/end', authMiddleware, (req: AuthRequest, res: Response) => {
   const roomId = req.user?.id || req.body.streamId;
+  const session = db.getActiveStream(roomId);
+  const streamKey = session?.streamKey;
   const ended = db.endStreamSession(roomId);
+
+  // Xoá toàn bộ file .ts + .m3u8 của session này ngay lập tức
+  // để giải phóng dung lượng ổ đĩa.
+  if (streamKey) {
+    cleanupStreamSession(streamKey);
+  }
 
   if (globalIo) {
     globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'ENDED', session: ended });
     globalIo.to('room_admin').emit('stream_status_changed', { roomId, status: 'ENDED', session: ended });
   }
 
-  res.json({ message: 'Đã dừng Live Stream Room.', stream: ended });
+  res.json({ message: 'Đã dừng Live Stream và dọn dẹp segment video.', stream: ended });
 });
 
-// POST /api/stream/gps - Mobile sends periodic GPS updates
+// POST /api/stream/gps
 streamRouter.post('/gps', authMiddleware, (req: AuthRequest, res: Response) => {
   const { lat, lng, streamId } = req.body;
 
@@ -157,18 +115,31 @@ streamRouter.post('/gps', authMiddleware, (req: AuthRequest, res: Response) => {
   res.json({ status: 'ok', gps: gpsLog });
 });
 
-// GET /api/stream/items (or /cards) - Get data entries
+// GET /api/stream/active
+streamRouter.get('/active', (req, res) => {
+  const targetRoomId = (req.query.roomId as string) || (req.query.userId as string);
+  const activeStream = db.getActiveStream(targetRoomId);
+  const latestGps = db.getLatestGpsLog(targetRoomId);
+  const cardEntries = db.getCardEntries(targetRoomId);
+
+  res.json({
+    roomId: targetRoomId || 'default',
+    stream: activeStream || null,
+    gps: latestGps || null,
+    cardEntries
+  });
+});
+
+// GET /api/stream/items (or /cards)
 const getEntriesHandler = (req: any, res: Response) => {
-  const entries = db.getCardEntries();
-  res.json({ entries });
+  res.json({ entries: db.getCardEntries() });
 };
 streamRouter.get('/items', getEntriesHandler);
 streamRouter.get('/cards', getEntriesHandler);
 
-// POST /api/stream/items (or /cards) - Add a new data entry (Round Robin auto-grouped)
+// POST /api/stream/items (or /cards)
 const addEntryHandler = (req: AuthRequest, res: Response) => {
   const { cardValue, groupCount } = req.body;
-
   if (!cardValue) {
     return res.status(400).json({ error: 'Vui lòng nhập mã dữ liệu.' });
   }
@@ -194,12 +165,12 @@ const addEntryHandler = (req: AuthRequest, res: Response) => {
     globalIo.emit('card_added', { entry: newEntry, allEntries: db.getCardEntries() });
   }
 
-  res.json({ message: 'Đã phân loại mã dữ liệu vào nhóm thành công', entry: newEntry });
+  res.json({ message: 'Đã phân loại mã dữ liệu thành công', entry: newEntry });
 };
 streamRouter.post('/items', authMiddleware, addEntryHandler);
 streamRouter.post('/cards', authMiddleware, addEntryHandler);
 
-// DELETE /api/stream/items (or /cards) - Clear entries
+// DELETE /api/stream/items (or /cards)
 const clearEntriesHandler = (req: AuthRequest, res: Response) => {
   db.clearCardEntries();
   if (globalIo) {

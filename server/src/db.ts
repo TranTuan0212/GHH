@@ -28,6 +28,9 @@ export interface StreamSession {
   streamKey: string;
   status: 'LIVE' | 'ENDED';
   vodUrl: string;
+  // URL playlist HLS (http://<host>:8000/live/<streamKey>/index.m3u8) — do NMS/FFmpeg sinh ra.
+  // Web player dùng URL này để mở bằng hls.js, không cần server push frame qua socket.
+  hlsPlaylistUrl?: string;
   startedAt: string;
   endedAt?: string;
 }

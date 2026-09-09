@@ -1,47 +1,71 @@
 import Foundation
 import AVFoundation
-import UIKit
+import LFLiveKit
 
-/// CameraManager cấu hình AVCaptureSession 240fps HFR và gửi từng khung hình video trực tiếp
-/// về Server qua WebSocket / NetworkManager để Web hiển thị tức thì (Requirement 1 & 2).
+/// CameraManager đẩy luồng video 120fps/240fps gốc (không bỏ frame, không re-encode lại thành JPEG rời)
+/// vào Server qua giao thức RTMP/H.264 tới `rtmp://<server>:1935/live/{streamKey}`.
+///
+/// Theo nguyên tắc "đơn vị lưu trữ là segment video đã nén":
+/// - Camera quay ở 120/240fps HFR (CMTime 1/240s) -> xuất thẳng ra H.264 HW encoder trong AVPacket.
+/// - Toàn bộ frame trong segment được giữ nguyên bên trong .ts; server (NMS + FFmpeg) chỉ slice,
+///   KHÔNG cần giải nén frame rời để lưu trữ.
+/// - Khi user tua lại / slow-mo, hls.js chỉ cần seek vào timestamp trong playlist, server trả nguyên
+///   file .ts tương ứng — không cần dựng lại ảnh, không tốn CPU từ frame rời.
 public class CameraManager: NSObject, ObservableObject {
     @Published public var isStreaming = false
     @Published public var currentFPS: Double = 240.0
     @Published public var errorMessage: String? = nil
-    
-    public let captureSession = AVCaptureSession()
+
+    /// URL ingest RTMP. App iOS nhận `serverUrl` (LAN IP + port 1935) và `streamKey` từ backend
+    /// trong endpoint POST /api/stream/start (đã trả `rtmpIngestUrl` rồi). Mặc định dùng localhost
+    /// để dev.
+    @Published public var rtmpIngestUrl: String = "rtmp://localhost:1935/live/"
+
+    private var streamKey: String = ""
+
+    private let captureSession = AVCaptureSession()
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let videoDataOutput = AVCaptureVideoDataOutput()
     private let sessionQueue = DispatchQueue(label: "com.slomo.camera.sessionQueue")
-
-    // Metal GPU CIContext tái sử dụng duy nhất (không tái tạo lại trên từng frame làm nóng máy và tụt FPS)
-    private let ciContext = CIContext(options: [
-        .useSoftwareRenderer: false,
-        .priorityRequestLow: false
-    ])
-    private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-
-    // Ưu tiên TỐC ĐỘ hơn ĐỘ NÉT: giảm kích thước khung hình và chất lượng nén JPEG để mỗi frame
-    // nhẹ hơn nhiều -> gửi nhanh hơn, đỡ nghẽn mạng, giảm nguy cơ dồn ứ ở các hàng đợi latency-cap.
-    // Chỉnh 2 hằng số này nếu muốn cân bằng lại độ nét/tốc độ:
-    //   - targetWidth càng nhỏ -> ảnh càng nhỏ/nhẹ, càng nhanh, nhưng càng mờ khi phóng to.
-    //   - jpegQuality càng thấp -> file càng nhẹ, càng nhanh, nhưng càng nhiều artifact/mờ.
-    private let targetWidth: CGFloat = 640      // trước đây 960
-    private let jpegQuality: CGFloat = 0.50
     private let videoOutputQueue = DispatchQueue(label: "com.slomo.video.outputQueue", qos: .userInteractive)
-    private var streamEpochOffset: TimeInterval?
-    private var lastSentTime: TimeInterval = 0
 
-    private var frameCounter = 0
-    private var lastFrameTime = Date()
+    private var streamEpochOffset: TimeInterval?
+
+    // LFLiveSession đẩy RTMP ra ngoài; cấu hình ở đây để map đúng FPS nguồn -> segment chứa đủ
+    // frame 120/240 bên trong (không downsample). audioConfig = nil để tắt audio track, chỉ phát video
+    // Slo-Mo thuần.
+    private var liveSession: LFLiveSession?
 
     public override init() {
         super.init()
     }
 
+    /// Cấu hình RTMP ingest + stream key trước khi bấm Start Live. App iOS lấy 2 giá trị này từ
+    /// POST /api/stream/start (server trả `rtmpIngestUrl` + `streamKey` qua field session.streamKey).
+    public func configureRtmp(serverHost: String, port: Int = 1935, streamKey: String) {
+        self.rtmpIngestUrl = "rtmp://\(serverHost):\(port)/live/"
+        self.streamKey = streamKey
+        rebuildLiveSession()
+    }
+
+    private func rebuildLiveSession() {
+        // AudioConfiguration(nil) = không ghi audio; chỉ phát video Slo-Mo. Nếu sau này muốn kèm
+        // mic thì đổi sang LFLiveAudioConfiguration.default().
+        let audioCfg: LFLiveAudioConfiguration? = nil
+
+        // VideoConfiguration: defaultQuality = LFLiveVideoQuality_Default (720p), ta dùng
+        // LFLiveVideoQuality.High để giữ chi tiết khi zoom/xem lại. Frame rate để "raw capture"
+        // — LFLiveKit sẽ lấy đúng FPS từ AVCaptureVideoDataOutput của ta (đã set 120/240), encoder
+        // sẽ tạo GOP tương ứng. KHÔNG ép rate ở đây để tránh re-sample frame.
+        let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: LFLiveVideoQuality.High)
+
+        let session = LFLiveSession(audioConfiguration: audioCfg, videoConfiguration: videoCfg)
+        // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
+        session.captureDevicePosition = .back
+        liveSession = session
+    }
+
     public func setupCamera(completion: @escaping (Bool) -> Void) {
-        // Xin quyền camera tường minh và ĐỢI kết quả trước khi cấu hình session — nếu không, session
-        // vẫn "chạy" nhưng không có khung hình nào thực sự tới khi chưa có quyền, preview đen im lặng.
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             self.configureAndStartSession(completion: completion)
@@ -72,7 +96,7 @@ public class CameraManager: NSObject, ObservableObject {
     private func configureAndStartSession(completion: @escaping (Bool) -> Void) {
         sessionQueue.async {
             self.captureSession.beginConfiguration()
-            
+
             guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                 DispatchQueue.main.async {
                     self.errorMessage = "Không tìm thấy camera."
@@ -113,7 +137,10 @@ public class CameraManager: NSObject, ObservableObject {
                 videoDevice.unlockForConfiguration()
 
                 if self.captureSession.canAddOutput(self.videoDataOutput) {
-                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = true  // Bỏ frames cũ khi delegate xử lý không kịp
+                    // Bỏ alwaysDiscardsLateVideoFrames: bây giờ ta muốn GIỮ đủ frame 120/240fps để
+                    // segment chứa toàn bộ frame nguồn. Nếu encoder tạm chậm, LFLiveKit sẽ tự back-pressure
+                    // thay vì vứt frame âm thầm.
+                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = false
                     self.videoDataOutput.videoSettings = [
                         kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
                     ]
@@ -141,27 +168,38 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var cameraPosition: AVCaptureDevice.Position = .back
 
     public func startLiveStream() {
+        // Bật RTMP push — server (NMS + FFmpeg) sẽ slice thành HLS .ts/.m3u8.
+        guard let session = liveSession, !streamKey.isEmpty else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Chưa cấu hình RTMP server / stream key. Gọi configureRtmp(...) trước."
+            }
+            return
+        }
+        let url = "\(rtmpIngestUrl)\(streamKey)"
+        let stream = LFLiveStreamInfo()
+        stream.url = url
+        session.startLive(stream)
         DispatchQueue.main.async {
             self.isStreaming = true
         }
     }
 
     public func stopLiveStream() {
+        liveSession?.stopLive()
         DispatchQueue.main.async {
             self.isStreaming = false
         }
     }
 
-    /// Lật Camera trước / sau hỗ trợ quay Slo-Mo
     public func switchCamera(completion: ((Bool) -> Void)? = nil) {
         let newPosition: AVCaptureDevice.Position = (self.cameraPosition == .back) ? .front : .back
         sessionQueue.async {
             self.captureSession.beginConfiguration()
-            
+
             if let currentInput = self.videoDeviceInput {
                 self.captureSession.removeInput(currentInput)
             }
-            
+
             guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else {
                 self.captureSession.commitConfiguration()
                 DispatchQueue.main.async {
@@ -170,15 +208,14 @@ public class CameraManager: NSObject, ObservableObject {
                 }
                 return
             }
-            
+
             do {
                 let newInput = try AVCaptureDeviceInput(device: newDevice)
                 if self.captureSession.canAddInput(newInput) {
                     self.captureSession.addInput(newInput)
                     self.videoDeviceInput = newInput
                 }
-                
-                // Quét tìm format hỗ trợ FPS cao nhất trên camera này
+
                 var highestFormat: AVCaptureDevice.Format? = nil
                 var maxRate: Double = 30.0
                 for format in newDevice.formats {
@@ -189,7 +226,7 @@ public class CameraManager: NSObject, ObservableObject {
                         }
                     }
                 }
-                
+
                 try newDevice.lockForConfiguration()
                 if let format = highestFormat {
                     newDevice.activeFormat = format
@@ -203,7 +240,7 @@ public class CameraManager: NSObject, ObservableObject {
                     DispatchQueue.main.async { self.currentFPS = 60.0 }
                 }
                 newDevice.unlockForConfiguration()
-                
+
                 self.captureSession.commitConfiguration()
                 DispatchQueue.main.async {
                     self.cameraPosition = newPosition
@@ -223,28 +260,9 @@ public class CameraManager: NSObject, ObservableObject {
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard isStreaming else { return }
-        
-        autoreleasepool {
-            guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-            var ciImage = CIImage(cvImageBuffer: imageBuffer)
-            
-            // Tối ưu kích thước khung hình để truyền siêu tốc 120fps/240fps (ưu tiên tốc độ hơn độ nét)
-            let extent = ciImage.extent
-            if extent.width > targetWidth {
-                let scale = targetWidth / extent.width
-                ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            }
-            
-            // Nén Intra-Frame độc lập trên GPU Metal, chất lượng thấp hơn để ưu tiên tốc độ truyền
-            guard let jpegData = ciContext.jpegRepresentation(
-                of: ciImage,
-                colorSpace: colorSpace,
-                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
-            ) else { return }
-            
-            let timestamp = Date().timeIntervalSince1970
-            // Truyền trực tiếp dữ liệu nhị phân siêu tốc qua WebSocket, không bị nghẽn mạng
-            NetworkManager.shared.sendBinaryFrame(data: jpegData, timestamp: timestamp)
-        }
+        // Đẩy nguyên CMSampleBuffer cho LFLiveKit -> H.264 HW encoder -> RTMP. KHÔNG giải mã ra CIImage,
+        // KHÔNG nén JPEG, KHÔNG gửi qua WebSocket. Toàn bộ frame 120/240 được giữ nguyên trong
+        // segment video .ts sinh ra phía server — đây là đơn vị lưu trữ DVR duy nhất.
+        liveSession?.pushVideo(sampleBuffer)
     }
 }
