@@ -54,20 +54,51 @@ app.get('/api/health', (req, res) => {
 });
 
 // Server Info (returns detected host LAN IP addresses for mobile app connection)
+// QUAN TRỌNG: khi iPhone kết nối qua tunnel, trả về URL RTMP dựa trên Host header thay vì IP LAN.
 app.get('/api/server-info', (req, res) => {
   const ips = getLocalIpAddresses();
   const primaryIp = ips[0] || 'localhost';
+  const { rtmpHost, rtmpPort } = resolveRtmpHostForClient(req);
   res.json({
     status: 'ok',
     ips,
     primaryIp,
     serverUrl: `http://${primaryIp}:${PORT}`,
     // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
-    rtmpIngestUrl: `rtmp://${primaryIp}:1935/live`,
-    hlsBaseUrl: `http://${primaryIp}:8000/live`,
+    rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+    hlsBaseUrl: `http://${rtmpHost}:8000/live`,
     port: PORT
   });
 });
+
+/**
+ * Xác định host:port RTMP phù hợp với client đang kết nối.
+ * - Nếu request qua Cloudflare tunnel / ngrok -> trả về host đó.
+ * - Nếu request qua IP LAN -> trả về IP LAN.
+ * - Override qua header X-RTMP-Host / X-RTMP-Port.
+ */
+function resolveRtmpHostForClient(req: express.Request): { rtmpHost: string; rtmpPort: number } {
+  const overrideHost = (req.headers['x-rtmp-host'] as string | undefined)?.trim();
+  const overridePort = parseInt((req.headers['x-rtmp-port'] as string | undefined) || '');
+
+  if (overrideHost) {
+    return { rtmpHost: overrideHost, rtmpPort: overridePort || 1935 };
+  }
+
+  const hostHeader = (req.headers.host || '').split(':')[0];
+
+  if (hostHeader.endsWith('trycloudflare.com') || hostHeader.endsWith('.ngrok.io') || hostHeader.endsWith('.ngrok-free.app')) {
+    return { rtmpHost: hostHeader, rtmpPort: overridePort || 1935 };
+  }
+
+  const ips = getLocalIpAddresses();
+  const primaryIp = ips[0] || 'localhost';
+  if (hostHeader === primaryIp) {
+    return { rtmpHost: primaryIp, rtmpPort: 1935 };
+  }
+
+  return { rtmpHost: primaryIp, rtmpPort: 1935 };
+}
 
 // Serve Web Frontend Static Files
 const webDistPath = path.resolve(__dirname, '../../web/dist');
@@ -125,6 +156,9 @@ io.on('connection', (socket) => {
     const cardEntries = db.getCardEntries(roomId);
     const ips = getLocalIpAddresses();
     const primaryIp = ips[0] || 'localhost';
+    // QUAN TRỌNG: dùng resolveRtmpHostForClient để khi mobile kết nối qua tunnel thì socket cũng
+    // nhận được URL đúng dạng tunnel, không phải IP LAN.
+    const { rtmpHost, rtmpPort } = resolveRtmpHostForClient({ headers: socket.handshake.headers } as any);
 
     socket.emit('initial_state', {
       roomId,
@@ -134,8 +168,8 @@ io.on('connection', (socket) => {
       groupNames: db.getGroupNames(roomId),
       serverIps: ips,
       serverUrl: `http://${primaryIp}:${PORT}`,
-      rtmpIngestUrl: `rtmp://${primaryIp}:1935/live`,
-      hlsBaseUrl: `http://${primaryIp}:8000/live`
+      rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+      hlsBaseUrl: `http://${rtmpHost}:8000/live`
     });
   });
 

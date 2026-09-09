@@ -39,7 +39,18 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
 
   const roomId = req.user.id;
   const streamKey = 'live_' + roomId + '_' + Date.now();
-  const primaryIp = getPrimaryIp();
+
+  // QUAN TRỌNG: khi iOS app kết nối qua Cloudflare tunnel / public domain, request đến server qua
+  // domain đó. Ta phải trả lại URL RTMP mà iPhone có thể truy cập được từ mạng của nó, KHÔNG phải
+  // IP LAN của server (vì IP LAN chỉ truy cập được khi cùng Wi-Fi).
+  //
+  // Logic:
+  //   1. Nếu request qua tunnel (Host header chứa trycloudflare.com / ngrok / custom domain):
+  //      trả về URL cùng host đó, port RTMP cũng phải được expose qua tunnel tương ứng.
+  //      User cần setup tunnel mở port 1935 (vd: cloudflared tunnel --url tcp://localhost:1935)
+  //   2. Nếu request qua LAN (Host header là IP LAN): trả về IP LAN như cũ.
+  //   3. Fallback: primaryIp LAN.
+  const { rtmpHost, rtmpPort } = resolveRtmpHostForClient(req);
 
   const newStream: StreamSession = {
     id: 'stream-' + Date.now(),
@@ -47,7 +58,7 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
     username: req.user.username,
     streamKey,
     status: 'LIVE',
-    hlsPlaylistUrl: `http://${primaryIp}:8000/live/${streamKey}/index.m3u8`,
+    hlsPlaylistUrl: `http://${rtmpHost}:8000/live/${streamKey}/index.m3u8`.replace('rtmp://', 'http://'),
     vodUrl: '',
     startedAt: new Date().toISOString()
   };
@@ -63,10 +74,45 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
   res.json({
     message: 'Khởi tạo luồng Live Stream 240fps thành công.',
     stream: newStream,
-    rtmpIngestUrl: `rtmp://${primaryIp}:1935/live`,
+    rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
     streamKey
   });
 });
+
+/**
+ * Xác định host:port RTMP phù hợp với client đang kết nối.
+ *
+ * - Nếu request đến qua Cloudflare tunnel (host = *.trycloudflare.com): trả về chính host đó.
+ *   YÊU CẦU: tunnel phải forward TCP port 1935 (vd: cloudflared tunnel --url tcp://localhost:1935)
+ *   và hostname cùng dạng. Nếu dùng tunnel HTTP-only (port 4000), RTMP không qua được -> client
+ *   sẽ báo lỗi "RTMP socket error" và cần dùng Wi-Fi LAN.
+ * - Nếu request đến qua IP LAN: trả về IP LAN.
+ * - Cho phép override qua header X-RTMP-Host / X-RTMP-Port nếu user cấu hình tay.
+ */
+function resolveRtmpHostForClient(req: AuthRequest): { rtmpHost: string; rtmpPort: number } {
+  const overrideHost = (req.headers['x-rtmp-host'] as string | undefined)?.trim();
+  const overridePort = parseInt((req.headers['x-rtmp-port'] as string | undefined) || '');
+
+  if (overrideHost) {
+    return { rtmpHost: overrideHost, rtmpPort: overridePort || 1935 };
+  }
+
+  const hostHeader = (req.headers.host || '').split(':')[0];
+
+  // Tunnel domain -> trả về chính host đó
+  if (hostHeader.endsWith('trycloudflare.com') || hostHeader.endsWith('.ngrok.io') || hostHeader.endsWith('.ngrok-free.app')) {
+    return { rtmpHost: hostHeader, rtmpPort: overridePort || 1935 };
+  }
+
+  // Nếu request qua IP LAN -> trả về IP LAN
+  const primaryIp = getPrimaryIp();
+  if (hostHeader === primaryIp) {
+    return { rtmpHost: primaryIp, rtmpPort: 1935 };
+  }
+
+  // Fallback: IP LAN
+  return { rtmpHost: primaryIp, rtmpPort: 1935 };
+}
 
 // POST /api/stream/end — cleanup segment files + end session
 streamRouter.post('/end', authMiddleware, (req: AuthRequest, res: Response) => {

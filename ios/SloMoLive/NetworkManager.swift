@@ -139,7 +139,9 @@ public class NetworkManager: ObservableObject {
                 }
                 self.activeStreamId = streamId
                 self.streamKey = streamKey
-                self.rtmpIngestUrl = (json["rtmpIngestUrl"] as? String) ?? "rtmp://localhost:1935/live"
+                // Nhận URL ingest từ server. Nếu server không trả (lỗi / dev), giữ nguyên nil — UI
+                // sẽ báo lỗi "chưa cấu hình RTMP" thay vì mặc định localhost (gây crash qua 5G).
+                self.rtmpIngestUrl = json["rtmpIngestUrl"] as? String
                 self.hlsPlaylistUrl = streamObj["hlsPlaylistUrl"] as? String
                 completion(true)
             }

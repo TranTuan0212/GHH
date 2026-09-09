@@ -37,6 +37,20 @@ struct ContentView: View {
     @State private var passwordInput = "user123"
     @State private var isFakeLocked = false
 
+    // Cho phép user override host:port RTMP khi server trả về IP LAN nhưng user đang 5G/tunnel.
+    // Ví dụ: nếu server chỉ trả "rtmp://192.168.1.5:1935/live" (LAN), nhưng user đang 5G và
+    // có tunnel TCP cho port 1935 -> hostname sẽ là "<tunnel-id>.trycloudflare.com".
+    @State private var customRtmpHost: String = "" {
+        didSet {
+            UserDefaults.standard.set(customRtmpHost, forKey: "custom_rtmp_host")
+        }
+    }
+    @State private var customRtmpPort: String = "1935" {
+        didSet {
+            UserDefaults.standard.set(customRtmpPort, forKey: "custom_rtmp_port")
+        }
+    }
+
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
@@ -104,6 +118,30 @@ struct ContentView: View {
                                 SecureField("Password", text: $passwordInput)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                             }
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("RTMP Host Override (chỉ dùng khi 5G/Tunnel):")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.gray)
+                                TextField("vd: tunnel-xyz.trycloudflare.com", text: $customRtmpHost)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .autocapitalization(.none)
+                                    .disableAutocorrection(true)
+                                Text("Port: ")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                                + TextField("1935", text: $customRtmpPort)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .keyboardType(.numberPad)
+                                    .frame(maxWidth: 100)
+                                Text("Để trống nếu dùng Wi-Fi LAN. Nếu server đã trả URL đúng qua Host header thì cũng để trống.")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.yellow)
+                            }
+                            .padding(8)
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(8)
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Hardware Device UUID (Keychain Locked):")
@@ -217,9 +255,21 @@ struct ContentView: View {
                                     networkManager.stopStream()
                                 } else {
                                     networkManager.startStream { ok in
-                                        guard ok,
-                                              let ingestUrl = networkManager.rtmpIngestUrl,
-                                              let key = networkManager.streamKey else {
+                                        guard ok else {
+                                            DispatchQueue.main.async {
+                                                networkManager.errorMessage = "Không khởi tạo được phiên live trên server."
+                                            }
+                                            return
+                                        }
+                                        // Bắt buộc phải có ingestUrl từ server. Nếu server trả về localhost
+                                        // mà thiết bị đang 5G, vẫn tiếp tục nhưng sẽ fail ở LFLiveKit và báo
+                                        // lỗi rõ ràng qua delegate.
+                                        guard let ingestUrl = networkManager.rtmpIngestUrl,
+                                              let key = networkManager.streamKey,
+                                              !ingestUrl.isEmpty, !key.isEmpty else {
+                                            DispatchQueue.main.async {
+                                                networkManager.errorMessage = "Server không trả về RTMP ingest URL. Kiểm tra server có trả field 'rtmpIngestUrl' trong /api/stream/start."
+                                            }
                                             return
                                         }
                                         // ingestUrl dạng "rtmp://<host>:1935/live" -> tách ra host + port
