@@ -1,82 +1,138 @@
 @echo off
-title SLOMO LIVE 240FPS HOST SERVER + INTERNET TUNNEL
+setlocal EnableExtensions
+title SloMo Live - LAN Server
 color 0A
-echo ========================================================
-echo    SLOMO LIVE 240FPS HOST SERVER + CLOUDFLARE + PINGGY
-echo ========================================================
-echo.
-echo [LUU Y QUAN TRONG]
-echo  Cloudflare Quick Tunnel (trycloudflare.com) CHI ho tro HTTP.
-echo  RTMP la giao thuc TCP tho -^> khong the dung Cloudflare Quick
-echo  Tunnel cho RTMP (iOS se khong bao gio connect duoc qua 5G).
-echo  Script nay dung: Cloudflare cho HTTP (4000), Pinggy (SSH) cho RTMP (1935).
-echo  (ngrok free hien bat buoc xac minh the tin dung cho TCP endpoint,
-echo   nen dung Pinggy thay the - mien phi, khong can the, khong can cai dat
-echo   gi them, dung san ssh cua Windows 10/11).
-echo.
 
-echo [1/6] Giai phong cac cong 4000, 1935, 8000, 8189, 8554, 8889 cu (neu co)...
-taskkill /F /FI "WINDOWTITLE eq SloMo Host Server Backend*" 2>nul
-taskkill /F /IM cloudflared.exe 2>nul
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :4000 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :1935 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :8000 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :8189 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :8554 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :8889 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-REM Giai phong cong metrics rieng cua cloudflared, phong khi lan chay truoc bi treo
-for /f "tokens=5" %%a in ('netstat -aon 2^^^>nul ^^^| findstr :20241 ^^^| findstr LISTENING') do taskkill /f /pid %%a 2>nul
-echo.
-
-echo [2/6] Khoi dong MediaMTX WebRTC relay (RTSP 8554, ICE 8189, signaling 8889)...
-start "SloMo MediaMTX WebRTC" cmd /k "cd /d "%~dp0server\tools\mediamtx" && mediamtx.exe ..\..\mediamtx-slomo.yml"
-echo.
-
-echo [3/6] Khoi dong Backend Server tren cong 4000...
-start "SloMo Host Server Backend" cmd /k "cd /d "%~dp0server" && npm start"
-echo.
-
-echo [4/6] Cho server san sang (3 giay)...
-timeout /t 3 /nobreak >nul
-echo.
-
-echo [5/6] Khoi tao Cloudflare Tunnel cho cong 4000 (HTTP/Web Admin + API)...
-start "SloMo Cloudflare Tunnel 4000 - HTTP" cmd /k "cloudflared tunnel --protocol http2 --url http://localhost:4000 --metrics localhost:20241"
-echo.
-
-echo [6/6] Khoi tao Pinggy TCP Tunnel cho cong 1935 (RTMP Ingest tu iOS)...
-echo       ^|^| Day la cong RTMP that su - moi hoat dong duoc voi ket noi
-echo       ^|^| RTMP tho tu app iOS qua 5G (Cloudflare Quick Tunnel khong the).
-start "SloMo Pinggy Tunnel 1935 - RTMP" cmd /k "ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:1935 tcp@free.pinggy.io"
-echo.
-
-echo [Cho 6 giay de ca 2 tunnel len xong truoc khi ban doc URL]...
-timeout /t 6 /nobreak >nul
-echo.
+set "ROOT=%~dp0"
+set "SERVER_DIR=%ROOT%server"
+set "WEB_DIR=%ROOT%web"
+set "MTX_EXE=%SERVER_DIR%\tools\mediamtx\mediamtx.exe"
+set "MTX_CONFIG=%SERVER_DIR%\mediamtx-slomo.yml"
+set "BUNDLED_FFMPEG=%SERVER_DIR%\tools\ffmpeg\ffmpeg.exe"
+set "BACKEND_LOG=%SERVER_DIR%\backend.log"
 
 echo ========================================================
-echo  CACH DOC KET QUA:
-echo.
-echo  1) Cua so "SloMo Cloudflare Tunnel 4000 - HTTP":
-echo     Tim dong trong khung ve, dang:
-echo         https://xxxx-xxxx-xxxx.trycloudflare.com
-echo     -^> Dien vao o "Server IP / VPS Host URL" trong app iOS.
-echo        (KHONG them :4000 phia sau)
-echo.
-echo  2) Cua so "SloMo Pinggy Tunnel 1935 - RTMP":
-echo     Tim dong dang:
-echo         tcp://rndnj-xxx.a.free.pinggy.online:37315
-echo     -^> Host  = rndnj-xxx.a.free.pinggy.online   (phan truoc dau ":")
-echo     -^> Port  = 37315                            (so sau dau ":")
-echo     Dien 2 gia tri nay vao "RTMP Host Override" + "Port" trong app iOS.
-echo     LUU Y: URL/Port nay se DOI MOI KHI cua so nay khoi dong lai (goi
-echo     free khong co dia chi co dinh) - phai doc lai va dien lai moi lan.
-echo.
-echo  * Neu dung cung Wi-Fi voi server: khong can tunnel gi ca, dien
-echo    thang http://192.168.1.X:4000 va de trong RTMP Host Override.
-echo.
-echo  KIEM TRA LOI: mo ca 2 cua so, neu thay dong do "ERR" hoac
-echo  "address already in use" thi bao lai ngay, dung dien URL cu.
+echo       SLOMO LIVE - LAN DVR + WEBRTC TEST SERVER
 echo ========================================================
 echo.
-pause
+echo iPhone va may xem phai cung Wi-Fi voi may nay.
+echo Script nay KHONG mo Cloudflare/Pinggy va KHONG can router/VPS.
+echo.
+
+where node >nul 2>nul
+if errorlevel 1 (
+  echo [LOI] Chua cai Node.js. Hay cai Node.js LTS roi chay lai script.
+  pause
+  exit /b 1
+)
+where npm >nul 2>nul
+if errorlevel 1 (
+  echo [LOI] Khong tim thay npm trong PATH.
+  pause
+  exit /b 1
+)
+
+if not exist "%MTX_EXE%" (
+  echo [LOI] Khong tim thay MediaMTX: %MTX_EXE%
+  pause
+  exit /b 1
+)
+
+if exist "%BUNDLED_FFMPEG%" (
+  set "FFMPEG_PATH=%BUNDLED_FFMPEG%"
+) else (
+  where ffmpeg >nul 2>nul
+  if errorlevel 1 (
+    echo [LOI] Khong tim thay FFmpeg.
+    echo       Cai dat ffmpeg vao PATH, hoac dat ffmpeg.exe tai:
+    echo       %BUNDLED_FFMPEG%
+    echo.
+    echo FFmpeg bat buoc de ghi master DVR va tao live WebRTC 60 FPS.
+    pause
+    exit /b 1
+  )
+  set "FFMPEG_PATH=ffmpeg"
+)
+
+echo [1/5] Dung toan bo dich vu SloMo tu lan chay truoc...
+call "%ROOT%stop_server.bat" --quiet
+timeout /t 1 /nobreak >nul
+
+echo [2/5] Kiem tra/cai dependency khi can...
+pushd "%SERVER_DIR%"
+if not exist "node_modules\." (
+  call npm ci
+  if errorlevel 1 (
+    popd
+    echo [LOI] Khong cai duoc dependency backend.
+    pause
+    exit /b 1
+  )
+)
+call npm run build
+if errorlevel 1 (
+  popd
+  echo [LOI] Backend build that bai.
+  pause
+  exit /b 1
+)
+popd
+pushd "%WEB_DIR%"
+if not exist "node_modules\." (
+  call npm ci
+  if errorlevel 1 (
+    popd
+    echo [LOI] Khong cai duoc dependency web.
+    pause
+    exit /b 1
+  )
+)
+call npm run build
+if errorlevel 1 (
+  popd
+  echo [LOI] Web build that bai.
+  pause
+  exit /b 1
+)
+popd
+
+echo [3/5] Khoi dong MediaMTX WebRTC ^(RTSP 8554, WHEP 8889, ICE 8189^)...
+REM Luon tao relay moi voi mediamtx-slomo.yml. Tai su dung process cu chi dua vao
+REM port 8554 co the giu publisher dang treo va lam WHEP tra 404 cho stream moi.
+start "SloMo MediaMTX WebRTC" /D "%SERVER_DIR%\tools\mediamtx" cmd /k ""%MTX_EXE%" "%MTX_CONFIG%""
+timeout /t 2 /nobreak >nul
+
+echo [4/5] Khoi dong backend ^(web/API 4000, RTMP 1935, HLS 8000, FFmpeg^)...
+REM Chay node truc tiep nen, khong long trong `cmd /k` (co the dong som ma khong hien loi).
+REM Output duoc ghi vao log de hien nguyen nhan neu health check that bai.
+start "SloMo Host Server Backend" /B /D "%SERVER_DIR%" node -e "process.env.FFMPEG_PATH=process.argv[1]; require('./dist/index.js')" "%FFMPEG_PATH%" >> "%BACKEND_LOG%" 2>&1
+echo [5/5] Cho backend san sang...
+set "READY="
+for /L %%I in (1,1,15) do (
+  if not defined READY (
+    powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:4000/api/health).StatusCode -eq 200 } catch { $false }" | findstr /i "True" >nul && set "READY=1"
+    if not defined READY timeout /t 1 /nobreak >nul
+  )
+)
+if not defined READY (
+  echo [LOI] Backend chua tra loi o cong 4000. 30 dong loi/cuoi cung:
+  if exist "%BACKEND_LOG%" powershell -NoProfile -Command "Get-Content -LiteralPath '%BACKEND_LOG%' -Tail 30"
+  echo [LOI] Khong mo web. Sua loi tren roi chay lai start_server.bat.
+  if /I not "%~1"=="--quiet" pause
+  exit /b 1
+) else (
+  echo [OK] Toan bo dich vu SloMo da san sang.
+)
+
+echo.
+echo ========================================================
+echo SAN SANG TEST LAN
+echo   iOS Server URL: http://192.168.1.10:4000
+echo   RTMP ingest:    rtmp://192.168.1.10:1935/live
+echo   Web viewer:     http://192.168.1.10:4000
+echo.
+echo Neu iPhone khong ket noi duoc, mo Windows Firewall cho:
+echo   TCP 4000, TCP 1935, TCP 8554, TCP 8889, UDP/TCP 8189
+echo ========================================================
+echo.
+if /I not "%~1"=="--quiet" pause

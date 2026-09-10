@@ -12,6 +12,7 @@ build/
 
 # Environment & Data
 server/data/database.json
+server/media/replay/
 .env
 .env.local
 .env.development.local
@@ -35,8 +36,14 @@ logs/
 *.sln
 *.swp
 
+# Runtime tools and generated TLS material
+server/tools/ffmpeg/
+server/tools/mediamtx/auto.crt
+server/tools/mediamtx/auto.key
+server/tools/ffmpeg-release-essentials.zip
 # Xcode & Swift
 DerivedData/
 *.xcodeproj/project.xcworkspace/
 *.xcodeproj/xcuserdata/
 xcuserdata/
+server/media/

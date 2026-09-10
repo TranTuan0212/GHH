@@ -36,6 +36,10 @@ const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) ||
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 5 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
 const HLS_SEGMENT_SECONDS = 1;
+// Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
+// avoids the visibly choppy 30fps motion in the operator's live monitor. The master
+// still keeps every source frame for slow motion.
+const LIVE_PREVIEW_FPS = parseInt(process.env.LIVE_PREVIEW_FPS || '', 10) || 60;
 
 interface HlsSession {
   streamKey: string;
@@ -113,7 +117,10 @@ function startHlsSession(streamKey: string): void {
   // ffmpeg command: receive RTMP, output HLS (video-only, no audio).
   // Do not create a synthetic playlist here: a playlist pointing to a non-existent
   // segment makes hls.js stop/retry the wrong resource before the first real frame.
-  const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+  // Keep the runtime self-contained on Windows when the project-local binary is present.
+  // FFMPEG_PATH remains an escape hatch for a system-managed FFmpeg installation.
+  const bundledFfmpeg = path.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
+  const ffmpegPath = process.env.FFMPEG_PATH || (fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
 
   // hls_list_size của ffmpeg tính theo SỐ SEGMENT trong playlist, không phải số giây.
   // Với mỗi segment dài HLS_SEGMENT_SECONDS giây, số segment cần giữ để đạt đúng
@@ -139,12 +146,16 @@ function startHlsSession(streamKey: string): void {
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
     '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
-    '-hls_flags', '+independent_segments',
+    // This is a stream copy, therefore FFmpeg cannot guarantee that the first segment
+    // (when it attaches mid-GOP) starts with an IDR frame. Advertising all segments as
+    // independent makes hls.js seek straight into an undecodable GOP and render black.
+    // Without the flag, hls.js backtracks to a decodable segment before the requested PTS.
+    '-hls_flags', '+program_date_time',
     path.join(outputDir, 'index.m3u8')
   ];
 
   // This browser-only rendition is never used for replay. The fps filter emits no more than
-  // 60 frames/s; frames that cannot be encoded in time are intentionally disposable. The
+  // LIVE_PREVIEW_FPS; frames that cannot be encoded in time are intentionally disposable. The
   // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
   const liveFfmpegArgs = [
     // LFLiveKit at 240fps occasionally emits a malformed access unit. This is only for
@@ -156,17 +167,23 @@ function startHlsSession(streamKey: string): void {
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     '-map', '0:v:0',
     '-an',
-    '-vf', 'fps=60',
+    '-vf', `fps=${LIVE_PREVIEW_FPS}:round=down`,
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-tune', 'zerolatency',
-    '-profile:v', 'main',
+    // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
+    // Repeat SPS/PPS on every 1s IDR so a viewer joining an already-running RTSP
+    // publisher can decode immediately instead of displaying a black video element.
+    '-profile:v', 'baseline',
+    '-level:v', '3.1',
     '-pix_fmt', 'yuv420p',
-    '-b:v', '3500k',
-    '-maxrate', '4000k',
-    '-bufsize', '7000k',
-    '-g', '60',
-    '-keyint_min', '60',
+    '-bf', '0',
+    '-x264-params', `keyint=${LIVE_PREVIEW_FPS}:min-keyint=${LIVE_PREVIEW_FPS}:scenecut=0:repeat-headers=1`,
+    '-b:v', '2200k',
+    '-maxrate', '2500k',
+    '-bufsize', '3000k',
+    '-g', String(LIVE_PREVIEW_FPS),
+    '-keyint_min', String(LIVE_PREVIEW_FPS),
     '-sc_threshold', '0',
     '-force_key_frames', 'expr:gte(t,n_forced*1)',
     '-f', 'rtsp',
@@ -177,7 +194,7 @@ function startHlsSession(streamKey: string): void {
   console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
   console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS)`);
-  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (60fps, 3.5Mbps)`);
+  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (${LIVE_PREVIEW_FPS}fps, 2.2Mbps)`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']

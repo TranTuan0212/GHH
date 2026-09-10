@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import LFLiveKit
+import UIKit
 
 /// CameraManager đẩy luồng video 120fps/240fps gốc (không bỏ frame, không re-encode lại thành JPEG rời)
 /// vào Server qua giao thức RTMP/H.264 tới `rtmp://<server>:1935/live/{streamKey}`.
@@ -52,6 +53,46 @@ public class CameraManager: NSObject, ObservableObject {
 
     public override init() {
         super.init()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(deviceOrientationDidChange),
+            name: UIDevice.orientationDidChangeNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+    }
+
+    /// The camera sensor is naturally landscape while the app UI is portrait-locked.
+    /// Explicitly update the capture output connection so the encoded RTMP frame has the
+    /// same orientation as the phone, rather than relying on preview-only orientation.
+    @objc private func deviceOrientationDidChange() {
+        updateVideoOrientation()
+    }
+
+    private func updateVideoOrientation() {
+        let orientation: AVCaptureVideoOrientation
+        switch UIDevice.current.orientation {
+        // Device and camera coordinates are mirrored for landscape orientations.
+        case .landscapeLeft:
+            orientation = .landscapeRight
+        case .landscapeRight:
+            orientation = .landscapeLeft
+        case .portraitUpsideDown:
+            orientation = .portraitUpsideDown
+        default:
+            orientation = .portrait
+        }
+
+        sessionQueue.async { [weak self] in
+            guard let connection = self?.videoDataOutput.connection(with: .video),
+                  connection.isVideoOrientationSupported else { return }
+            connection.videoOrientation = orientation
+        }
     }
 
     /// Cấu hình RTMP ingest + stream key trước khi bấm Start Live. App iOS lấy 2 giá trị này từ
@@ -292,6 +333,15 @@ public class CameraManager: NSObject, ObservableObject {
 
                     // Nếu dùng connection từ output, ép video orientation portrait và bật HFR nếu hỗ trợ
                     if let connection = self.videoDataOutput.connection(with: .video) {
+                        if connection.isVideoOrientationSupported {
+                            // Set an initial orientation before the first encoded frame.
+                            switch UIDevice.current.orientation {
+                            case .landscapeLeft: connection.videoOrientation = .landscapeRight
+                            case .landscapeRight: connection.videoOrientation = .landscapeLeft
+                            case .portraitUpsideDown: connection.videoOrientation = .portraitUpsideDown
+                            default: connection.videoOrientation = .portrait
+                            }
+                        }
                         if connection.isVideoStabilizationSupported {
                             connection.preferredVideoStabilizationMode = .auto
                         }
