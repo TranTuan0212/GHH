@@ -96,6 +96,7 @@ app.get('/api/server-info', (req, res) => {
     // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
     rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
     hlsBaseUrl: resolveHlsBaseUrl(req),
+    replayHlsBaseUrl: resolveReplayHlsBaseUrl(req),
     port: PORT,
     rtmpPort: 1935,
     // Thông tin giúp iOS app ra quyết định:
@@ -123,8 +124,8 @@ app.get('/api/server-info', (req, res) => {
  * NMS serve mediaroot tại port 8000 với path prefix /live/ (vd: /live/<streamKey>/index.m3u8),
  * nên proxy chỉ cần forward nguyên originalUrl tới localhost:8000 là đúng.
  */
-app.use('/live', (req, res) => {
-  const targetPath = req.originalUrl; // vd "/live/live_user-uuid-0002_xxx/index.m3u8"
+app.use(['/live', '/replay'], (req, res) => {
+  const targetPath = req.originalUrl; // /live = 60fps; /replay = master 120/240fps
 
   console.log(`[HLS Proxy] Forwarding: ${targetPath} -> localhost:8000${targetPath}`);
 
@@ -158,6 +159,13 @@ function resolveHlsBaseUrl(req: { headers: any; protocol?: string }): string {
   const proto = forwardedProto || req.protocol || 'http';
   const host = (req.headers.host as string) || `localhost:${PORT}`;
   return `${proto}://${host}/live`;
+}
+
+function resolveReplayHlsBaseUrl(req: { headers: any; protocol?: string }): string {
+  const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  const host = (req.headers.host as string) || `localhost:${PORT}`;
+  return `${proto}://${host}/replay`;
 }
 
 

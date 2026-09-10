@@ -40,8 +40,7 @@ interface HlsSession {
   streamKey: string;
   startTime: number;
   lastSeen: number;
-  ffmpegProcess: ChildProcess | null;
-  outputDir: string;
+  ffmpegProcesses: ChildProcess[];
 }
 
 // Track active HLS sessions: streamKey -> HlsSession
@@ -60,44 +59,53 @@ const nmsSessions: Map<string, { streamKey: string; connectedAt: number }> = new
 // Map NMS session id -> streamKey
 const sessionToStreamKey: Map<string, string> = new Map();
 
-function getStreamDir(streamKey: string): string {
-  return path.join(MEDIA_ROOT, 'live', streamKey);
+function getStreamDir(rendition: 'live' | 'replay', streamKey: string): string {
+  return path.join(MEDIA_ROOT, rendition, streamKey);
 }
 
 export function cleanupStreamSession(streamKey: string): void {
   const session = hlsSessions.get(streamKey);
   if (session) {
-    if (session.ffmpegProcess && !session.ffmpegProcess.killed) {
-      session.ffmpegProcess.kill('SIGTERM');
+    for (const process of session.ffmpegProcesses) {
+      if (!process.killed) process.kill('SIGTERM');
     }
     hlsSessions.delete(streamKey);
   }
-  const dir = getStreamDir(streamKey);
-  try {
-    if (fs.existsSync(dir)) {
-      const files = fs.readdirSync(dir);
-      let deleted = 0;
-      for (const file of files) {
-        if (file.endsWith('.ts') || file.endsWith('.m3u8') || file.endsWith('.mp4')) {
-          fs.unlinkSync(path.join(dir, file));
-          deleted++;
+  let deleted = 0;
+  for (const rendition of ['live', 'replay'] as const) {
+    const dir = getStreamDir(rendition, streamKey);
+    try {
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir);
+        for (const file of files) {
+          if (file.endsWith('.ts') || file.endsWith('.m3u8') || file.endsWith('.mp4')) {
+            fs.unlinkSync(path.join(dir, file));
+            deleted++;
+          }
         }
+        try { fs.rmdirSync(dir); } catch { /* ignore if not empty */ }
       }
-      try { fs.rmdirSync(dir); } catch { /* ignore if not empty */ }
-      console.log(`[MediaServer] Cleanup session ${streamKey}: deleted ${deleted} files`);
+    } catch (err) {
+      console.error(`[MediaServer] Cleanup error for ${streamKey}/${rendition}:`, err);
     }
-  } catch (err) {
-    console.error(`[MediaServer] Cleanup error for ${streamKey}:`, err);
   }
+  console.log(`[MediaServer] Cleanup session ${streamKey}: deleted ${deleted} files`);
 }
 
 /** Start HLS segmentation for a streamKey using ffmpeg directly */
+/*
+ * Two independent FFmpeg consumers deliberately read the same RTMP source. This keeps the
+ * replay master immutable while allowing the browser-friendly rendition to be transcoded.
+ */
 function startHlsSession(streamKey: string): void {
-  const outputDir = getStreamDir(streamKey);
+  // `/replay` is the master DVR: source H.264 frames and their PTS are copied unchanged.
+  const outputDir = getStreamDir('replay', streamKey);
+  const liveOutputDir = getStreamDir('live', streamKey);
 
   // Create output directory
   try {
     fs.mkdirSync(outputDir, { recursive: true });
+    fs.mkdirSync(liveOutputDir, { recursive: true });
   } catch (err) {
     console.error(`[MediaServer] Cannot create output dir ${outputDir}:`, err);
     return;
@@ -136,11 +144,42 @@ function startHlsSession(streamKey: string): void {
     path.join(outputDir, 'index.m3u8')
   ];
 
-  console.log(`[MediaServer] Starting HLS session for ${streamKey}:`);
+  // This browser-only rendition is never used for replay. `fps=60` samples by PTS in
+  // chronological order, while one-second GOPs give HLS a keyframe index every second.
+  const liveFfmpegArgs = [
+    '-i', `rtmp://localhost:1935/live/${streamKey}`,
+    '-map', '0:v:0',
+    '-an',
+    '-vf', 'fps=60',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-tune', 'zerolatency',
+    '-profile:v', 'main',
+    '-pix_fmt', 'yuv420p',
+    '-b:v', '3500k',
+    '-maxrate', '4000k',
+    '-bufsize', '7000k',
+    '-g', '60',
+    '-keyint_min', '60',
+    '-sc_threshold', '0',
+    '-force_key_frames', 'expr:gte(t,n_forced*1)',
+    '-f', 'hls',
+    '-hls_time', String(HLS_SEGMENT_SECONDS),
+    '-hls_list_size', String(hlsListSize),
+    '-hls_segment_filename', path.join(liveOutputDir, '%05d.ts'),
+    '-hls_flags', '+independent_segments',
+    path.join(liveOutputDir, 'index.m3u8')
+  ];
+
+  console.log(`[MediaServer] Starting dual HLS session for ${streamKey}:`);
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
-  console.log(`[MediaServer]   ffmpeg ${ffmpegArgs.join(' ')}`);
+  console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS)`);
+  console.log(`[MediaServer]   web live:      /live/${streamKey} (60fps, 3.5Mbps)`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const liveFfmpeg = spawn(ffmpegPath, liveFfmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -148,8 +187,7 @@ function startHlsSession(streamKey: string): void {
     streamKey,
     startTime: Date.now() / 1000,
     lastSeen: Date.now() / 1000,
-    ffmpegProcess: ffmpeg,
-    outputDir
+    ffmpegProcesses: [ffmpeg, liveFfmpeg]
   };
   hlsSessions.set(streamKey, session);
 
@@ -180,12 +218,25 @@ function startHlsSession(streamKey: string): void {
   });
 
   ffmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-    console.log(`[MediaServer] ffmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-    // Don't auto-cleanup here — wait for NMS donePublish to cleanup
-    hlsSessions.delete(streamKey);
+    console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
   });
 
-  console.log(`[MediaServer] HLS session started for ${streamKey}, output: ${outputDir}`);
+  liveFfmpeg.stderr.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (!line) return;
+    const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
+    if (isImportant) console.log(`[MediaServer] [live ${streamKey}] ${line}`);
+    const active = hlsSessions.get(streamKey);
+    if (active) active.lastSeen = Date.now() / 1000;
+  });
+  liveFfmpeg.on('error', (err: Error) => {
+    console.error(`[MediaServer] live FFmpeg error for ${streamKey}:`, err);
+    cleanupStreamSession(streamKey);
+  });
+  liveFfmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+    console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+  });
+  console.log(`[MediaServer] Dual HLS session started for ${streamKey}`);
 }
 
 /** Called when NMS detects a new RTMP publish */
@@ -209,8 +260,10 @@ function onStreamEnd(sessionId: string): void {
 
   // Stop ffmpeg HLS session
   const session = hlsSessions.get(streamKey);
-  if (session && session.ffmpegProcess) {
-    session.ffmpegProcess.kill('SIGTERM');
+  if (session) {
+    for (const process of session.ffmpegProcesses) {
+      if (!process.killed) process.kill('SIGTERM');
+    }
     hlsSessions.delete(streamKey);
     console.log(`[MediaServer] Stream ${streamKey} ended, HLS ffmpeg stopped`);
   }
@@ -265,33 +318,34 @@ export function timeoutCheckOnce(): string[] {
 
 export function runCronCleanupOnce(): { deleted: number; errors: number } {
   const now = Date.now() / 1000;
-  const liveDir = path.join(MEDIA_ROOT, 'live');
-  if (!fs.existsSync(liveDir)) return { deleted: 0, errors: 0 };
-
   let deleted = 0;
   let errors = 0;
-  try {
-    const entries = fs.readdirSync(liveDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const streamDir = path.join(liveDir, entry.name);
-      try {
-        const files = fs.readdirSync(streamDir);
-        for (const file of files) {
-          if (!file.endsWith('.ts')) continue;
-          const filePath = path.join(streamDir, file);
-          const stats = fs.statSync(filePath);
-          if (now - stats.mtime.getTime() / 1000 > CRON_MAX_AGE_SECONDS) {
-            fs.unlinkSync(filePath);
-            deleted++;
+  for (const rendition of ['live', 'replay'] as const) {
+    const renditionDir = path.join(MEDIA_ROOT, rendition);
+    if (!fs.existsSync(renditionDir)) continue;
+    try {
+      const entries = fs.readdirSync(renditionDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const streamDir = path.join(renditionDir, entry.name);
+        try {
+          const files = fs.readdirSync(streamDir);
+          for (const file of files) {
+            if (!file.endsWith('.ts')) continue;
+            const filePath = path.join(streamDir, file);
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtime.getTime() / 1000 > CRON_MAX_AGE_SECONDS) {
+              fs.unlinkSync(filePath);
+              deleted++;
+            }
           }
+        } catch {
+          errors++;
         }
-      } catch {
-        errors++;
       }
+    } catch {
+      errors++;
     }
-  } catch {
-    errors++;
   }
   return { deleted, errors };
 }
@@ -336,7 +390,8 @@ export function startNativeMediaServer(): void {
 
     console.log(`Native RTMP/HLS Media Server đang chạy:`);
     console.log(`   -> RTMP Ingest (iPhone):  rtmp://localhost:1935/live`);
-    console.log(`   -> HLS Egress (Web):     http://localhost:8000/live/<streamKey>/index.m3u8`);
+    console.log(`   -> HLS Live (Web):       http://localhost:8000/live/<streamKey>/index.m3u8 (60fps)`);
+    console.log(`   -> HLS Replay (Master):  http://localhost:8000/replay/<streamKey>/index.m3u8 (source FPS)`);
     console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (segment ${HLS_SEGMENT_SECONDS}s, hls_list_size=${Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS)} segments)`);
     console.log(`   -> Media root:           ${MEDIA_ROOT}`);
   } catch (err) {
