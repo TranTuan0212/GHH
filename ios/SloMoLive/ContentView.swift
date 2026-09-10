@@ -274,7 +274,7 @@ struct ContentView: View {
                         // Controls Bar
                         VStack(spacing: 16) {
                             Button(action: {
-                                if cameraManager.isStreaming {
+                                if cameraManager.isStreaming || cameraManager.isConnecting {
                                     cameraManager.stopLiveStream()
                                     locationManager.stopTracking()
                                     networkManager.stopStream()
@@ -315,15 +315,15 @@ struct ContentView: View {
                                 }
                             }) {
                                 HStack {
-                                    Image(systemName: cameraManager.isStreaming ? "stop.fill" : "play.fill")
-                                    Text(cameraManager.isStreaming ? "DỪNG PHÁT LIVE" : "BẮT ĐẦU LIVE 240FPS")
+                                    Image(systemName: (cameraManager.isStreaming || cameraManager.isConnecting) ? "stop.fill" : "play.fill")
+                                    Text(cameraManager.isStreaming ? "DỪNG PHÁT LIVE" : (cameraManager.isConnecting ? "ĐANG KẾT NỐI — BẤM ĐỂ HỦY" : "BẮT ĐẦU LIVE 240FPS"))
                                         .fontWeight(.bold)
                                 }
                                 .font(.title3)
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 32)
                                 .padding(.vertical, 16)
-                                .background(cameraManager.isStreaming ? Color.red : Color.indigo)
+                                .background((cameraManager.isStreaming || cameraManager.isConnecting) ? Color.red : Color.indigo)
                                 .cornerRadius(20)
                                 .shadow(radius: 10)
                             }

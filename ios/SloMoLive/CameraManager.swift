@@ -13,6 +13,7 @@ import LFLiveKit
 ///   file .ts tương ứng — không cần dựng lại ảnh, không tốn CPU từ frame rời.
 public class CameraManager: NSObject, ObservableObject {
     @Published public var isStreaming = false
+    @Published public private(set) var isConnecting = false
     @Published public var currentFPS: Double = 240.0
     @Published public var errorMessage: String? = nil
 
@@ -298,6 +299,7 @@ public class CameraManager: NSObject, ObservableObject {
             }
             return
         }
+        guard !isConnecting, !isStreaming else { return }
 
         let url = "\(rtmpIngestUrl)\(streamKey)"
 
@@ -321,16 +323,15 @@ public class CameraManager: NSObject, ObservableObject {
         // DEBUG: reset frame counter khi bắt đầu session mới
         self._frameCounter = 0
 
-        // QUAN TRỌNG — FIX STREAM RỖNG: KHÔNG set isStreamingAtomic = true ở đây. Nếu set sớm,
-        // captureOutput (chạy 240fps trên videoOutputQueue) sẽ đổ pixel buffer vào LFLiveKit ngay
-        // lập tức, TRƯỚC khi RTMP handshake xong và session chuyển sang state .start. LFLiveKit (Obj-C)
-        // chỉ thực sự encode + đẩy frames ra RTMP khi state == .start; tất cả frames nhận được trước
-        // đó bị drop hoàn toàn, dẫn đến playlist chỉ có 1 segment rỗng (00000.ts trống) hoặc không có
-        // segment nào.
-        //
-        // Đặt isStreamingAtomic = true CHỈ KHI delegate báo liveStateDidChange(.start) — tức là
-        // lúc đó RTMP connection đã sẵn sàng nhận frames, encode H.264 mới chạy thật sự.
-        // self.isStreamingAtomic = true  ← (XÓA, đã chuyển xuống delegate)
+        // Tránh việc UI cho phép bấm Start nhiều lần trong khi RTMP còn đang handshake.
+        // Mỗi lần bấm trước đây tạo một stream key mới, khiến web player cố tải các phiên cũ.
+        isConnecting = true
+        errorMessage = nil
+
+        // Luôn chuyển tiếp frame ngay khi đã yêu cầu mở RTMP. Một số bản LFLiveKit publish thành
+        // công nhưng không bắn callback .start; nếu chỉ mở cổng ở callback đó thì server chỉ nhận
+        // handshake mà không nhận packet video. LFLiveKit tự bỏ frame trong lúc handshake.
+        self.isStreamingAtomic = true
 
         // QUAN TRỌNG: session.startLive() thực hiện DNS resolve + TCP connect RTMP bên trong, có thể
         // BLOCK thread gọi vào cho tới khi timeout (mặc định hệ thống ~60-75s) nếu server không
@@ -353,6 +354,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if !self.isStreaming {
                     print("[CameraManager] ⚠️ Timeout 15s — delegate không báo .start, kiểm tra network/server")
                     DispatchQueue.main.async {
+                        self.isConnecting = false
                         if self.errorMessage == nil {
                             self.errorMessage = "Không nhận được phản hồi .start từ LFLiveKit sau 15s. Kiểm tra: (1) Server có mở port 1935? (2) iPhone cùng Wi-Fi với server? (3) Nếu dùng 5G/tunnel, điền RTMP Host Override."
                         }
@@ -368,6 +370,7 @@ public class CameraManager: NSObject, ObservableObject {
         self.isStreamingAtomic = false
         liveSession?.stopLive()
         DispatchQueue.main.async {
+            self.isConnecting = false
             self.isStreaming = false
         }
     }
@@ -475,10 +478,11 @@ extension CameraManager: LFLiveSessionDelegate {
             print("[LFLive] Pending — đang kết nối RTMP server")
         case .start:
             print("[LFLive] Start — đang live")
-            // CHỈ ở đây mới bật atomic flag — LFLiveKit đã handshake xong, RTMP socket sẵn sàng nhận
-            // frames. captureOutput từ giờ mới được phép pushVideo() vào session.
+            // Xác nhận UI đã live. Frame forwarding đã được mở ngay từ lúc bắt đầu kết nối
+            // để tương thích với các bản LFLiveKit không gửi callback .start.
             self.isStreamingAtomic = true
             DispatchQueue.main.async {
+                self.isConnecting = false
                 self.errorMessage = nil
                 self.isStreaming = true
             }
@@ -486,6 +490,7 @@ extension CameraManager: LFLiveSessionDelegate {
             print("[LFLive] Error — kết nối RTMP thất bại")
             DispatchQueue.main.async {
                 self.isStreamingAtomic = false
+                self.isConnecting = false
                 self.isStreaming = false
                 self.errorMessage = "Lỗi kết nối RTMP. Kiểm tra: (1) Server đang chạy? (2) IP/host đúng? (3) Nếu dùng 5G, phải có public URL / tunnel — không phải localhost."
             }
@@ -493,6 +498,7 @@ extension CameraManager: LFLiveSessionDelegate {
             print("[LFLive] Stop — đã dừng")
             self.isStreamingAtomic = false
             DispatchQueue.main.async {
+                self.isConnecting = false
                 self.isStreaming = false
             }
         case .refresh:
@@ -525,6 +531,7 @@ extension CameraManager: LFLiveSessionDelegate {
         print("[LFLive socket error] code=\(errorCode) msg=\(msg ?? "nil")")
         self.isStreamingAtomic = false
         DispatchQueue.main.async {
+            self.isConnecting = false
             self.isStreaming = false
             self.errorMessage = "Lỗi RTMP socket [\(errorCode)]: \(msg ?? "không rõ")"
         }
