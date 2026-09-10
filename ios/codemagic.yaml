@@ -10,6 +10,7 @@ workflows:
       - name: Install CocoaPods dependencies
         script: |
           set -e
+          set -o pipefail
           echo "=== COMMIT=$(git rev-parse --short HEAD) ==="
           echo "=== YAML_DEBUG_START ==="
           sed -n '1,40p' $CM_REPO_DIR/ios/codemagic.yaml
