@@ -196,11 +196,39 @@ public class CameraManager: NSObject, ObservableObject {
         return nil
     }
 
+    /// Một vài đời iPhone công khai camera selfie qua TrueDepth thay vì chỉ WideAngle.
+    /// Không dùng `AVCaptureDevice.default(.builtInWideAngleCamera, ...)` cố định vì có
+    /// thể bỏ qua chính camera/format 240fps mà thiết bị đang hỗ trợ.
+    private func preferredVideoDevice(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .builtInTrueDepthCamera],
+            mediaType: .video,
+            position: position
+        )
+
+        let devices = discovery.devices
+        guard !devices.isEmpty else { return nil }
+
+        // Ưu tiên camera có frame-rate tối đa cao nhất; nếu bằng nhau, lấy camera có format
+        // độ phân giải cao hơn. Việc chọn format chính xác vẫn do selectBestHFRFormat làm sau đó.
+        return devices.max { lhs, rhs in
+            let lhsMax = lhs.formats.flatMap(\.videoSupportedFrameRateRanges).map(\.maxFrameRate).max() ?? 0
+            let rhsMax = rhs.formats.flatMap(\.videoSupportedFrameRateRanges).map(\.maxFrameRate).max() ?? 0
+            return lhsMax < rhsMax
+        }
+    }
+
     private func configureAndStartSession(completion: @escaping (Bool) -> Void) {
         sessionQueue.async {
             self.captureSession.beginConfiguration()
 
-            guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+            // Không để preset .high/.medium giới hạn activeFormat HFR. inputPriority cho phép
+            // activeFormat 120/240fps của camera quyết định cấu hình capture thực tế.
+            if self.captureSession.canSetSessionPreset(.inputPriority) {
+                self.captureSession.sessionPreset = .inputPriority
+            }
+
+            guard let videoDevice = self.preferredVideoDevice(for: .back) else {
                 DispatchQueue.main.async {
                     self.errorMessage = "Không tìm thấy camera."
                     completion(false)
@@ -409,7 +437,7 @@ public class CameraManager: NSObject, ObservableObject {
                 self.captureSession.removeInput(currentInput)
             }
 
-            guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else {
+            guard let newDevice = self.preferredVideoDevice(for: newPosition) else {
                 self.captureSession.commitConfiguration()
                 DispatchQueue.main.async {
                     self.errorMessage = "Không tìm thấy camera \(newPosition == .front ? "trước" : "sau")."

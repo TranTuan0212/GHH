@@ -213,7 +213,7 @@ struct ContentView: View {
                                     Circle()
                                         .fill(cameraManager.isStreaming ? Color.red : Color.gray)
                                         .frame(width: 12, height: 12)
-                                    Text(cameraManager.isStreaming ? "LIVE 240FPS" : "SẴN SÀNG")
+                                    Text(cameraManager.isStreaming ? "LIVE \(Int(cameraManager.currentFPS)) FPS" : "SẴN SÀNG")
                                         .font(.caption)
                                         .fontWeight(.bold)
                                         .foregroundColor(.white)
