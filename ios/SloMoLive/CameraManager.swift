@@ -103,20 +103,17 @@ public class CameraManager: NSObject, ObservableObject {
         // FIX BUILD: bản LFLiveKit đang dùng đã đổi `captureType` thành property get-only — nó chỉ
         // còn đọc được, không gán được sau khi session đã tạo. Giá trị này giờ phải truyền vào NGAY
         // lúc khởi tạo qua initializer `LFLiveSession(audioConfiguration:videoConfiguration:captureType:)`.
-        // Đồng thời case `.inputVideo` không còn tồn tại trong `LFLiveCaptureTypeMask` — case hiện có
-        // để báo cho LFLiveKit biết "nhận frame được push từ bên ngoài, không tự capture nội bộ" là
-        // `.captureMaskAudioInputVideo` (Swift 3+ đã lowercase hoá tên case so với bản Objective-C
-        // `LFLiveCaptureMaskAudioInputVideo` cũ). Đây là mask duy nhất dành cho luồng input thủ công (không có
-        // biến thể chỉ-video), nhưng vì code này không bao giờ gọi `pushAudio()`, không có dữ liệu
-        // audio nào thực sự được đẩy vào dù mask có bit audio — hành vi cuối cùng vẫn là "video thuần"
-        // như thiết kế ban đầu, chỉ khác ở việc khai báo mask.
+        // Dùng external-video ONLY. Bản trước dùng capture audio nội bộ + video bên ngoài;
+        // LFLiveKit vì thế phải chờ audio/keyframe để AV-align. Ở 240fps đường AV-align đó
+        // phát sinh packet timestamp/DTS lặp dù app không cần âm thanh. `inputMaskVideo` gửi
+        // từng frame camera theo timeline video thuần, không tạo AAC track hoặc audio alignment.
         //
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi
         // dùng, nếu không compiler báo lỗi truy cập member trên optional chưa unwrap.
         guard let session = LFLiveSession(
             audioConfiguration: audioCfg,
             videoConfiguration: videoCfg,
-            captureType: .captureMaskAudioInputVideo
+            captureType: .inputMaskVideo
         ) else {
             DispatchQueue.main.async {
                 self.errorMessage = "Không khởi tạo được LFLiveSession (audio/video configuration không hợp lệ)."

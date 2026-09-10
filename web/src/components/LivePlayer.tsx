@@ -91,7 +91,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const loadedStreamKeyRef = useRef<string | null>(null);
+  const pendingReplayTimeRef = useRef<number | null>(null);
 
   const [hasFrame, setHasFrame] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -104,6 +106,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [hlsWindowStart, setHlsWindowStart] = useState<number>(0);
   const [hlsLiveEdge, setHlsLiveEdge] = useState<number>(0);
+  const [sourceIsPortrait, setSourceIsPortrait] = useState(true);
 
   // Text Overlays state (giữ nguyên UX cũ)
   const [textOverlays, setTextOverlays] = useState<TextOverlay[]>(() => {
@@ -233,6 +236,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [replayHlsBaseUrl, setReplayHlsBaseUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
 
+  const whepUrl = stream?.streamKey
+    ? (() => {
+        const endpoint = new URL(detectedServerUrl);
+        endpoint.port = '8889';
+        endpoint.pathname = `/${stream.streamKey}/whep`;
+        endpoint.search = '';
+        return endpoint.toString();
+      })()
+    : '';
+
   useEffect(() => {
     fetch('/api/server-info')
       .then((res) => res.json())
@@ -293,12 +306,84 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [socket, roomId, stream?.streamKey]);
 
-  // Kết nối HLS: server slice .ts dài 1s, playlist .m3u8 giữ toàn bộ segment -> DVR window tự nhiên.
+  // Live preview is WHEP/WebRTC. It deliberately has no DVR timeline: when an encoder or
+  // network queue fills, the server may discard old frames and keep the most recent picture.
   useEffect(() => {
     const video = videoRef.current;
-    const activeHlsBaseUrl = isLive
-      ? hlsBaseUrl
-      : (replayHlsBaseUrl || hlsBaseUrl.replace(/\/live$/, '/replay'));
+    if (!isLive || !video || !whepUrl) return;
+
+    let cancelled = false;
+    let peer: RTCPeerConnection | null = null;
+    let sessionUrl: string | null = null;
+
+    if (loadedStreamKeyRef.current !== stream?.streamKey) {
+      loadedStreamKeyRef.current = stream?.streamKey || null;
+      setPlaybackRate(1.0);
+      setHasFrame(false);
+      video.playbackRate = 1.0;
+    }
+
+    const waitForIceGathering = (connection: RTCPeerConnection) => new Promise<void>((resolve) => {
+      if (connection.iceGatheringState === 'complete') return resolve();
+      const timeout = window.setTimeout(resolve, 1500);
+      connection.addEventListener('icegatheringstatechange', () => {
+        if (connection.iceGatheringState === 'complete') {
+          window.clearTimeout(timeout);
+          resolve();
+        }
+      }, { once: true });
+    });
+
+    const connect = async () => {
+      for (let attempt = 1; attempt <= 12 && !cancelled; attempt++) {
+        try {
+          peer = new RTCPeerConnection();
+          peerConnectionRef.current = peer;
+          peer.addTransceiver('video', { direction: 'recvonly' });
+          peer.ontrack = ({ streams }) => {
+            if (cancelled || !streams[0]) return;
+            video.srcObject = streams[0];
+            setHasFrame(true);
+            video.play().catch(() => {});
+          };
+          const offer = await peer.createOffer();
+          await peer.setLocalDescription(offer);
+          await waitForIceGathering(peer);
+          const response = await fetch(whepUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' },
+            body: peer.localDescription?.sdp
+          });
+          if (!response.ok) throw new Error(`WHEP HTTP ${response.status}`);
+          sessionUrl = response.headers.get('location') || null;
+          await peer.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+          console.log('[LivePlayer] WebRTC live connected:', whepUrl);
+          return;
+        } catch (error) {
+          peer?.close();
+          peer = null;
+          peerConnectionRef.current = null;
+          console.log(`[LivePlayer] WHEP chưa sẵn sàng (${attempt}/12):`, error);
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        }
+      }
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      peer?.close();
+      peerConnectionRef.current = null;
+      video.srcObject = null;
+      if (sessionUrl) fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
+    };
+  }, [isLive, whepUrl]);
+
+  // HLS is the replay/master path only. It preserves the high-FPS timeline used by slow motion.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (isLive) return;
+    const activeHlsBaseUrl = replayHlsBaseUrl || hlsBaseUrl.replace(/\/live$/, '/replay');
     if (!video || !stream?.streamKey || !activeHlsBaseUrl) {
       console.log('[LivePlayer] Chưa đủ điều kiện load video:', {
         hasVideoEl: !!video,
@@ -316,12 +401,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     // giữ nguyên slow-motion rate, không được tự đưa người xem trở lại 1x.
     if (loadedStreamKeyRef.current !== stream.streamKey) {
       loadedStreamKeyRef.current = stream.streamKey;
-      setIsLive(true);
       setPlaybackRate(1.0);
       setHasFrame(false);
       video.playbackRate = 1.0;
     } else {
-      video.playbackRate = isLive ? 1.0 : playbackRate;
+      video.playbackRate = playbackRate;
     }
 
     let cancelled = false;
@@ -378,11 +462,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const hls = new Hls({
         // DVR window: playlist liệt kê toàn bộ segment từ đầu phiên (hls_list_size=0 trong FFmpeg),
         // hls.js tự biết seek đến bất kỳ timestamp nào trong khoảng [oldest, live].
-        // 120fps / ~8Mbps qua 5G+tunnel không thể chỉ đệm 2 segment: chỉ một nhịp
-        // mạng chậm là video rơi vào waiting/stalled. Bốn segment 1 giây vẫn là live
-        // nhưng đủ headroom để phát liên tục.
-        liveSyncDurationCount: 4,
-        maxBufferLength: 12,
+        // Live rendition is only 60fps/3.5Mbps, so a 2-second target is stable over 5G
+        // while keeping end-to-end delay low. Replay has its own master playlist.
+        liveSyncDurationCount: 2,
+        maxBufferLength: 6,
         enableWorker: true,
         lowLatencyMode: true,
         debug: false
@@ -395,7 +478,31 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       hls.on(Hls.Events.MEDIA_ATTACHED, () => console.log('[LivePlayer][hls.js] MEDIA_ATTACHED — video element đã gắn vào hls.js'));
       hls.on(Hls.Events.MANIFEST_LOADING, () => console.log('[LivePlayer][hls.js] MANIFEST_LOADING — đang tải playlist...'));
       hls.on(Hls.Events.MANIFEST_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] MANIFEST_LOADED — playlist tải xong, số level:', data.levels?.length));
-      hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] LEVEL_LOADED — số segment trong playlist:', data.details?.fragments?.length, '| live:', data.details?.live));
+      hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => {
+        const fragments = data.details?.fragments || [];
+        console.log('[LivePlayer][hls.js] LEVEL_LOADED — số segment trong playlist:', fragments.length, '| live:', data.details?.live);
+        // MSE video.seekable is empty on some Chromium/HLS combinations. The HLS playlist
+        // itself is authoritative: each fragment carries its ordered start PTS + duration.
+        if (fragments.length > 0) {
+          const first = fragments[0];
+          const last = fragments[fragments.length - 1];
+          const start = first.start;
+          const end = last.start + last.duration;
+          setHlsWindowStart(start);
+          setHlsLiveEdge(end);
+          // When the browser started from the first segment while the playlist was still
+          // tiny, it can remain several seconds behind forever. Keep the normal live view
+          // at the latest safe HLS point; DVR/replay is never moved by this branch.
+          if (isLive && end - video.currentTime > 3 && end - start > 2) {
+            video.currentTime = Math.max(start, end - 1.5);
+          }
+          if (!isLive && pendingReplayTimeRef.current !== null) {
+            const requestedTime = pendingReplayTimeRef.current;
+            pendingReplayTimeRef.current = null;
+            video.currentTime = Math.max(start, Math.min(end, requestedTime));
+          }
+        }
+      });
       hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
       hls.on(Hls.Events.FRAG_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url));
       // Lỗi tải segment .ts (fragLoadError) không có event riêng — nó báo qua Hls.Events.ERROR chung
@@ -412,7 +519,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             if (video.seekable.length > 0) {
               const end = video.seekable.end(video.seekable.length - 1);
               const start = video.seekable.start(video.seekable.length - 1);
-              video.currentTime = Math.max(start, end - 3);
+              const requestedTime = pendingReplayTimeRef.current;
+              pendingReplayTimeRef.current = null;
+              video.currentTime = requestedTime === null
+                ? Math.max(start, end - 3)
+                : Math.max(start, Math.min(end, requestedTime));
             }
           }, 0);
         }
@@ -455,6 +566,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       // vì đôi khi hls.js không báo lỗi gì nhưng <video> vẫn không render được frame nào.
       const videoEvents = ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'playing', 'waiting', 'stalled', 'suspend', 'abort', 'emptied', 'error'];
       const onVideoEvent = (ev: Event) => {
+        if (ev.type === 'loadedmetadata' && video.videoWidth > 0 && video.videoHeight > 0) {
+          setSourceIsPortrait(video.videoHeight > video.videoWidth);
+        }
         if (ev.type === 'error') {
           console.error('[LivePlayer][<video>] error — MediaError code:', video.error?.code, 'message:', video.error?.message);
         } else {
@@ -588,13 +702,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const jumpToLive = () => {
     const video = videoRef.current;
-    if (!video || !Number.isFinite(hlsLiveEdge) || hlsLiveEdge <= 0) return;
+    if (!video) return;
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
     video.playbackRate = 1.0;
-    video.currentTime = Math.max(hlsWindowStart, hlsLiveEdge - 0.05);
-    video.play().catch(() => {});
+    // The WHEP source is attached by the live effect; it has no seekable DVR timeline.
     showModeNotice(
       'live',
       'LIVE - TRỰC TIẾP',
@@ -640,6 +753,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (!video) return;
     const t = parseFloat(e.target.value);
     if (!Number.isFinite(t)) return;
+    // Slider always seeks the master timeline. Store this PTS before changing source so
+    // the replay playlist opens at the exact requested second rather than its live edge.
+    pendingReplayTimeRef.current = t;
     setIsLive(false);
     video.currentTime = t;
   };
@@ -751,7 +867,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
           }`}>
             {isLive ? <Radio className="w-3 h-3 animate-spin" /> : <Gauge className="w-3 h-3" />}
-            <span>{isLive ? 'LIVE - HLS' : `SLOW - ${playbackRate}x`}</span>
+            <span>{isLive ? 'LIVE - WEBRTC' : `SLOW - ${playbackRate}x`}</span>
           </div>
           <span className="text-xs font-medium text-slate-300 truncate max-w-[180px] sm:max-w-none">
             {roomName ? `Room: ${roomName}` : (stream ? `Streamer: ${stream.username}` : 'Đang chờ luồng Live...')}
@@ -817,7 +933,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           ref={videoRef}
           className="w-full h-full object-contain bg-black"
           style={{
-            transform: `rotate(${rotation}deg)`,
+            // CSS rotate does not change an element's layout box. A portrait camera rotated
+            // 90° would otherwise remain a narrow portrait-sized box in this 16:9 player.
+            transform: `rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
             transition: 'transform 0.2s ease-in-out',
             display: hasFrame ? 'block' : 'none'
           }}

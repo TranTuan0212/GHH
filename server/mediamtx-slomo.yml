@@ -1,0 +1,28 @@
+# MediaMTX relay for the browser-facing Live path.
+# iPhone keeps publishing its single high-FPS RTMP master to Node/NMS on 1935.
+# FFmpeg will publish a separate server-generated 60fps rendition to this server.
+
+logLevel: info
+
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: :8554
+
+rtmp: false
+hls: false
+
+webrtc: true
+webrtcAddress: :8889
+webrtcEncryption: false
+webrtcAllowOrigins: ["*"]
+
+# ICE media transport. Both are enabled: UDP is preferred, TCP is fallback.
+# Router/NAT must forward the same ports to this Windows machine.
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcIPsFromInterfaces: true
+webrtcAdditionalHosts: []
+
+paths:
+  all_others:
+    source: publisher

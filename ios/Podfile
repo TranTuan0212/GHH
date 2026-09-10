@@ -16,5 +16,20 @@ post_install do |installer|
       config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
       config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
     end
+
+    # LFLiveKit enables B-frame reordering by default. At 120/240fps its RTMP publisher
+    # can emit non-monotonic DTS, which makes the server-side 60fps decoder stall. For this
+    # low-latency DVR pipeline, encode in display order (no B-frames) so PTS/DTS are monotonic.
+    if target.name == 'LFLiveKit'
+      encoder = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'coder', 'LFHardwareVideoEncoder.m')
+      if File.exist?(encoder)
+        source = File.read(encoder)
+        patched = source.gsub(
+          'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanTrue',
+          'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse'
+        )
+        File.write(encoder, patched) if patched != source
+      end
+    end
   end
 end

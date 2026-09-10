@@ -12,8 +12,9 @@ import { EventEmitter } from 'events';
  * Cách hoạt động:
  * 1. NMS nhận RTMP từ iOS trên port 1935 (chỉ dùng chức năng RTMP ingest, KHÔNG transcode).
  * 2. Mỗi khi stream bắt đầu, ta ghi nhận streamKey.
- * 3. Session HLS riêng: spawn ffmpeg với flags HLS đúng (không qua tee muxer),
- *    xuất .ts + .m3u8 vào <media_root>/live/<streamKey>/.
+ * 3. Session DVR riêng: copy source vào HLS replay (không re-encode).
+ * 4. Session live riêng: decode high-FPS, drop frame khi cần và encode 60 FPS
+ *    vào MediaMTX qua RTSP. Browser đọc rendition này qua WHEP/WebRTC.
  *
  * Bug NMS đã phát hiện trong quá trình test:
  * - NMS trans dùng tee muxer: `-f tee -map 0:a? -map 0:v? [hls_flags]url` → FFmpeg 9.x
@@ -95,17 +96,15 @@ export function cleanupStreamSession(streamKey: string): void {
 /** Start HLS segmentation for a streamKey using ffmpeg directly */
 /*
  * Two independent FFmpeg consumers deliberately read the same RTMP source. This keeps the
- * replay master immutable while allowing the browser-friendly rendition to be transcoded.
+ * replay master immutable while allowing the disposable WebRTC rendition to be transcoded.
  */
 function startHlsSession(streamKey: string): void {
   // `/replay` is the master DVR: source H.264 frames and their PTS are copied unchanged.
   const outputDir = getStreamDir('replay', streamKey);
-  const liveOutputDir = getStreamDir('live', streamKey);
 
   // Create output directory
   try {
     fs.mkdirSync(outputDir, { recursive: true });
-    fs.mkdirSync(liveOutputDir, { recursive: true });
   } catch (err) {
     console.error(`[MediaServer] Cannot create output dir ${outputDir}:`, err);
     return;
@@ -144,9 +143,16 @@ function startHlsSession(streamKey: string): void {
     path.join(outputDir, 'index.m3u8')
   ];
 
-  // This browser-only rendition is never used for replay. `fps=60` samples by PTS in
-  // chronological order, while one-second GOPs give HLS a keyframe index every second.
+  // This browser-only rendition is never used for replay. The fps filter emits no more than
+  // 60 frames/s; frames that cannot be encoded in time are intentionally disposable. The
+  // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
   const liveFfmpegArgs = [
+    // LFLiveKit at 240fps occasionally emits a malformed access unit. This is only for
+    // the disposable 60fps rendition: drop that corrupt packet and continue decoding the
+    // next frame instead of blocking the entire live encoder. The replay master remains
+    // an untouched `-c:v copy` stream above.
+    '-fflags', '+genpts+discardcorrupt',
+    '-err_detect', 'ignore_err',
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     '-map', '0:v:0',
     '-an',
@@ -163,18 +169,15 @@ function startHlsSession(streamKey: string): void {
     '-keyint_min', '60',
     '-sc_threshold', '0',
     '-force_key_frames', 'expr:gte(t,n_forced*1)',
-    '-f', 'hls',
-    '-hls_time', String(HLS_SEGMENT_SECONDS),
-    '-hls_list_size', String(hlsListSize),
-    '-hls_segment_filename', path.join(liveOutputDir, '%05d.ts'),
-    '-hls_flags', '+independent_segments',
-    path.join(liveOutputDir, 'index.m3u8')
+    '-f', 'rtsp',
+    '-rtsp_transport', 'tcp',
+    `rtsp://127.0.0.1:8554/${streamKey}`
   ];
 
-  console.log(`[MediaServer] Starting dual HLS session for ${streamKey}:`);
+  console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
   console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS)`);
-  console.log(`[MediaServer]   web live:      /live/${streamKey} (60fps, 3.5Mbps)`);
+  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (60fps, 3.5Mbps)`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
@@ -236,7 +239,7 @@ function startHlsSession(streamKey: string): void {
   liveFfmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
     console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
   });
-  console.log(`[MediaServer] Dual HLS session started for ${streamKey}`);
+  console.log(`[MediaServer] DVR + WebRTC session started for ${streamKey}`);
 }
 
 /** Called when NMS detects a new RTMP publish */
@@ -388,9 +391,9 @@ export function startNativeMediaServer(): void {
 
     startCleanupScheduler();
 
-    console.log(`Native RTMP/HLS Media Server đang chạy:`);
+    console.log(`Native RTMP/DVR + WebRTC Media Server đang chạy:`);
     console.log(`   -> RTMP Ingest (iPhone):  rtmp://localhost:1935/live`);
-    console.log(`   -> HLS Live (Web):       http://localhost:8000/live/<streamKey>/index.m3u8 (60fps)`);
+    console.log(`   -> WebRTC Live (WHEP):   http://localhost:8889/<streamKey>/whep (60fps)`);
     console.log(`   -> HLS Replay (Master):  http://localhost:8000/replay/<streamKey>/index.m3u8 (source FPS)`);
     console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (segment ${HLS_SEGMENT_SECONDS}s, hls_list_size=${Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS)} segments)`);
     console.log(`   -> Media root:           ${MEDIA_ROOT}`);
