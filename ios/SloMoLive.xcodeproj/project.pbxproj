@@ -14,7 +14,7 @@
 		A10000052C85000100000001 /* LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000052C85000100000002 /* LocationManager.swift */; };
 		A10000062C85000100000001 /* NetworkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000062C85000100000002 /* NetworkManager.swift */; };
 		A10000072C85000100000001 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000072C85000100000002 /* NetworkMonitor.swift */; };
-		A10000072C85000100000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000072C85000100000002 /* Assets.xcassets */; };
+		A10000092C85000100000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000092C85000100000002 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,7 +26,7 @@
 		A10000052C85000100000002 /* LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationManager.swift; sourceTree = "<group>"; };
 		A10000062C85000100000002 /* NetworkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkManager.swift; sourceTree = "<group>"; };
 		A10000072C85000100000002 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
-		A10000072C85000100000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A10000092C85000100000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000082C85000100000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1PODSCFG0000000000000001 /* Pods-SloMoLive.debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Pods-SloMoLive.debug.xcconfig"; path = "Pods/Target Support Files/Pods-SloMoLive/Pods-SloMoLive.debug.xcconfig"; sourceTree = "<group>"; };
 		A1PODSCFG0000000000000002 /* Pods-SloMoLive.release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Pods-SloMoLive.release.xcconfig"; path = "Pods/Target Support Files/Pods-SloMoLive/Pods-SloMoLive.release.xcconfig"; sourceTree = "<group>"; };
@@ -71,7 +71,7 @@
 				A10000052C85000100000002 /* LocationManager.swift */,
 				A10000062C85000100000002 /* NetworkManager.swift */,
 				A10000072C85000100000002 /* NetworkMonitor.swift */,
-				A10000072C85000100000002 /* Assets.xcassets */,
+				A10000092C85000100000002 /* Assets.xcassets */,
 				A10000082C85000100000002 /* Info.plist */,
 			);
 			path = SloMoLive;
@@ -142,7 +142,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000072C85000100000001 /* Assets.xcassets in Resources */,
+				A10000092C85000100000001 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
