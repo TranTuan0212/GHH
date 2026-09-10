@@ -28,6 +28,8 @@
 		A10000072C85000100000002 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		A10000072C85000100000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000082C85000100000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1PODSCFG0000000000000001 /* Pods-SloMoLive.debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Pods-SloMoLive.debug.xcconfig"; path = "Pods/Target Support Files/Pods-SloMoLive/Pods-SloMoLive.debug.xcconfig"; sourceTree = "<group>"; };
+		A1PODSCFG0000000000000002 /* Pods-SloMoLive.release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Pods-SloMoLive.release.xcconfig"; path = "Pods/Target Support Files/Pods-SloMoLive/Pods-SloMoLive.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,8 +47,18 @@
 			isa = PBXGroup;
 			children = (
 				A10000002C85000100000005 /* SloMoLive */,
+				A1PODSGRP00000000000001 /* Pods */,
 				A10000002C85000100000006 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		A1PODSGRP00000000000001 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				A1PODSCFG0000000000000001 /* Pods-SloMoLive.debug.xcconfig */,
+				A1PODSCFG0000000000000002 /* Pods-SloMoLive.release.xcconfig */,
+			);
+			name = Pods;
 			sourceTree = "<group>";
 		};
 		A10000002C85000100000005 /* SloMoLive */ = {
@@ -156,6 +168,7 @@
 /* Begin XCBuildConfiguration section */
 		A10000002C8500010000000F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1PODSCFG0000000000000001 /* Pods-SloMoLive.debug.xcconfig */;
 			buildSettings = {
 				AD_HOC_CODE_SIGNING_ALLOWED = YES;
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -186,6 +199,7 @@
 		};
 		A10000002C85000100000010 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1PODSCFG0000000000000002 /* Pods-SloMoLive.release.xcconfig */;
 			buildSettings = {
 				AD_HOC_CODE_SIGNING_ALLOWED = YES;
 				ALWAYS_SEARCH_USER_PATHS = NO;
