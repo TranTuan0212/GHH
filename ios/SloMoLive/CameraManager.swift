@@ -46,6 +46,9 @@ public class CameraManager: NSObject, ObservableObject {
     /// mà không cần truy cập @Published var từ thread không phải main.
     private var isStreamingAtomic: Bool = false
 
+    /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
+    private var _frameCounter: Int = 0
+
     public override init() {
         super.init()
     }
@@ -315,6 +318,9 @@ public class CameraManager: NSObject, ObservableObject {
         let stream = LFLiveStreamInfo()
         stream.url = url
 
+        // DEBUG: reset frame counter khi bắt đầu session mới
+        self._frameCounter = 0
+
         // QUAN TRỌNG — FIX STREAM RỖNG: KHÔNG set isStreamingAtomic = true ở đây. Nếu set sớm,
         // captureOutput (chạy 240fps trên videoOutputQueue) sẽ đổ pixel buffer vào LFLiveKit ngay
         // lập tức, TRƯỚC khi RTMP handshake xong và session chuyển sang state .start. LFLiveKit (Obj-C)
@@ -333,10 +339,27 @@ public class CameraManager: NSObject, ObservableObject {
         // toàn, người dùng tưởng app crash và phải tự vuốt tắt. Đẩy ra sessionQueue để dù có treo
         // cũng chỉ treo background queue, UI vẫn phản hồi được (ví dụ vẫn bấm được nút Dừng/Hủy).
         sessionQueue.async { [weak self] in
+            print("[CameraManager] → Gọi LFLiveSession.startLive() với URL: \(url)")
+            let startTimestamp = Date()
             session.startLive(stream)
-            DispatchQueue.main.async {
-                self?.isStreaming = true
+            // KHÔNG set self?.isStreaming = true ở đây — chỉ set khi delegate báo liveStateDidChange(.start)
+            // (tức là RTMP handshake đã thành công). Nếu set true tại đây, UI sẽ hiển thị "LIVE" dù
+            // thực tế stream chưa được server chấp nhận, gây nhầm lẫn cho user.
+            //
+            // Defensive timeout: nếu sau 15 giây mà delegate vẫn không báo .start (server không phản hồi,
+            // firewall chặn, sai host...), tự động fallback để UI không bị treo ở trạng thái "đang chờ".
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) { [weak self] in
+                guard let self = self else { return }
+                if !self.isStreaming {
+                    print("[CameraManager] ⚠️ Timeout 15s — delegate không báo .start, kiểm tra network/server")
+                    DispatchQueue.main.async {
+                        if self.errorMessage == nil {
+                            self.errorMessage = "Không nhận được phản hồi .start từ LFLiveKit sau 15s. Kiểm tra: (1) Server có mở port 1935? (2) iPhone cùng Wi-Fi với server? (3) Nếu dùng 5G/tunnel, điền RTMP Host Override."
+                        }
+                    }
+                }
             }
+            print("[CameraManager]   → startLive() returned sau \(Int(Date().timeIntervalSince(startTimestamp) * 1000))ms (chưa phải lúc live thật)")
         }
     }
 
@@ -422,6 +445,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // lấy image buffer đã có sẵn trong sampleBuffer (không decode/convert format gì thêm, đã ở
         // dạng BGRA theo videoSettings) rồi đưa cho LFLiveKit tự encode H.264 nội bộ.
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        // DEBUG: đếm frames để biết capture có chạy thật sự không. Log mỗi 240 frames (~1s ở 240fps).
+        _frameCounter += 1
+        if _frameCounter % 240 == 1 {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames, latest PTS=\(CMTimeGetSeconds(pts))s")
+        }
 
         // Bọc trong objc exception handler để nếu liveSession đã bị dealloc, queue đầy, hoặc
         // bất kỳ lỗi nội bộ nào của LFLiveKit, ta nuốt exception thay vì crash toàn app.

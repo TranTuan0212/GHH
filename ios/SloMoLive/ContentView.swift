@@ -32,10 +32,27 @@ struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var networkManager = NetworkManager.shared
     @StateObject private var locationManager = LocationManager.shared
+    @StateObject private var networkMonitor = NetworkMonitor.shared
 
     @State private var usernameInput = "demouser"
     @State private var passwordInput = "user123"
     @State private var isFakeLocked = false
+    @State private var serverInfoChecked = false
+    @State private var serverInfoHint: String? = nil
+
+    // Tự động kiểm tra server ngay khi mở app — giúp user biết IP LAN đúng và có cảnh báo sớm
+    // về tình huống mạng (LAN / Cloudflare / 5G).
+    private func checkServerOnAppear() {
+        guard !serverInfoChecked else { return }
+        serverInfoChecked = true
+        networkManager.fetchServerInfo { ok, json in
+            if ok, let json = json, let server = json["server"] as? [String: Any] {
+                if let hint = server["recommendedServerURL"] as? String {
+                    self.serverInfoHint = "Server đề xuất: \(hint)"
+                }
+            }
+        }
+    }
 
     // customRtmpHost / customRtmpPort giờ sống trong networkManager (đã @Published + lưu
     // UserDefaults ở đó) để NetworkManager.startStream() có thể đọc và gửi lên server qua
@@ -44,6 +61,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
+                .onAppear { checkServerOnAppear() }
 
             if !networkManager.isAuthenticated {
                 // Login View
@@ -73,6 +91,16 @@ struct ContentView: View {
                                 .padding()
                                 .background(Color.red.opacity(0.15))
                                 .cornerRadius(12)
+                        }
+
+                        if let hint = serverInfoHint {
+                            Text(hint)
+                                .font(.caption2)
+                                .foregroundColor(.green)
+                                .multilineTextAlignment(.center)
+                                .padding(8)
+                                .background(Color.green.opacity(0.1))
+                                .cornerRadius(8)
                         }
 
                         VStack(alignment: .leading, spacing: 16) {
@@ -238,6 +266,11 @@ struct ContentView: View {
 
                         Spacer()
 
+                        // Banner cảnh báo loại mạng — quan trọng cho việc chọn RTMP URL
+                        NetworkStatusBanner(monitor: networkMonitor, networkManager: networkManager)
+                            .padding(.horizontal)
+                            .padding(.bottom, 8)
+
                         // Controls Bar
                         VStack(spacing: 16) {
                             Button(action: {
@@ -348,5 +381,84 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+/// Banner cảnh báo loại mạng hiện tại. Hiển thị rõ ràng khi iPhone đang dùng Cellular (4G/5G)
+/// mà RTMP server lại là IP LAN → không kết nối được.
+struct NetworkStatusBanner: View {
+    @ObservedObject var monitor: NetworkMonitor
+    @ObservedObject var networkManager: NetworkManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: iconName)
+                    .foregroundColor(iconColor)
+                Text("Mạng: \(monitor.currentInterface.rawValue)")
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                if monitor.isExpensive {
+                    Text("(tốn data)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                }
+            }
+            Text(monitor.interfaceDescription)
+                .font(.system(size: 9))
+                .foregroundColor(.gray)
+
+            if let warning = currentWarning() {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.yellow)
+                    Text(warning)
+                        .font(.system(size: 9))
+                        .foregroundColor(.yellow)
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(6)
+                .background(Color.yellow.opacity(0.1))
+                .cornerRadius(6)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.7))
+        .cornerRadius(12)
+    }
+
+    private var iconName: String {
+        switch monitor.currentInterface {
+        case .wifi: return "wifi"
+        case .cellular: return "antenna.radiowaves.left.and.right"
+        case .wired: return "cable.connector"
+        case .offline: return "wifi.slash"
+        case .unknown: return "questionmark.circle"
+        }
+    }
+
+    private var iconColor: Color {
+        switch monitor.currentInterface {
+        case .wifi: return .green
+        case .cellular: return .orange
+        case .wired: return .blue
+        case .offline: return .red
+        case .unknown: return .gray
+        }
+    }
+
+    private func currentWarning() -> String? {
+        if let ingestUrl = networkManager.rtmpIngestUrl {
+            return monitor.shouldWarnAboutRTMP(ingestUrl)
+        }
+        return nil
+    }
+}
+
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
     }
 }

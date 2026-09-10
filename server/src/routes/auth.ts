@@ -4,7 +4,17 @@ import jwt from 'jsonwebtoken';
 import { db } from '../db';
 
 export const authRouter = Router();
-export const JWT_SECRET = 'SLOMO_240FPS_SECRET_KEY_2026';
+
+// JWT_SECRET BẮT BUỘC lấy từ biến môi trường — không fallback về giá trị mặc định.
+// Trước đây hard-code 'SLOMO_240FPS_SECRET_KEY_2026' ngay trong source: bất kỳ ai đọc được
+// code (repo, decompile) đều có thể tự ký token giả, kể cả role ADMIN. Server phải fail-fast
+// ngay lúc khởi động nếu thiếu secret, thay vì âm thầm chạy với secret yếu/lộ.
+if (!process.env.JWT_SECRET) {
+  throw new Error(
+    '[auth] Thiếu biến môi trường JWT_SECRET. Đặt JWT_SECRET trong .env (xem .env.example) trước khi khởi động server.'
+  );
+}
+export const JWT_SECRET: string = process.env.JWT_SECRET;
 
 export interface AuthRequest extends Request {
   user?: {
@@ -152,3 +162,6 @@ authRouter.get('/me', authMiddleware, (req: AuthRequest, res: Response) => {
     }
   });
 });
+
+// GET /api/server-info đã được định nghĩa trong index.ts (chi tiết hơn, có connectionType, hints).
+// KHÔNG thêm duplicate ở đây.

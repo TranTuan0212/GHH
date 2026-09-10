@@ -1,26 +1,14 @@
 import { Router, Response } from 'express';
 import { db, CardEntry, GpsLog, StreamSession } from '../db';
 import { authMiddleware, AuthRequest } from './auth';
-import os from 'os';
 import { cleanupStreamSession } from '../mediaServer';
+import { resolveRtmpHostForClient } from '../utils/network';
 
 export const streamRouter = Router();
 
 let globalIo: any = null;
 export function setSocketServer(io: any) {
   globalIo = io;
-}
-
-function getPrimaryIp(): string {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return 'localhost';
 }
 
 /**
@@ -88,40 +76,8 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
   });
 });
 
-/**
- * Xác định host:port RTMP phù hợp với client đang kết nối.
- *
- * - Nếu request đến qua Cloudflare tunnel (host = *.trycloudflare.com): trả về chính host đó.
- *   YÊU CẦU: tunnel phải forward TCP port 1935 (vd: cloudflared tunnel --url tcp://localhost:1935)
- *   và hostname cùng dạng. Nếu dùng tunnel HTTP-only (port 4000), RTMP không qua được -> client
- *   sẽ báo lỗi "RTMP socket error" và cần dùng Wi-Fi LAN.
- * - Nếu request đến qua IP LAN: trả về IP LAN.
- * - Cho phép override qua header X-RTMP-Host / X-RTMP-Port nếu user cấu hình tay.
- */
-function resolveRtmpHostForClient(req: AuthRequest): { rtmpHost: string; rtmpPort: number } {
-  const overrideHost = (req.headers['x-rtmp-host'] as string | undefined)?.trim();
-  const overridePort = parseInt((req.headers['x-rtmp-port'] as string | undefined) || '');
-
-  if (overrideHost) {
-    return { rtmpHost: overrideHost, rtmpPort: overridePort || 1935 };
-  }
-
-  const hostHeader = (req.headers.host || '').split(':')[0];
-
-  // Tunnel domain -> trả về chính host đó
-  if (hostHeader.endsWith('trycloudflare.com') || hostHeader.endsWith('.ngrok.io') || hostHeader.endsWith('.ngrok-free.app')) {
-    return { rtmpHost: hostHeader, rtmpPort: overridePort || 1935 };
-  }
-
-  // Nếu request qua IP LAN -> trả về IP LAN
-  const primaryIp = getPrimaryIp();
-  if (hostHeader === primaryIp) {
-    return { rtmpHost: primaryIp, rtmpPort: 1935 };
-  }
-
-  // Fallback: IP LAN
-  return { rtmpHost: primaryIp, rtmpPort: 1935 };
-}
+// resolveRtmpHostForClient được dùng chung từ ../utils/network (đã gộp bản trùng lặp ở đây và
+// ở index.ts để tránh 2 nơi lệch logic khi thêm domain tunnel mới).
 
 // POST /api/stream/end — cleanup segment files + end session
 streamRouter.post('/end', authMiddleware, (req: AuthRequest, res: Response) => {

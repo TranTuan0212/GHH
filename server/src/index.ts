@@ -1,7 +1,6 @@
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
-import os from 'os';
 import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
 import { authRouter } from './routes/auth';
@@ -9,6 +8,7 @@ import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { db } from './db';
 import { startNativeMediaServer } from './mediaServer';
+import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
 
 const app = express();
 const server = http.createServer(app);
@@ -75,7 +75,12 @@ app.get('/api/health', (req, res) => {
 app.get('/api/server-info', (req, res) => {
   const ips = getLocalIpAddresses();
   const primaryIp = ips[0] || 'localhost';
+  const hostHeader = (req.headers.host || '').split(':')[0];
   const { rtmpHost, rtmpPort } = resolveRtmpHostForClient(req);
+
+  // Phân loại kết nối để iOS app hiển thị cảnh báo phù hợp
+  const connectionType = classifyConnection(hostHeader, primaryIp);
+
   res.json({
     status: 'ok',
     ips,
@@ -84,38 +89,19 @@ app.get('/api/server-info', (req, res) => {
     // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
     rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
     hlsBaseUrl: resolveHlsBaseUrl(req),
-    port: PORT
+    port: PORT,
+    rtmpPort: 1935,
+    // Thông tin giúp iOS app ra quyết định:
+    connectionType,
+    hostHeader,
+    hints: {
+      sameWifi: 'iPhone cùng Wi-Fi: dùng IP LAN vào Server URL',
+      cloudflare: 'Cloudflare Tunnel HTTP: HTTP chạy được, RTMP cần tunnel riêng cho port 1935',
+      ngrok: 'Ngrok TCP: HTTP + RTMP (cùng host) đều chạy qua tunnel',
+      cellular: 'iPhone dùng 4G/5G: PHẢI có public RTMP URL (không dùng IP LAN)'
+    }
   });
 });
-
-/**
- * Xác định host:port RTMP phù hợp với client đang kết nối.
- * - Nếu request qua Cloudflare tunnel / ngrok -> trả về host đó.
- * - Nếu request qua IP LAN -> trả về IP LAN.
- * - Override qua header X-RTMP-Host / X-RTMP-Port.
- */
-function resolveRtmpHostForClient(req: express.Request): { rtmpHost: string; rtmpPort: number } {
-  const overrideHost = (req.headers['x-rtmp-host'] as string | undefined)?.trim();
-  const overridePort = parseInt((req.headers['x-rtmp-port'] as string | undefined) || '');
-
-  if (overrideHost) {
-    return { rtmpHost: overrideHost, rtmpPort: overridePort || 1935 };
-  }
-
-  const hostHeader = (req.headers.host || '').split(':')[0];
-
-  if (hostHeader.endsWith('trycloudflare.com') || hostHeader.endsWith('.ngrok.io') || hostHeader.endsWith('.ngrok-free.app')) {
-    return { rtmpHost: hostHeader, rtmpPort: overridePort || 1935 };
-  }
-
-  const ips = getLocalIpAddresses();
-  const primaryIp = ips[0] || 'localhost';
-  if (hostHeader === primaryIp) {
-    return { rtmpHost: primaryIp, rtmpPort: 1935 };
-  }
-
-  return { rtmpHost: primaryIp, rtmpPort: 1935 };
-}
 
 /**
  * QUAN TRỌNG: proxy /live/* (HLS .m3u8 + .ts do NMS/ffmpeg sinh ra ở port 8000 nội bộ) qua
@@ -178,19 +164,6 @@ app.get('*', (req, res, next) => {
     if (err) next();
   });
 });
-
-function getLocalIpAddresses() {
-  const interfaces = os.networkInterfaces();
-  const addresses: string[] = [];
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        addresses.push(iface.address);
-      }
-    }
-  }
-  return addresses;
-}
 
 function normalizeDataItem(rawStr: string): string {
   let s = rawStr.trim();
@@ -347,26 +320,15 @@ io.on('connection', (socket) => {
     io.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   });
 
-  socket.on('toggle_stream', (data) => {
-    const targetRoomId = data.roomId || data.userId || 'default';
-    if (data.status === 'LIVE') {
-      const session = db.createStreamSession({
-        id: 'stream-' + Date.now(),
-        userId: targetRoomId,
-        username: data.username || targetRoomId,
-        streamKey: 'live_' + targetRoomId,
-        status: 'LIVE',
-        vodUrl: '',
-        startedAt: new Date().toISOString()
-      });
-      io.to(`room_${targetRoomId}`).emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session });
-      io.to('room_admin').emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session });
-    } else {
-      const session = db.endStreamSession(data.streamId || targetRoomId);
-      io.to(`room_${targetRoomId}`).emit('stream_status_changed', { roomId: targetRoomId, status: 'ENDED', session });
-      io.to('room_admin').emit('stream_status_changed', { roomId: targetRoomId, status: 'ENDED', session });
-    }
-  });
+  // ĐÃ XOÁ: socket.on('toggle_stream', ...)
+  // Lý do: đây là đường khởi tạo/kết thúc stream SONG SONG với REST API chính thức
+  // (POST /api/stream/start|end), dùng quy tắc streamKey khác ('live_' + roomId, không có
+  // timestamp) và KHÔNG hề đụng tới RTMP/FFmpeg thật (mediaServer.ts). Vì db.createStreamSession()
+  // tự động ENDED mọi phiên LIVE cũ cùng userId, nếu event này từng bị gọi trong lúc một phiên
+  // live RTMP thật đang chạy, nó sẽ khiến DB báo ENDED trong khi FFmpeg/HLS vẫn tiếp tục ghi file
+  // — làm sai lệch trạng thái hiển thị cho client. Đã grep toàn bộ codebase xác nhận không có
+  // client (web/iOS) nào emit 'toggle_stream' nên xoá an toàn. Nếu cần điều khiển live từ web,
+  // hãy gọi qua REST API /api/stream/start và /api/stream/end.
 
   socket.on('disconnect', () => {
     console.log(`[Socket] Client disconnected: ${socket.id}`);

@@ -135,6 +135,43 @@ public class NetworkManager: ObservableObject {
         }.resume()
     }
 
+    /// Gọi `/api/server-info` để biết server đang chạy + auto-fill URL. Gọi NGAY khi app mở
+    /// (không cần auth) để kiểm tra server có sống không + lấy IP LAN chính xác.
+    /// - Parameters:
+    ///   - completion: callback với (Bool, serverInfoJson?)
+    public func fetchServerInfo(completion: @escaping (Bool, [String: Any]?) -> Void) {
+        let clean = NetworkManager.normalizeServerURL(serverURL)
+        guard let url = URL(string: "\(clean)/api/server-info") else {
+            completion(false, nil)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5.0
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("[Network] /api/server-info failed: \(error.localizedDescription)")
+                    completion(false, nil)
+                    return
+                }
+                guard let data = data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    completion(false, nil)
+                    return
+                }
+                print("[Network] /api/server-info response: \(json.keys)")
+                if let server = json["server"] as? [String: Any] {
+                    print("[Network]   - connectionType: \(server["connectionType"] ?? "?")")
+                    print("[Network]   - recommendedRtmpUrl: \(server["recommendedRtmpUrl"] ?? "?")")
+                }
+                completion(true, json)
+            }
+        }.resume()
+    }
+
     /// Bắt đầu phiên Live Stream: server trả streamKey + rtmpIngestUrl. iOS dùng 2 giá trị này
     /// để đẩy RTMP/H.264 vào NMS (xem CameraManager.startLiveStream).
     /// KHÔNG còn WebSocket nhị phân / JPEG / HTTP fallback cho video.
@@ -143,7 +180,6 @@ public class NetworkManager: ObservableObject {
             completion(false)
             return
         }
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

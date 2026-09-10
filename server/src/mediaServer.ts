@@ -108,9 +108,19 @@ function startHlsSession(streamKey: string): void {
     console.warn(`[MediaServer]   → không tạo được marker .m3u8:`, err);
   }
 
+  // hls_list_size của ffmpeg tính theo SỐ SEGMENT trong playlist, không phải số giây.
+  // Với mỗi segment dài HLS_SEGMENT_SECONDS giây, số segment cần giữ để đạt đúng
+  // DVR_WINDOW_SECONDS giây = DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS.
+  // BUG CŨ: truyền thẳng DVR_WINDOW_SECONDS (giây) làm hls_list_size -> cửa sổ DVR thực tế
+  // bị nhân đôi (12h thay vì 6h mặc định) vì mỗi segment dài 2s.
+  const HLS_SEGMENT_SECONDS = 2;
+  const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
+
   const ffmpegArgs = [
-    // Input: RTMP from NMS (NMS listen on 1935, ta connect với tư cách viewer)
-    '-re',
+    // Input: RTMP từ NMS (NMS listen trên 1935, ta connect với tư cách viewer).
+    // KHÔNG dùng '-re' ở đây: '-re' chỉ có ý nghĩa khi đọc FILE TĨNH để giả lập tốc độ
+    // đọc real-time; input ở đây đã là luồng RTMP sống (đã tự "real-time" theo timestamp
+    // gốc), dùng '-re' có thể gây sai pacing/trễ không cần thiết.
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     // Codec: giữ nguyên video H.264 từ LFLiveKit (không re-encode)
     '-c:v', 'copy',
@@ -118,14 +128,15 @@ function startHlsSession(streamKey: string): void {
     '-an',
     // HLS output
     '-f', 'hls',
-    '-hls_time', '2',
-    '-hls_list_size', String(DVR_WINDOW_SECONDS),
+    '-hls_time', String(HLS_SEGMENT_SECONDS),
+    '-hls_list_size', String(hlsListSize),
     '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
     '-hls_flags', '+independent_segments',
     path.join(outputDir, 'index.m3u8')
   ];
 
   console.log(`[MediaServer] Starting HLS session for ${streamKey}:`);
+  console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
   console.log(`[MediaServer]   ffmpeg ${ffmpegArgs.join(' ')}`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
@@ -324,7 +335,7 @@ export function startNativeMediaServer(): void {
     console.log(`Native RTMP/HLS Media Server đang chạy:`);
     console.log(`   -> RTMP Ingest (iPhone):  rtmp://localhost:1935/live`);
     console.log(`   -> HLS Egress (Web):     http://localhost:8000/live/<streamKey>/index.m3u8`);
-    console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (${DVR_WINDOW_SECONDS} segment × 1s)`);
+    console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (segment 2s, hls_list_size=${Math.ceil(DVR_WINDOW_SECONDS / 2)} segments)`);
     console.log(`   -> Media root:           ${MEDIA_ROOT}`);
   } catch (err) {
     console.error(`[MediaServer] Lỗi khởi tạo:`, err);
