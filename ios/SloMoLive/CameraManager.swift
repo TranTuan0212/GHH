@@ -333,6 +333,11 @@ public class CameraManager: NSObject, ObservableObject {
         // handshake mà không nhận packet video. LFLiveKit tự bỏ frame trong lúc handshake.
         self.isStreamingAtomic = true
 
+        // Với input video tự cung cấp, LFLiveKit chỉ xử lý pixel buffer khi session đang running.
+        // Nếu không bật cờ này, RTMP vẫn có thể publish thành công nhưng pushVideo không sinh
+        // packet H.264 nào — chính xác là trạng thái server đã ghi nhận.
+        session.running = true
+
         // QUAN TRỌNG: session.startLive() thực hiện DNS resolve + TCP connect RTMP bên trong, có thể
         // BLOCK thread gọi vào cho tới khi timeout (mặc định hệ thống ~60-75s) nếu server không
         // reachable (firewall, sai host, mạng chặn...). Trước đây gọi trực tiếp trên main thread
@@ -369,6 +374,7 @@ public class CameraManager: NSObject, ObservableObject {
         // Tắt atomic flag TRƯỚC để captureOutput ngừng push frame ngay lập tức.
         self.isStreamingAtomic = false
         liveSession?.stopLive()
+        liveSession?.running = false
         DispatchQueue.main.async {
             self.isConnecting = false
             self.isStreaming = false
