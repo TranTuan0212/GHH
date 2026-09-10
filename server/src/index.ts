@@ -8,7 +8,7 @@ import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { db } from './db';
-import { startNativeMediaServer } from './mediaServer';
+import { startNativeMediaServer, setStreamEndedHandler } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
 
 const app = express();
@@ -31,6 +31,12 @@ const io = new SocketIOServer(server, {
 });
 
 setSocketServer(io);
+setStreamEndedHandler((streamKey) => {
+  const ended = db.endStreamSessionByStreamKey(streamKey);
+  if (!ended) return;
+  io.to(`room_${ended.userId}`).emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
+  io.to('room_admin').emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
+});
 
 const PORT = parseInt(process.env.PORT || '4000');
 

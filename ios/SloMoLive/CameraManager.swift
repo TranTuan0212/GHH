@@ -76,10 +76,22 @@ public class CameraManager: NSObject, ObservableObject {
         // track audio thực tế không có dữ liệu — video vẫn "thuần" Slo-Mo như thiết kế ban đầu.
         let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
 
-        // VideoConfiguration: dùng .high3 (1080p nếu thiết bị hỗ trợ) để giữ chi tiết. LFLiveKit
-        // sẽ tự lấy FPS từ AVCaptureVideoDataOutput của ta (đã set 120/240), encoder tạo GOP tương
-        // ứng. KHÔNG ép rate ở đây để tránh re-sample frame.
+        // LFLiveKit's preset defaults to 30 FPS even when AVCaptureVideoDataOutput is delivering
+        // 120/240 FPS. Explicitly match its encoder clock to the active camera format; otherwise
+        // it emits duplicate DTS values, silently collapses the stream to 30 FPS, and builds delay.
         let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3)
+        let targetFps = max(30, Int(currentFPS.rounded()))
+        videoCfg.videoFrameRate = targetFps
+        videoCfg.videoMinFrameRate = targetFps
+        videoCfg.videoMaxFrameRate = targetFps
+
+        // High-frame-rate H.264 needs a substantially higher bitrate than the 1.2 Mbps preset.
+        // Keep enough headroom for a 720p high-FPS master while allowing LFLiveKit adaptation.
+        let targetBitrate = targetFps >= 240 ? 12_000_000 : (targetFps >= 120 ? 8_000_000 : 3_000_000)
+        videoCfg.videoBitRate = targetBitrate
+        videoCfg.videoMaxBitRate = Int(Double(targetBitrate) * 1.2)
+        videoCfg.videoMinBitRate = Int(Double(targetBitrate) * 0.55)
+        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, target bitrate \(targetBitrate / 1_000_000)Mbps")
 
         // FIX BUILD: bản LFLiveKit đang dùng đã đổi `captureType` thành property get-only — nó chỉ
         // còn đọc được, không gán được sau khi session đã tạo. Giá trị này giờ phải truyền vào NGAY

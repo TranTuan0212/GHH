@@ -34,6 +34,7 @@ const MEDIA_ROOT = path.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 5 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
+const HLS_SEGMENT_SECONDS = 1;
 
 interface HlsSession {
   streamKey: string;
@@ -45,6 +46,13 @@ interface HlsSession {
 
 // Track active HLS sessions: streamKey -> HlsSession
 export const hlsSessions: Map<string, HlsSession> = new Map();
+
+let streamEndedHandler: ((streamKey: string) => void) | undefined;
+
+/** Allows the API layer to keep persisted stream status in sync with RTMP disconnects. */
+export function setStreamEndedHandler(handler: (streamKey: string) => void): void {
+  streamEndedHandler = handler;
+}
 
 // Track NMS RTMP sessions so we know when a stream starts/ends
 const nmsSessions: Map<string, { streamKey: string; connectedAt: number }> = new Map();
@@ -95,25 +103,18 @@ function startHlsSession(streamKey: string): void {
     return;
   }
 
-  // ffmpeg command: receive RTMP, output HLS (video-only, no audio)
+  // ffmpeg command: receive RTMP, output HLS (video-only, no audio).
+  // Do not create a synthetic playlist here: a playlist pointing to a non-existent
+  // segment makes hls.js stop/retry the wrong resource before the first real frame.
   const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
-  // Tạo file marker NGAY LẬP TỨC để proxy HLS trả về 200 thay vì 404.
-  try {
-    fs.writeFileSync(
-      path.join(outputDir, 'index.m3u8'),
-      '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\n00000.ts\n#EXT-X-ENDLIST\n'
-    );
-    console.log(`[MediaServer]   → đã tạo marker .m3u8`);
-  } catch (err) {
-    console.warn(`[MediaServer]   → không tạo được marker .m3u8:`, err);
-  }
 
   // hls_list_size của ffmpeg tính theo SỐ SEGMENT trong playlist, không phải số giây.
   // Với mỗi segment dài HLS_SEGMENT_SECONDS giây, số segment cần giữ để đạt đúng
   // DVR_WINDOW_SECONDS giây = DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS.
   // BUG CŨ: truyền thẳng DVR_WINDOW_SECONDS (giây) làm hls_list_size -> cửa sổ DVR thực tế
   // bị nhân đôi (12h thay vì 6h mặc định) vì mỗi segment dài 2s.
-  const HLS_SEGMENT_SECONDS = 2;
+  // One-second segments keep the live path close to the current camera timeline.
+  // The encoded source is copied, so the DVR retains its original frame rate.
   const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
 
   const ffmpegArgs = [
@@ -216,6 +217,7 @@ function onStreamEnd(sessionId: string): void {
   // BUG FIX: cũ chỉ kill ffmpeg nhưng không xóa files -> thư mục treo trên đĩa.
   // Gọi cleanupStreamSession để xóa .ts/.m3u8 ngay khi stream kết thúc bình thường.
   cleanupStreamSession(streamKey);
+  streamEndedHandler?.(streamKey);
 }
 
 /** Background cleanup: timeout check */
@@ -335,7 +337,7 @@ export function startNativeMediaServer(): void {
     console.log(`Native RTMP/HLS Media Server đang chạy:`);
     console.log(`   -> RTMP Ingest (iPhone):  rtmp://localhost:1935/live`);
     console.log(`   -> HLS Egress (Web):     http://localhost:8000/live/<streamKey>/index.m3u8`);
-    console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (segment 2s, hls_list_size=${Math.ceil(DVR_WINDOW_SECONDS / 2)} segments)`);
+    console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (segment ${HLS_SEGMENT_SECONDS}s, hls_list_size=${Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS)} segments)`);
     console.log(`   -> Media root:           ${MEDIA_ROOT}`);
   } catch (err) {
     console.error(`[MediaServer] Lỗi khởi tạo:`, err);

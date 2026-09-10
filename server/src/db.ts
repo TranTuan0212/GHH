@@ -248,6 +248,16 @@ class Database {
     return session;
   }
 
+  endStreamSessionByStreamKey(streamKey: string): StreamSession | undefined {
+    const session = this.data.streamSessions.find(s => s.streamKey === streamKey && s.status === 'LIVE');
+    if (session) {
+      session.status = 'ENDED';
+      session.endedAt = new Date().toISOString();
+      this.save();
+    }
+    return session;
+  }
+
   // GPS Logs
   addGpsLog(log: GpsLog) {
     this.data.gpsLogs.push(log);

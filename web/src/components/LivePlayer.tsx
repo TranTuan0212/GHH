@@ -357,9 +357,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const hls = new Hls({
         // DVR window: playlist liệt kê toàn bộ segment từ đầu phiên (hls_list_size=0 trong FFmpeg),
         // hls.js tự biết seek đến bất kỳ timestamp nào trong khoảng [oldest, live].
-        liveSyncDurationCount: 3,
+        // 1s server segments × 2 keeps the live path around a 2s media buffer while
+        // retaining the original high-FPS source for slow-motion playback.
+        liveSyncDurationCount: 2,
         enableWorker: true,
-        lowLatencyMode: false,
+        lowLatencyMode: true,
         debug: false
       });
       hlsInstance = hls;
