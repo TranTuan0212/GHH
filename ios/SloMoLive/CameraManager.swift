@@ -79,7 +79,12 @@ public class CameraManager: NSObject, ObservableObject {
         // LFLiveKit's preset defaults to 30 FPS. Its public configuration is backed by
         // VideoToolbox, so match its encoder clock to the camera's active high-FPS format.
         // These properties bridge from Objective-C as UInt in Swift.
-        let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3)
+        guard let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Không tạo được cấu hình video cho encoder live."
+            }
+            return
+        }
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
         let targetBitrate: UInt = targetFps >= 240 ? 12_000_000 : (targetFps >= 120 ? 8_000_000 : 3_000_000)
 
