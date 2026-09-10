@@ -18,6 +18,12 @@ workflows:
           ls -la Podfile
           pod install --repo-update 2>&1 | tee $HOME/pod_install.log
           ls -la SloMoLive.xcworkspace || echo "WORKSPACE_MISSING"
+          echo "=== Podfile.lock ==="
+          cat Podfile.lock || echo "PODFILE_LOCK_MISSING"
+          echo "=== LFLiveKit product in Pods dir? ==="
+          find Pods -maxdepth 2 -iname "*LFLiveKit*" || echo "LFLIVEKIT_NOT_FOUND_IN_PODS"
+          echo "=== Does SloMoLive.xcodeproj now have Pods integration? ==="
+          grep -c "Pods-SloMoLive" SloMoLive.xcodeproj/project.pbxproj || echo "NO_PODS_INTEGRATION_IN_PBXPROJ"
       - name: Build iOS Application (.app)
         script: |
           set -e
@@ -47,3 +53,4 @@ workflows:
     artifacts:
       - $HOME/export/SloMoLive.ipa
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/**/*.app
+      - $HOME/pod_install.log
