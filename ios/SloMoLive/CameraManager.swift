@@ -76,21 +76,23 @@ public class CameraManager: NSObject, ObservableObject {
         // track audio thực tế không có dữ liệu — video vẫn "thuần" Slo-Mo như thiết kế ban đầu.
         let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
 
-        // LFLiveKit's preset defaults to 30 FPS even when AVCaptureVideoDataOutput is delivering
-        // 120/240 FPS. Explicitly match its encoder clock to the active camera format; otherwise
-        // it emits duplicate DTS values, silently collapses the stream to 30 FPS, and builds delay.
+        // LFLiveKit's preset defaults to 30 FPS. Its public configuration is backed by
+        // VideoToolbox, so match its encoder clock to the camera's active high-FPS format.
+        // These properties bridge from Objective-C as UInt in Swift.
         let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3)
-        let targetFps = max(30, Int(currentFPS.rounded()))
-        videoCfg.videoFrameRate = targetFps
-        videoCfg.videoMinFrameRate = targetFps
-        videoCfg.videoMaxFrameRate = targetFps
+        let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
+        let targetBitrate: UInt = targetFps >= 240 ? 12_000_000 : (targetFps >= 120 ? 8_000_000 : 3_000_000)
 
-        // High-frame-rate H.264 needs a substantially higher bitrate than the 1.2 Mbps preset.
-        // Keep enough headroom for a 720p high-FPS master while allowing LFLiveKit adaptation.
-        let targetBitrate = targetFps >= 240 ? 12_000_000 : (targetFps >= 120 ? 8_000_000 : 3_000_000)
+        // LFLiveKit validates these setters against the current frame rate: max must be set
+        // first; minimum must be strictly below the target. A one-second GOP aligns with the
+        // server's one-second DVR segments and bounds replay seek distance.
+        videoCfg.videoMaxFrameRate = targetFps
+        videoCfg.videoFrameRate = targetFps
+        videoCfg.videoMinFrameRate = max(1, targetFps / 2)
+        videoCfg.videoMaxKeyframeInterval = targetFps
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = Int(Double(targetBitrate) * 1.2)
-        videoCfg.videoMinBitRate = Int(Double(targetBitrate) * 0.55)
+        videoCfg.videoMaxBitRate = targetBitrate * 12 / 10
+        videoCfg.videoMinBitRate = targetBitrate * 55 / 100
         print("[CameraManager] LFLive encoder configured: \(targetFps)fps, target bitrate \(targetBitrate / 1_000_000)Mbps")
 
         // FIX BUILD: bản LFLiveKit đang dùng đã đổi `captureType` thành property get-only — nó chỉ
