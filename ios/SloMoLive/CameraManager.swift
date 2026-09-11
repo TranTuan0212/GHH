@@ -141,7 +141,7 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
         videoCfg.videoMinFrameRate = max(1, targetFps / 2)
-        videoCfg.videoMaxKeyframeInterval = targetFps
+        videoCfg.videoMaxKeyframeInterval = max(15, targetFps / 2)
         videoCfg.videoBitRate = targetBitrate
         videoCfg.videoMaxBitRate = targetBitrate * 12 / 10
         videoCfg.videoMinBitRate = targetBitrate * 55 / 100

@@ -101,6 +101,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const isDraggingSeekRef = useRef<boolean>(false);
   const isSeekingRef = useRef<boolean>(false);
   const pendingScrubTimeRef = useRef<number | null>(null);
+  const scrubRafRef = useRef<number | null>(null);
   const seekingTimeoutRef = useRef<number | null>(null);
   const wasPlayingBeforeDragRef = useRef<boolean>(false);
   const isLiveRef = useRef<boolean>(true);
@@ -789,7 +790,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const nextTime = pendingScrubTimeRef.current;
         pendingScrubTimeRef.current = null;
         isSeekingRef.current = true;
-        video.currentTime = nextTime;
+        if (typeof (video as any).fastSeek === 'function') {
+          (video as any).fastSeek(nextTime);
+        } else {
+          video.currentTime = nextTime;
+        }
         setCurrentTime(nextTime);
         return;
       }
@@ -867,7 +872,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     );
   };
 
-  const switchToSlow = (speed: number) => {
+  const switchToSlow = (speed: number, keepCurrentPosition = false) => {
     isLiveRef.current = false;
     setIsLive(false);
     setPlaybackRate(speed);
@@ -882,15 +887,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const start = hlsWindowStart;
       const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
       const end = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
-      // Lùi 4 giây để xem lại pha quay chậm vừa qua
-      const targetTime = Math.max(start, end - 4);
-      setFrozenTimeline({ start, end });
-      if (video.readyState >= 1) {
-        video.currentTime = targetTime;
-        setCurrentTime(targetTime);
+      
+      setFrozenTimeline((prev) => prev ?? { start, end });
+
+      if (keepCurrentPosition) {
+        // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
+        video.playbackRate = speed;
       } else {
-        pendingReplayTimeRef.current = targetTime;
+        // Chuyển từ Live sang Slow: lùi 4 giây để xem lại pha quay chậm vừa qua
+        const targetTime = Math.max(start, end - 4);
+        if (video.readyState >= 1) {
+          video.currentTime = targetTime;
+          setCurrentTime(targetTime);
+        } else {
+          pendingReplayTimeRef.current = targetTime;
+        }
       }
+
       video.play().catch((err) => {
         console.warn('[LivePlayer] Lỗi play replay:', err);
       });
@@ -906,14 +919,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleSpeedChange = (speed: number) => {
     if (speed < 1.0) {
-      switchToSlow(speed);
+      // Nếu không còn ở Live (đang ở Replay hoặc vừa kéo thước tua đến mốc), giữ nguyên vị trí hiện tại!
+      const keepCurrentPosition = !isLiveRef.current;
+      switchToSlow(speed, keepCurrentPosition);
     } else {
       jumpToLive();
     }
   };
 
-  // Hàm tua thời gian thực (Live Video Scrubbing) - Khung hình nhảy liên tục theo tay kéo
-  const performScrub = (targetTime: number) => {
+  // Hàm tua thời gian thực (Live Video Scrubbing) - Khung hình lướt mượt 60/120 FPS theo tay kéo
+  const performScrub = (targetTime: number, isFinal = false) => {
     const video = videoRef.current;
     if (!video) return;
 
@@ -923,38 +938,41 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const end = (isLive || stream?.status === 'LIVE') ? liveEdge : (frozenTimeline?.end ?? liveEdge);
     const safeTime = Math.max(start, Math.min(end, targetTime));
 
+    // Cập nhật React state ngay lập tức để seekbar & tooltip phản hồi siêu nhạy
     setCurrentTime(safeTime);
 
-    // Nếu decoder của trình duyệt đã rảnh (không còn seeking), reset cờ
-    if (!video.seeking) {
-      isSeekingRef.current = false;
-    }
-
-    // Nếu video đang bận decode frame trước: lưu lại targetTime mới nhất vào hàng đợi
-    if (video.seeking || isSeekingRef.current) {
-      pendingScrubTimeRef.current = safeTime;
-    } else {
-      // Decoder đang rảnh: nạp frame mới ngay lập tức
+    if (isFinal) {
+      // Thả chuột hoặc bước frame: huỷ requestAnimationFrame và dừng chính xác 100% tại safeTime
+      if (scrubRafRef.current !== null) {
+        cancelAnimationFrame(scrubRafRef.current);
+        scrubRafRef.current = null;
+      }
+      pendingScrubTimeRef.current = null;
       isSeekingRef.current = true;
       video.currentTime = safeTime;
+      return;
+    }
 
-      // Đặt timeout an toàn phòng khi browser không kích hoạt onSeeked
-      if (seekingTimeoutRef.current !== null) {
-        window.clearTimeout(seekingTimeoutRef.current);
-      }
-      seekingTimeoutRef.current = window.setTimeout(() => {
-        isSeekingRef.current = false;
-        if (pendingScrubTimeRef.current !== null && videoRef.current) {
-          const next = pendingScrubTimeRef.current;
-          pendingScrubTimeRef.current = null;
-          videoRef.current.currentTime = next;
-          setCurrentTime(next);
+    // Đang kéo chuột: điều phối nạp khung hình qua requestAnimationFrame để lướt mượt 60/120 FPS
+    pendingScrubTimeRef.current = safeTime;
+    if (scrubRafRef.current === null) {
+      scrubRafRef.current = requestAnimationFrame(() => {
+        scrubRafRef.current = null;
+        const v = videoRef.current;
+        if (!v || pendingScrubTimeRef.current === null) return;
+        const nextTime = pendingScrubTimeRef.current;
+
+        // Ưu tiên fastSeek phần cứng GPU nếu trình duyệt hỗ trợ để lướt frame mượt mà
+        if (typeof (v as any).fastSeek === 'function') {
+          (v as any).fastSeek(nextTime);
+        } else {
+          v.currentTime = nextTime;
         }
-      }, 120);
+      });
     }
   };
 
-  // Tua từng frame (~0.04s cho 25-30fps)
+  // Tua từng frame (chuẩn 120 FPS: 1 frame = 1/120s ~ 0.008333s)
   const stepFrame = (step: number) => {
     if (isLiveRef.current) {
       isLiveRef.current = false;
@@ -965,7 +983,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const end = hlsLiveEdge;
       const target = Math.max(start, end - 4);
       setFrozenTimeline({ start, end });
-      performScrub(target);
+      performScrub(target, true);
       return;
     }
 
@@ -975,8 +993,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     v.pause();
     const start = frozenTimeline?.start ?? hlsWindowStart;
     const end = frozenTimeline?.end ?? hlsLiveEdge;
-    const target = Math.max(start, Math.min(end, v.currentTime + step * 0.04));
-    performScrub(target);
+    // Mỗi step đúng 1 frame của 120 FPS (~0.008333s)
+    const frameDuration = 1 / 120;
+    const target = Math.max(start, Math.min(end, v.currentTime + step * frameDuration));
+    performScrub(target, true);
   };
 
   // Seek bar (DVR window): nhận ratio (0..1) hoặc timestamp cụ thể
@@ -995,12 +1015,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setIsPlaying(false);
       liveVideoRef.current?.pause();
       setFrozenTimeline({ start, end });
-      performScrub(start + ratio * span);
+      performScrub(start + ratio * span, true);
       return;
     }
 
     const targetTime = isRatio ? start + ratioOrTime * span : ratioOrTime;
-    performScrub(targetTime);
+    performScrub(targetTime, true);
   };
 
   // Toggle play/pause trên <video> native
@@ -1111,15 +1131,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [dragRatio, setDragRatio] = useState<number | null>(null);
   const dragRatioRef = useRef<number | null>(null);
 
-  // Utility: chuyển giây sang MM:SS hoặc H:MM:SS
-  const formatTime = (seconds: number): string => {
-    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
-    const s = Math.floor(seconds);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    return `${m}:${String(sec).padStart(2, '0')}`;
+  // Utility: chuyển giây sang MM:SS hoặc H:MM:SS. Hỗ trợ hiển thị phần trăm giây cho 120 FPS
+  const formatTime = (seconds: number, showFraction = false): string => {
+    if (!Number.isFinite(seconds) || seconds < 0) return showFraction ? '0:00.00' : '0:00';
+    const totalCentis = Math.floor(seconds * 100);
+    const totalSec = Math.floor(totalCentis / 100);
+    const centis = totalCentis % 100;
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const sec = totalSec % 60;
+    const base = h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+      : `${m}:${String(sec).padStart(2, '0')}`;
+    if (showFraction) {
+      return `${base}.${String(centis).padStart(2, '0')}`;
+    }
+    return base;
   };
 
   // Tính ratio vị trí con trỏ trên seekbar
@@ -1144,7 +1171,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       dragRatioRef.current = ratio;
       setDragRatio(ratio);
       if (!isLive) {
-        performScrub(timelineStart + ratio * span);
+        performScrub(timelineStart + ratio * span, false);
       }
     }
   };
@@ -1183,7 +1210,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const span = Math.max(0.1, timelineEnd - timelineStart);
     const targetTime = timelineStart + initialRatio * span;
-    performScrub(targetTime);
+    performScrub(targetTime, false);
 
     const onMouseMove = (mv: MouseEvent) => {
       const r = getSeekRatio(mv.clientX);
@@ -1194,7 +1221,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setSeekHoverTime(timelineStart + r * curSpan);
 
       const curTargetTime = timelineStart + r * curSpan;
-      performScrub(curTargetTime);
+      performScrub(curTargetTime, false);
     };
 
     const onMouseUp = (mu: MouseEvent) => {
@@ -1209,7 +1236,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       const curSpan = Math.max(0.1, timelineEnd - timelineStart);
       const finalTime = timelineStart + finalRatio * curSpan;
-      performScrub(finalTime);
+      // Nhả chuột: seek chính xác tuyệt đối vào frame mục tiêu
+      performScrub(finalTime, true);
     };
 
     window.addEventListener('mousemove', onMouseMove);
@@ -1244,7 +1272,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const span = Math.max(0.1, timelineEnd - timelineStart);
     const targetTime = timelineStart + initialRatio * span;
-    performScrub(targetTime);
+    performScrub(targetTime, false);
 
     const onTouchMove = (mv: TouchEvent) => {
       if (!mv.touches[0]) return;
@@ -1253,7 +1281,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setDragRatio(r);
       const curSpan = Math.max(0.1, timelineEnd - timelineStart);
       const curTargetTime = timelineStart + r * curSpan;
-      performScrub(curTargetTime);
+      performScrub(curTargetTime, false);
     };
 
     const onTouchEnd = () => {
@@ -1267,7 +1295,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       const curSpan = Math.max(0.1, timelineEnd - timelineStart);
       const finalTime = timelineStart + finalRatio * curSpan;
-      performScrub(finalTime);
+      // Nhả tay: seek chính xác tuyệt đối vào frame mục tiêu
+      performScrub(finalTime, true);
     };
 
     window.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -1517,9 +1546,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
         {/* DVR Seekbar: YouTube-style với hover tooltip, progress fill, drag mượt */}
         <div className="flex items-center gap-2 px-1">
-          {/* Thời gian hiện tại */}
-          <span className="text-[11px] font-mono text-slate-300 min-w-[36px] tabular-nums flex-shrink-0">
-            {formatTime(displayCurrentTime)}
+          {/* Thời gian hiện tại: hiển thị chi tiết mili-giây / phần trăm giây khi Replay hoặc đang kéo tua */}
+          <span className="text-[11px] font-mono text-slate-300 min-w-[54px] tabular-nums flex-shrink-0">
+            {formatTime(displayCurrentTime, !isLive || isDraggingSeek)}
           </span>
 
           {/* Seekbar track */}
@@ -1574,7 +1603,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               }}
             />
 
-            {/* Tooltip thời gian hover */}
+            {/* Tooltip thời gian hover với độ chính xác phần trăm giây */}
             {seekHoverTime !== null && (
               <div
                 className="absolute pointer-events-none z-20 bottom-full mb-2 px-2 py-0.5 rounded-md bg-slate-900/95 text-white text-[11px] font-mono font-bold border border-white/10 shadow-xl whitespace-nowrap"
@@ -1583,7 +1612,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   transform: 'translateX(-50%)',
                 }}
               >
-                {formatTime(seekHoverTime - timelineStart)}
+                {formatTime(seekHoverTime - timelineStart, true)}
               </div>
             )}
           </div>
@@ -1605,23 +1634,39 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               {isPlaying ? <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />}
             </button>
 
-            <button
-              onClick={() => stepFrame(-1)}
-              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-xs font-medium flex items-center space-x-0.5 transition-all"
-              title="Lùi 1 khung hình"
-            >
-              <ChevronLeft className="w-3 h-3" />
-              <span>-1</span>
-            </button>
-
-            <button
-              onClick={() => stepFrame(1)}
-              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-xs font-medium flex items-center space-x-0.5 transition-all"
-              title="Tiến 1 khung hình"
-            >
-              <span>+1</span>
-              <ChevronRight className="w-3 h-3" />
-            </button>
+            {/* Frame step buttons: chuẩn 120 FPS (1 frame = ~0.0083s) */}
+            <div className="inline-flex items-center bg-slate-800/80 rounded-lg p-0.5 border border-white/10">
+              <button
+                onClick={() => stepFrame(-10)}
+                className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[11px] font-mono font-medium transition-all"
+                title="Lùi 10 khung hình (~0.08s)"
+              >
+                -10
+              </button>
+              <button
+                onClick={() => stepFrame(-1)}
+                className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center space-x-0.5 transition-all"
+                title="Lùi 1 khung hình (1/120s ~ 0.008s)"
+              >
+                <ChevronLeft className="w-3 h-3" />
+                <span>-1</span>
+              </button>
+              <button
+                onClick={() => stepFrame(1)}
+                className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center space-x-0.5 transition-all"
+                title="Tiến 1 khung hình (1/120s ~ 0.008s)"
+              >
+                <span>+1</span>
+                <ChevronRight className="w-3 h-3" />
+              </button>
+              <button
+                onClick={() => stepFrame(10)}
+                className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[11px] font-mono font-medium transition-all"
+                title="Tiến 10 khung hình (~0.08s)"
+              >
+                +10
+              </button>
+            </div>
 
             <button
               onClick={() => {
