@@ -615,7 +615,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         nudgeOffset: 0.15,
         nudgeMaxRetry: 15,
         liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 10,
+        // QUAN TRỌNG: Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay.
+        // Nếu không, HLS.js sẽ tự seek về live edge khi currentTime lệch > 10s (liveMaxLatencyDurationCount mặc định).
+        // Đặt liveMaxLatencyDuration rất lớn (24h) để HLS.js không bao giờ tự nhảy về edge.
+        liveMaxLatencyDuration: 86400,
+        // QUAN TRỌNG: Không cho HLS.js tự tăng video.playbackRate để catch-up live edge.
+        // Mặc định maxLiveSyncPlaybackRate = 1.5, tức HLS.js có thể đặt playbackRate = 1.5
+        // khi phát lại — đây là lý do replay 1x thực tế chạy nhanh hơn tốc độ gốc.
+        maxLiveSyncPlaybackRate: 1,
         enableWorker: true,
         lowLatencyMode: false,
         debug: false
@@ -707,12 +714,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       // Log toàn bộ sự kiện native của thẻ <video> để biết chính xác trạng thái decode/buffer thật sự,
       // vì đôi khi hls.js không báo lỗi gì nhưng <video> vẫn không render được frame nào.
-      const videoEvents = ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'playing', 'waiting', 'stalled', 'suspend', 'abort', 'emptied', 'error'];
+      const videoEvents = ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'playing', 'waiting', 'stalled', 'suspend', 'abort', 'emptied', 'error', 'ratechange'];
       let stallTimer: number | null = null;
       const onVideoEvent = (ev: Event) => {
         if (ev.type === 'loadedmetadata' && video.videoWidth > 0 && video.videoHeight > 0) {
           setSourceIsPortrait(video.videoHeight > video.videoWidth);
         }
+
+        // Nếu HLS.js tự ý thay đổi playbackRate (để catch-up live edge) -> khôi phục ngay về tốc độ người dùng chọn
+        if (ev.type === 'ratechange' && !isLiveRef.current) {
+          const expectedRate = playbackRate;
+          if (Math.abs(video.playbackRate - expectedRate) > 0.05) {
+            console.warn(`[LivePlayer] HLS.js tự đặt playbackRate=${video.playbackRate} (kỳ vọng ${expectedRate}) → khôi phục lại.`);
+            video.playbackRate = expectedRate;
+          }
+        }
+
         // Xử lý tự động cứu khi video bị khựng (stalled / waiting) trong chế độ xem lại
         if (ev.type === 'waiting' || ev.type === 'stalled') {
           if (!isLiveRef.current && !video.paused) {
