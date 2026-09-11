@@ -14,11 +14,35 @@ public class NetworkManager: ObservableObject {
     @Published public var authToken: String? = nil
     @Published public var currentUsername: String? = nil
     @Published public var currentUserId: String? = nil
+    @Published public var userExpiresAt: String? = nil
     @Published public var activeStreamId: String? = nil
     @Published public var streamKey: String? = nil
     @Published public var rtmpIngestUrl: String? = nil
     @Published public var hlsPlaylistUrl: String? = nil
     @Published public var errorMessage: String? = nil
+
+    /// Cảnh báo nếu tài khoản sắp hết hạn sử dụng trong vòng 3 ngày tới
+    public var expirationWarning: String? {
+        guard let exp = userExpiresAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var expireDate = formatter.date(from: exp)
+        if expireDate == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            expireDate = formatter.date(from: exp)
+        }
+        guard let date = expireDate else { return nil }
+        let diff = date.timeIntervalSince(Date())
+        if diff > 0 && diff <= (3 * 24 * 3600) { // Trong vòng 3 ngày
+            let days = Int(ceil(diff / 86400))
+            let hours = Int(ceil(diff / 3600))
+            let timeStr = days > 1 ? "\(days) ngày nữa" : "\(hours) giờ nữa"
+            let df = DateFormatter()
+            df.dateFormat = "dd/MM/yyyy"
+            return "Tài khoản sẽ hết hạn sau \(timeStr) (\(df.string(from: date))). Hãy liên hệ Admin gia hạn!"
+        }
+        return nil
+    }
 
     /// Override host:port RTMP khi server trả về IP LAN nhưng user đang 5G/tunnel
     /// (vd: Pinggy TCP tunnel cho port 1935). Được gửi lên server qua header
@@ -124,6 +148,7 @@ public class NetworkManager: ObservableObject {
                     self.authToken = token
                     self.currentUsername = user["username"] as? String
                     self.currentUserId = (user["id"] as? String) ?? (user["_id"] as? String)
+                    self.userExpiresAt = user["expiresAt"] as? String
                     self.isAuthenticated = true
                     self.errorMessage = nil
                     completion(true)
