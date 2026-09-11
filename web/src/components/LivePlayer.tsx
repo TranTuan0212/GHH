@@ -1172,7 +1172,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [isTextOverlayOpen, isLive]);
 
-  const speedOptions = [0.05, 0.1, 0.125, 0.25, 0.5, 0.75, 1.0];
+  // Chrome/Safari tối thiểu hỗ trợ playbackRate = 0.0625 (1/16). 0.05 sẽ throw NotSupportedError.
+  const speedOptions = [0.0625, 0.1, 0.125, 0.25, 0.5, 0.75, 1.0];
   const activeDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
   const timelineStart = frozenTimeline?.start ?? hlsWindowStart;
   const currentLiveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (timelineStart + activeDuration);
@@ -1838,7 +1839,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 }`}
                 title={`Phát xem lại ở tốc độ ${rate}x`}
               >
-                {rate}x
+                {rate === 0.0625 ? '1/16' : rate}x
               </button>
             ))}
           </div>
