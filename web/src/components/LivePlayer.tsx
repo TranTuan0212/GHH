@@ -614,7 +614,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         maxBufferHole: 0.8, // Tự động nhảy qua khe hở micro-second giữa các segment không có audio
         nudgeOffset: 0.15,
         nudgeMaxRetry: 15,
-        liveSyncDurationCount: 3,
+        liveSyncDuration: 3,
         // QUAN TRỌNG: Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay.
         // Nếu không, HLS.js sẽ tự seek về live edge khi currentTime lệch > 10s (liveMaxLatencyDurationCount mặc định).
         // Đặt liveMaxLatencyDuration rất lớn (24h) để HLS.js không bao giờ tự nhảy về edge.
