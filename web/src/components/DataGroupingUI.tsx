@@ -15,8 +15,11 @@ import {
   ShieldCheck,
   Flame,
   Award,
-  AlertTriangle
+  AlertTriangle,
+  EyeOff,
+  LayoutGrid
 } from 'lucide-react';
+import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
 export type GameMode = '3cards' | '2cards';
 
@@ -34,31 +37,39 @@ interface DataGroupingUIProps {
   onSetGroupNames?: (names: { [groupIndex: number]: string }) => void;
 }
 
-// Chuẩn hóa và bóc tách rank và điểm cơ bản
+// Chuẩn hóa và bóc tách rank và điểm cơ bản (hỗ trợ cả 52 lá bài A♥, 10♦ và nút "Không thấy")
 export function parseCard(raw: string): { rank: string; value: number } {
   if (!raw) return { rank: '', value: 0 };
   const s = raw.trim().toUpperCase();
 
+  // Nút "Không thấy"
+  if (s.includes('KHÔNG THẤY') || s.includes('KHONG THAY') || s === '?' || s.includes('UNKNOWN')) {
+    return { rank: '?', value: 0 };
+  }
+
+  // Tách bỏ ký hiệu chất ♥♦♣♠ nếu có để lấy rank
+  const cleanRank = s.replace(/[♥♦♣♠]/g, '').trim();
+
   // Át / Ace
-  if (s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE' || s.endsWith('A') || s.includes('ACE')) {
+  if (cleanRank === 'A' || cleanRank === 'ÁT' || cleanRank === 'AT' || cleanRank === 'ACE' || cleanRank.endsWith('A') || cleanRank.includes('ACE')) {
     return { rank: 'A', value: 1 };
   }
   // Tây / Hình người
-  if (s === 'J' || s === 'BỒI' || s === 'JACK' || s.endsWith('J')) {
+  if (cleanRank === 'J' || cleanRank === 'BỒI' || cleanRank === 'JACK' || cleanRank.endsWith('J')) {
     return { rank: 'J', value: 10 };
   }
-  if (s === 'Q' || s === 'ĐẦM' || s === 'QUEEN' || s.endsWith('Q')) {
+  if (cleanRank === 'Q' || cleanRank === 'ĐẦM' || cleanRank === 'QUEEN' || cleanRank.endsWith('Q')) {
     return { rank: 'Q', value: 10 };
   }
-  if (s === 'K' || s === 'GIÀ' || s === 'KING' || s.endsWith('K')) {
+  if (cleanRank === 'K' || cleanRank === 'GIÀ' || cleanRank === 'KING' || cleanRank.endsWith('K')) {
     return { rank: 'K', value: 10 };
   }
-  if (s === '10' || s.endsWith('10')) {
+  if (cleanRank === '10' || cleanRank.endsWith('10')) {
     return { rank: '10', value: 10 };
   }
 
   // Số từ 2..9
-  const match = s.match(/\d+/);
+  const match = cleanRank.match(/\d+/);
   if (match) {
     const n = parseInt(match[0], 10);
     if (n >= 2 && n <= 9) return { rank: n.toString(), value: n };
@@ -66,7 +77,7 @@ export function parseCard(raw: string): { rank: string; value: number } {
     if (n === 1) return { rank: 'A', value: 1 };
   }
 
-  return { rank: s, value: 0 };
+  return { rank: cleanRank || s, value: 0 };
 }
 
 // Kiểm tra tính hợp lệ của từng lá bài đơn lẻ
@@ -77,105 +88,50 @@ function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: st
 
   const s = raw.trim().toUpperCase();
 
-  // 10 (ưu tiên bắt trước 1 để tránh nhầm với A)
-  if (s === '10' || s.startsWith('10') || s.endsWith('10')) {
-    return { isValid: true, normalizedRank: '10', value: 10 };
+  // Hỗ trợ "Không thấy"
+  if (s.includes('KHÔNG THẤY') || s.includes('KHONG THAY') || s === '?' || s.includes('UNKNOWN')) {
+    return { isValid: true, normalizedRank: 'Không thấy', value: 0 };
+  }
+
+  // Giữ lại chất nếu có
+  const suitMatch = raw.match(/[♥♦♣♠]/);
+  const cleanRank = s.replace(/[♥♦♣♠]/g, '').trim();
+
+  // 10
+  if (cleanRank === '10' || cleanRank.startsWith('10') || cleanRank.endsWith('10')) {
+    return { isValid: true, normalizedRank: suitMatch ? `10${suitMatch[0]}` : '10', value: 10 };
   }
 
   // Át / Ace / 1
-  if (
-    s === 'A' ||
-    s === 'ÁT' ||
-    s === 'AT' ||
-    s === 'ACE' ||
-    s === '1' ||
-    s.startsWith('A ') ||
-    s.startsWith('ÁT ') ||
-    s.startsWith('AT ') ||
-    s.startsWith('ACE ') ||
-    s.startsWith('A') ||
-    s.endsWith('A') ||
-    s.includes('ÁT') ||
-    s.includes('ACE')
-  ) {
-    return { isValid: true, normalizedRank: 'A', value: 1 };
+  if (cleanRank === 'A' || cleanRank === 'ÁT' || cleanRank === 'AT' || cleanRank === 'ACE' || cleanRank === '1') {
+    return { isValid: true, normalizedRank: suitMatch ? `A${suitMatch[0]}` : 'A', value: 1 };
   }
 
   // Tây: J (Bồi)
-  if (
-    s === 'J' ||
-    s === 'BỒI' ||
-    s === 'BOI' ||
-    s === 'JACK' ||
-    s.startsWith('J ') ||
-    s.startsWith('J') ||
-    s.startsWith('BỒI') ||
-    s.startsWith('BOI') ||
-    s.endsWith('J') ||
-    s.includes('BỒI')
-  ) {
-    return { isValid: true, normalizedRank: 'J', value: 10 };
+  if (cleanRank === 'J' || cleanRank === 'BỒI' || cleanRank === 'BOI' || cleanRank === 'JACK') {
+    return { isValid: true, normalizedRank: suitMatch ? `J${suitMatch[0]}` : 'J', value: 10 };
   }
 
   // Tây: Q (Đầm)
-  if (
-    s === 'Q' ||
-    s === 'ĐẦM' ||
-    s === 'DAM' ||
-    s === 'QUEEN' ||
-    s.startsWith('Q ') ||
-    s.startsWith('Q') ||
-    s.startsWith('ĐẦM') ||
-    s.startsWith('DAM') ||
-    s.endsWith('Q') ||
-    s.includes('ĐẦM')
-  ) {
-    return { isValid: true, normalizedRank: 'Q', value: 10 };
+  if (cleanRank === 'Q' || cleanRank === 'ĐẦM' || cleanRank === 'DAM' || cleanRank === 'QUEEN') {
+    return { isValid: true, normalizedRank: suitMatch ? `Q${suitMatch[0]}` : 'Q', value: 10 };
   }
 
   // Tây: K (Già)
-  if (
-    s === 'K' ||
-    s === 'GIÀ' ||
-    s === 'GIA' ||
-    s === 'KING' ||
-    s.startsWith('K ') ||
-    s.startsWith('K') ||
-    s.startsWith('GIÀ') ||
-    s.startsWith('GIA') ||
-    s.endsWith('K') ||
-    s.includes('GIÀ')
-  ) {
-    return { isValid: true, normalizedRank: 'K', value: 10 };
+  if (cleanRank === 'K' || cleanRank === 'GIÀ' || cleanRank === 'GIA' || cleanRank === 'KING') {
+    return { isValid: true, normalizedRank: suitMatch ? `K${suitMatch[0]}` : 'K', value: 10 };
   }
 
-  // Số từ 2..9 (hoặc 1 tính là A)
-  const match = s.match(/\d+/);
-  if (match) {
-    const n = parseInt(match[0], 10);
-    if (n >= 2 && n <= 9) {
-      return { isValid: true, normalizedRank: n.toString(), value: n };
+  // Số từ 2..9
+  const numMatch = cleanRank.match(/\d+/);
+  if (numMatch) {
+    const num = parseInt(numMatch[0], 10);
+    if (num >= 2 && num <= 9) {
+      return { isValid: true, normalizedRank: suitMatch ? `${num}${suitMatch[0]}` : num.toString(), value: num };
     }
-    if (n === 10) {
-      return { isValid: true, normalizedRank: '10', value: 10 };
-    }
-    if (n === 1) {
-      return { isValid: true, normalizedRank: 'A', value: 1 };
-    }
-    return {
-      isValid: false,
-      normalizedRank: '',
-      value: 0,
-      error: `Số "${n}" không hợp lệ! Lá bài chỉ có giá trị từ 2 đến 10, hoặc A, J, Q, K.`
-    };
   }
 
-  return {
-    isValid: false,
-    normalizedRank: '',
-    value: 0,
-    error: `"${raw}" không phải lá bài hợp lệ! Vui lòng chỉ nhập: A, 2..10, J, Q, K.`
-  };
+  return { isValid: true, normalizedRank: raw.trim(), value: 0 };
 }
 
 // Kiểm tra tính hợp lệ của lá bài nhập vào (hỗ trợ cả 1 lá hoặc nhiều lá cách nhau bởi dấu phẩy hoặc khoảng trắng)
@@ -550,6 +506,72 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // Floating Draggable Card Picker Popup (Popup nổi kéo thả 52 lá bài)
+  const [isCardPickerOpen, setIsCardPickerOpen] = useState(false);
+  const [cardPickerTarget, setCardPickerTarget] = useState<CardPickerTarget>({
+    mode: 'add',
+    groupNum: 1
+  });
+
+  // Tự động đồng bộ nhóm mục tiêu khi đang ở chế độ chia vòng
+  React.useEffect(() => {
+    if (cardPickerTarget.mode === 'add') {
+      setCardPickerTarget((prev) => ({
+        ...prev,
+        groupNum: nextGroupIndex
+      }));
+    }
+  }, [nextGroupIndex]);
+
+  // Xử lý chọn lá bài từ CardPickerPopup
+  const handleSelectCardFromPicker = (cardValue: string, targetGroup: number, editCardId?: string) => {
+    if (cardPickerTarget.mode === 'edit' && editCardId && onEditCard) {
+      onEditCard(editCardId, cardValue);
+      showToast(`🃏 Đã đổi thành "${cardValue}"`);
+      // Sau khi sửa xong, chuyển lại mode 'add' để chia tiếp theo vòng
+      setCardPickerTarget({
+        mode: 'add',
+        groupNum: nextGroupIndex
+      });
+    } else {
+      // Mode add
+      onAddCard(cardValue, numGroups, targetGroup);
+      const gName = groupNames[targetGroup] || `Nhóm ${targetGroup}`;
+      showToast(`✨ Đã gán "${cardValue}" vào ${gName}`);
+
+      // Tự động chuyển nhóm mục tiêu sang nhóm tiếp theo theo vòng tuần tự
+      const nextG = (targetGroup % numGroups) + 1;
+      setCardPickerTarget({
+        mode: 'add',
+        groupNum: nextG
+      });
+    }
+  };
+
+  // Mở popup để sửa/chọn lại lá bài đã có
+  const handleOpenEditCardPicker = (item: DataEntry, groupNum: number, slotIdx: number) => {
+    setCardPickerTarget({
+      mode: 'edit',
+      groupNum,
+      slotIndex: slotIdx,
+      cardId: item.id,
+      currentValue: item.cardValue,
+      groupName: groupNames[groupNum] || `Nhóm ${groupNum}`
+    });
+    setIsCardPickerOpen(true);
+  };
+
+  // Mở popup để thêm lá bài cho ô trống
+  const handleOpenAddCardPicker = (groupNum: number, slotIdx: number) => {
+    setCardPickerTarget({
+      mode: 'add',
+      groupNum,
+      slotIndex: slotIdx,
+      groupName: groupNames[groupNum] || `Nhóm ${groupNum}`
+    });
+    setIsCardPickerOpen(true);
+  };
+
   // Chia bài từ thanh input trên cùng (CHIA VÒNG TUẦN TỰ THEO THỨ TỰ NHƯ CŨ, KHÔNG DỒN VÀO 1 NHÓM)
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -735,8 +757,23 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons: Undo, Clear, Finish */}
+        {/* Action Buttons: 52 Lá Popup, Undo, Clear, Finish */}
         <div className="flex items-center space-x-1.5 flex-shrink-0">
+          {/* Nút Bật/Tắt Popup 52 Lá Bài Kéo Thả Tự Do */}
+          <button
+            type="button"
+            onClick={() => setIsCardPickerOpen(!isCardPickerOpen)}
+            className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center space-x-1 border active:scale-95 shadow-sm ${
+              isCardPickerOpen
+                ? 'bg-amber-400 text-slate-950 border-amber-300 ring-1 ring-amber-400 shadow-amber-500/20'
+                : 'bg-slate-800/90 text-amber-300 hover:text-amber-200 border-amber-500/30 hover:bg-slate-750'
+            }`}
+            title="Bật / Tắt Bảng 52 Lá Bài Kéo Thả Tự Do"
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+            <span>52 Lá</span>
+          </button>
+
           {/* Undo Button */}
           {onUndoCard && entries.length > 0 && (
             <button
@@ -839,12 +876,29 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         onSubmit={handleManualSubmit}
         className="flex items-center gap-1.5 p-1 sm:p-1.5 rounded-xl border bg-slate-900/90 border-indigo-500/25 shadow-inner transition-all"
       >
+        {/* Nút bật Popup 52 Lá trực quan */}
+        <button
+          type="button"
+          onClick={() => {
+            setCardPickerTarget({
+              mode: 'add',
+              groupNum: nextGroupIndex
+            });
+            setIsCardPickerOpen(true);
+          }}
+          className="px-2.5 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1 shadow transition-all active:scale-95 flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/40"
+          title="Mở bảng 52 lá bài để chọn nhanh"
+        >
+          <LayoutGrid className="w-3.5 h-3.5 text-amber-300" />
+          <span>Bảng 52 Lá</span>
+        </button>
+
         <div className="flex-1 flex items-center space-x-1.5 pl-1.5 min-w-0">
           <input
             type="text"
             value={manualInput}
             onChange={(e) => setManualInput(e.target.value)}
-            placeholder="Nhập mã hoặc chọn lá: 8, 9, K, A, 10..."
+            placeholder="Hoặc gõ phím: 8, 9, K, A, 10..."
             className="w-full bg-transparent text-white font-mono text-xs focus:outline-none placeholder:text-slate-500 truncate"
           />
         </div>
@@ -1014,20 +1068,42 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     const item = allItemsInGroup[slotIdx];
                     if (item) {
                       const p = parseCard(item.cardValue);
+                      const isUnknown = item.cardValue.includes('Không thấy') || item.cardValue === '?';
                       return (
                         <div
                           key={item.id || slotIdx}
-                          onClick={() => openEditCardModal(item)}
+                          onClick={() => handleOpenEditCardPicker(item, groupNum, slotIdx)}
                           className="flex items-center justify-between px-2 py-1.5 rounded-xl bg-slate-800/90 border border-white/10 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm"
-                          title="Bấm vào lá bài để sửa hoặc xóa"
+                          title="Bấm vào lá bài để chọn lại hoặc xóa"
                         >
                           <div className="flex items-center space-x-1.5 min-w-0">
                             <span className="text-[10px] font-mono text-slate-400 w-4">
                               L{slotIdx + 1}
                             </span>
-                            <span className="font-black font-mono text-white text-sm tracking-wide truncate group-hover:text-amber-300">
-                              {item.cardValue}
-                            </span>
+
+                            {isUnknown ? (
+                              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center space-x-1">
+                                <EyeOff className="w-3 h-3 text-amber-400" />
+                                <span>Không thấy</span>
+                              </span>
+                            ) : (
+                              <span
+                                className={`font-black font-mono text-sm tracking-wide truncate group-hover:text-amber-300 ${
+                                  item.cardValue.includes('♥')
+                                    ? 'text-red-500'
+                                    : item.cardValue.includes('♦')
+                                    ? 'text-orange-400'
+                                    : item.cardValue.includes('♣')
+                                    ? 'text-emerald-400'
+                                    : item.cardValue.includes('♠')
+                                    ? 'text-indigo-300'
+                                    : 'text-white'
+                                }`}
+                              >
+                                {item.cardValue}
+                              </span>
+                            )}
+
                             <span className="text-[9px] font-mono text-slate-500">
                               #{item.sequenceOrder}
                             </span>
@@ -1047,9 +1123,11 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                       return (
                         <div
                           key={`empty-${slotIdx}`}
-                          className="flex items-center justify-center py-2 rounded-xl border border-dashed border-white/10 text-[11px] text-slate-500 font-mono select-none"
+                          onClick={() => handleOpenAddCardPicker(groupNum, slotIdx)}
+                          className="flex items-center justify-center py-2 rounded-xl border border-dashed border-white/10 hover:border-amber-400/50 hover:bg-slate-800/40 text-[11px] text-slate-500 hover:text-amber-300 font-mono select-none cursor-pointer transition-all"
+                          title="Bấm để mở bảng 52 lá bài chọn cho ô này"
                         >
-                          Lá {slotIdx + 1}
+                          + Lá {slotIdx + 1} (Bấm chọn)
                         </div>
                       );
                     }
@@ -1313,6 +1391,18 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           </div>
         </div>
       )}
+
+      {/* 9. Floating Draggable 52-Card Picker Popup with "Không thấy" Button */}
+      <CardPickerPopup
+        isOpen={isCardPickerOpen}
+        onClose={() => setIsCardPickerOpen(false)}
+        target={cardPickerTarget}
+        numGroups={numGroups}
+        groupNames={groupNames}
+        onSelectCard={handleSelectCardFromPicker}
+        onDeleteCard={onDeleteCard}
+        onChangeTargetGroup={(gNum) => setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum }))}
+      />
     </div>
   );
 };

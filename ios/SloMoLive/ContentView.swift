@@ -334,6 +334,7 @@ struct ContentView: View {
                                     isFakeLocked = true
                                     UIScreen.main.brightness = 0.0
                                     UIApplication.shared.isIdleTimerDisabled = true
+                                    VolumeObserver.shared.resetVolumeSliderToMid()
                                 }
                             }) {
                                 HStack(spacing: 6) {
@@ -364,21 +365,31 @@ struct ContentView: View {
                         .padding(.bottom, 40)
                     }
 
-                    // 100% Pure Pitch Black Screen Overlay (No text, No clock, 100% Stealth)
+                    // 100% Pure Pitch Black Screen Overlay (Không nhận chạm, mở bằng 3 lần Giảm Âm Lượng)
                     if isFakeLocked {
                         Color.black
                             .edgesIgnoringSafeArea(.all)
-                            .contentShape(Rectangle())
-                            .onTapGesture(count: 2) {
-                                withAnimation {
-                                    isFakeLocked = false
-                                    UIScreen.main.brightness = 0.6
-                                }
-                            }
                             .statusBar(hidden: true)
-                            .edgesIgnoringSafeArea(.all)
                     }
                 }
+            }
+        }
+        .onAppear {
+            VolumeObserver.shared.onTripleVolumeDown = {
+                withAnimation {
+                    isFakeLocked = false
+                    UIScreen.main.brightness = 0.6
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            print("[ContentView] Người dùng bấm nút khóa màn hình -> Tự động thoát app!")
+            exit(0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            if isFakeLocked {
+                print("[ContentView] App vào background khi đang ở màn hình đen -> Thoát app!")
+                exit(0)
             }
         }
     }
