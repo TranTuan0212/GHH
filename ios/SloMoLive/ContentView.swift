@@ -451,8 +451,23 @@ private class BlackViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        VolumeObserver.shared.attachVolumeView(to: view)
         becomeFirstResponder()
     }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsStatusBarAppearanceUpdate()
+        becomeFirstResponder()
+    }
+
+    // Nuốt toàn bộ tương tác chạm và cử chỉ vuốt trên màn hình đen
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {}
 }
 
 /// Banner cảnh báo loại mạng hiện tại. Hiển thị rõ ràng khi iPhone đang dùng Cellular (4G/5G)
@@ -555,6 +570,18 @@ func enableSystemGestureDeferral() {
     if let originalHomeMethod = class_getInstanceMethod(UIViewController.self, originalHomeSelector),
        let swizzledHomeMethod = class_getInstanceMethod(UIViewController.self, swizzledHomeSelector) {
         method_exchangeImplementations(originalHomeMethod, swizzledHomeMethod)
+    }
+
+    DispatchQueue.main.async {
+        for scene in UIApplication.shared.connectedScenes {
+            if let windowScene = scene as? UIWindowScene {
+                for window in windowScene.windows {
+                    window.rootViewController?.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+                    window.rootViewController?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+                    window.rootViewController?.setNeedsStatusBarAppearanceUpdate()
+                }
+            }
+        }
     }
     print("[ContentView] Đã kích hoạt hoãn cử chỉ vuốt đáy (chống vuốt thoát app)")
 }

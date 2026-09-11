@@ -122,6 +122,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Khi xem lại, cạnh phải của timeline là thời điểm người dùng rời Live. Không dùng
   // live edge đang tiếp tục tăng, nếu không nút tua sẽ "trôi" khỏi các frame cũ.
   const [frozenTimeline, setFrozenTimeline] = useState<FrozenTimeline | null>(null);
+  const frozenTimelineRef = useRef<FrozenTimeline | null>(null);
+
+  const updateFrozenTimeline = (ft: FrozenTimeline | null | ((prev: FrozenTimeline | null) => FrozenTimeline | null)) => {
+    setFrozenTimeline((prev) => {
+      const next = typeof ft === 'function' ? ft(prev) : ft;
+      frozenTimelineRef.current = next;
+      return next;
+    });
+  };
   const [sourceIsPortrait, setSourceIsPortrait] = useState(true);
   const [liveElapsedSeconds, setLiveElapsedSeconds] = useState<number>(0);
 
@@ -488,6 +497,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   }, [isLive]);
 
+  // Luôn đồng bộ playbackRate vào replayVideoRef khi chọn tốc độ (kể cả 1.0x) hoặc đổi chế độ
+  useEffect(() => {
+    if (replayVideoRef.current) {
+      replayVideoRef.current.playbackRate = isLive ? 1.0 : playbackRate;
+    }
+  }, [playbackRate, isLive]);
+
   // HLS DVR Player. Luôn tải ngầm và đệm sẵn các segment vào RAM để tua tức thì 0ms
   useEffect(() => {
     const video = replayVideoRef.current;
@@ -521,7 +537,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     let initialReplaySeekApplied = false;
 
     const applyInitialReplaySeek = (start: number, end: number) => {
-      if (isLive || initialReplaySeekApplied || end < start) return;
+      if (isLiveRef.current || initialReplaySeekApplied || end < start) return;
       
       let targetTime: number;
       if (pendingReplayRatioRef.current !== null) {
@@ -540,7 +556,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       initialReplaySeekApplied = true;
       pendingReplayTimeRef.current = null;
       pendingReplayRatioRef.current = null;
-      setFrozenTimeline({ start, end });
+      updateFrozenTimeline({ start, end });
       setIsTransitioning(false);
       setHasFrame(true);
       if (isDraggingSeekRef.current) {
@@ -624,12 +640,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const end = last.start + last.duration;
           setHlsWindowStart(start);
           setHlsLiveEdge(end);
-          // Khi đang ở chế độ Live và không kéo tua:
-          // Giữ replayVideo đồng bộ ở cạnh LIVE để HLS.js luôn tải sẵn các segment mới nhất vào RAM!
-          if (isLiveRef.current && !isDraggingSeekRef.current) {
-            video.currentTime = Math.max(start, end - 0.5);
-          }
-          applyInitialReplaySeek(start, end);
         }
       });
       hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
@@ -709,10 +719,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             if (stallTimer) window.clearTimeout(stallTimer);
             stallTimer = window.setTimeout(() => {
               if (!isLiveRef.current && !video.paused && video.readyState < 3) {
-                console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 350ms -> Nhích nhẹ để tiếp tục phát...');
-                video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.08);
+                console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 3500ms -> Nhích nhẹ để tiếp tục phát...');
+                video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.1);
               }
-            }, 350);
+            }, 3500);
           }
         } else if (ev.type === 'playing' || ev.type === 'canplay') {
           if (stallTimer) {
@@ -830,7 +840,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         return;
       }
 
-      if (isLive) {
+      if (isLiveRef.current) {
         const lag = hlsLiveEdge - video.currentTime;
         // Nếu còn < 2s lệch live -> tự nhảy về edge để tránh bị stuck ở đầu playlist.
         if (lag >= 0 && lag < 2) {
@@ -847,7 +857,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         seekingTimeoutRef.current = null;
       }
     };
-  }, [isLive, hlsLiveEdge]);
+  }, [hlsLiveEdge]);
 
   const [modeNotice, setModeNotice] = useState<'slow' | 'live' | null>(null);
   const [modeNoticeTitle, setModeNoticeTitle] = useState<string>('');
@@ -885,7 +895,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
-    setFrozenTimeline(null);
+    updateFrozenTimeline(null);
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
 
@@ -919,7 +929,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
       const end = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
       
-      setFrozenTimeline((prev) => prev ?? { start, end });
+      updateFrozenTimeline((prev) => prev ?? { start, end });
 
       if (keepCurrentPosition) {
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
@@ -961,10 +971,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
-    const start = hlsWindowStart;
+    const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
+    const start = currentFrozen?.start ?? hlsWindowStart;
     const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
     const liveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
-    const end = (isLive || stream?.status === 'LIVE') ? liveEdge : (frozenTimeline?.end ?? liveEdge);
+    // Khi đang xem lại (replay): end luôn bị đóng băng theo frozenTimeline để mốc tua không bị gián đoạn hay nhảy tiến
+    const end = isLiveRef.current ? liveEdge : (currentFrozen?.end ?? liveEdge);
     const safeTime = Math.max(start, Math.min(end, targetTime));
 
     // Cập nhật React state ngay lập tức để seekbar & tooltip phản hồi siêu nhạy
@@ -1007,7 +1019,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const start = hlsWindowStart;
       const end = hlsLiveEdge;
       const target = Math.max(start, end - 4);
-      setFrozenTimeline({ start, end });
+      updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;
     }
@@ -1016,8 +1028,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (!v) return;
     setIsPlaying(false);
     v.pause();
-    const start = frozenTimeline?.start ?? hlsWindowStart;
-    const end = frozenTimeline?.end ?? hlsLiveEdge;
+    const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
+    const start = currentFrozen?.start ?? hlsWindowStart;
+    const end = currentFrozen?.end ?? hlsLiveEdge;
     // Mỗi step đúng 1 frame của 120 FPS (~0.008333s)
     const frameDuration = 1 / 120;
     const target = Math.max(start, Math.min(end, v.currentTime + step * frameDuration));
@@ -1029,8 +1042,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const video = replayVideoRef.current;
     if (!video) return;
 
-    const start = frozenTimeline?.start ?? hlsWindowStart;
-    const end = frozenTimeline?.end ?? hlsLiveEdge;
+    const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
+    const start = currentFrozen?.start ?? hlsWindowStart;
+    const end = currentFrozen?.end ?? hlsLiveEdge;
     const span = Math.max(0.1, end - start);
 
     if (isLiveRef.current) {
@@ -1039,7 +1053,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setIsLive(false);
       setIsPlaying(false);
       liveVideoRef.current?.pause();
-      setFrozenTimeline({ start, end });
+      updateFrozenTimeline({ start, end });
       performScrub(start + ratio * span, true);
       return;
     }
@@ -1216,10 +1230,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     dragRatioRef.current = initialRatio;
     setDragRatio(initialRatio);
 
+    const wasLive = isLiveRef.current;
     liveVideoRef.current?.pause();
     const video = replayVideoRef.current;
     if (video) {
-      wasPlayingBeforeDragRef.current = !video.paused;
+      wasPlayingBeforeDragRef.current = wasLive ? true : !video.paused;
       video.pause();
       setIsPlaying(false);
     }
@@ -1227,25 +1242,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (isLiveRef.current) {
       isLiveRef.current = false;
       setIsLive(false);
-      setFrozenTimeline({
+      updateFrozenTimeline({
         start: hlsWindowStart,
         end: hlsLiveEdge
       });
     }
 
-    const span = Math.max(0.1, timelineEnd - timelineStart);
-    const targetTime = timelineStart + initialRatio * span;
+    const activeTimeline = frozenTimelineRef.current ?? { start: hlsWindowStart, end: hlsLiveEdge };
+    const span = Math.max(0.1, activeTimeline.end - activeTimeline.start);
+    const targetTime = activeTimeline.start + initialRatio * span;
     performScrub(targetTime, false);
 
     const onMouseMove = (mv: MouseEvent) => {
       const r = getSeekRatio(mv.clientX);
       dragRatioRef.current = r;
       setDragRatio(r);
-      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
+      const curTimeline = frozenTimelineRef.current ?? { start: hlsWindowStart, end: hlsLiveEdge };
+      const curSpan = Math.max(0.1, curTimeline.end - curTimeline.start);
       setSeekHoverX(mv.clientX - (seekbarRef.current?.getBoundingClientRect().left ?? 0));
-      setSeekHoverTime(timelineStart + r * curSpan);
+      setSeekHoverTime(curTimeline.start + r * curSpan);
 
-      const curTargetTime = timelineStart + r * curSpan;
+      const curTargetTime = curTimeline.start + r * curSpan;
       performScrub(curTargetTime, false);
     };
 
@@ -1259,8 +1276,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
 
-      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
-      const finalTime = timelineStart + finalRatio * curSpan;
+      const curTimeline = frozenTimelineRef.current ?? { start: hlsWindowStart, end: hlsLiveEdge };
+      const curSpan = Math.max(0.1, curTimeline.end - curTimeline.start);
+      const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả chuột: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
       // Tự động phát tiếp mượt mà nếu trước khi kéo đang phát
@@ -1283,10 +1301,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     dragRatioRef.current = initialRatio;
     setDragRatio(initialRatio);
 
+    const wasLive = isLiveRef.current;
     liveVideoRef.current?.pause();
     const video = replayVideoRef.current;
     if (video) {
-      wasPlayingBeforeDragRef.current = !video.paused;
+      wasPlayingBeforeDragRef.current = wasLive ? true : !video.paused;
       video.pause();
       setIsPlaying(false);
     }
@@ -1294,14 +1313,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (isLiveRef.current) {
       isLiveRef.current = false;
       setIsLive(false);
-      setFrozenTimeline({
+      updateFrozenTimeline({
         start: hlsWindowStart,
         end: hlsLiveEdge
       });
     }
 
-    const span = Math.max(0.1, timelineEnd - timelineStart);
-    const targetTime = timelineStart + initialRatio * span;
+    const activeTimeline = frozenTimelineRef.current ?? { start: hlsWindowStart, end: hlsLiveEdge };
+    const span = Math.max(0.1, activeTimeline.end - activeTimeline.start);
+    const targetTime = activeTimeline.start + initialRatio * span;
     performScrub(targetTime, false);
 
     const onTouchMove = (mv: TouchEvent) => {
@@ -1309,8 +1329,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const r = getSeekRatio(mv.touches[0].clientX);
       dragRatioRef.current = r;
       setDragRatio(r);
-      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
-      const curTargetTime = timelineStart + r * curSpan;
+      const curTimeline = frozenTimelineRef.current ?? { start: hlsWindowStart, end: hlsLiveEdge };
+      const curSpan = Math.max(0.1, curTimeline.end - curTimeline.start);
+      const curTargetTime = curTimeline.start + r * curSpan;
       performScrub(curTargetTime, false);
     };
 
@@ -1323,8 +1344,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('touchend', onTouchEnd);
 
-      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
-      const finalTime = timelineStart + finalRatio * curSpan;
+      const curTimeline = frozenTimelineRef.current ?? { start: hlsWindowStart, end: hlsLiveEdge };
+      const curSpan = Math.max(0.1, curTimeline.end - curTimeline.start);
+      const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả tay: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
       // Tự động phát tiếp mượt mà nếu trước khi kéo đang phát
