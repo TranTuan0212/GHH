@@ -61,7 +61,9 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
   };
 
   db.createStreamSession(newStream);
-  db.clearCardEntries(roomId);
+  // KHÔNG tự xóa cardEntries khi start live — người dùng phải xóa thủ công.
+  // Trước đây clear ở đây làm mất toàn bộ dữ liệu bài mỗi lần bắt đầu live.
+  // db.clearCardEntries(roomId);
 
   if (globalIo) {
     globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
