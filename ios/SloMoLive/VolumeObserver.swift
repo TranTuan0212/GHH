@@ -56,15 +56,6 @@ public class VolumeObserver: NSObject, ObservableObject {
         }
     }
 
-    /// Gắn MPVolumeView vào UIView hiện tại để đảm bảo luôn ở trong KeyWindow đang hiển thị
-    public func attachToView(_ parentView: UIView) {
-        DispatchQueue.main.async {
-            guard let v = self.volumeView else { return }
-            v.removeFromSuperview()
-            parentView.addSubview(v)
-        }
-    }
-
     private func registerNotifications() {
         NotificationCenter.default.addObserver(
             self,

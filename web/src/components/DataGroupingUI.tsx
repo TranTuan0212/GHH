@@ -574,11 +574,11 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       // 1. Chia vòng tuần tự chuẩn như cũ: KHÔNG truyền targetGroup để các lá bài được chia đều vào từng nhóm 1, 2, 3...
       const check = isValidCardValue(rawManual);
       if (!check.isValid) {
-        setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+        setValidationError(check.error || 'Giá trị không hợp lệ!');
         return;
       }
       onAddCard(check.normalizedRank, numGroups);
-      showToast(`✨ Đã chia vòng lá "${check.normalizedRank}"`);
+      showToast(`✨ Đã ghi nhận mã "${check.normalizedRank}"`);
       setManualInput('');
       return;
     }
@@ -593,20 +593,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       const rawVal = groupBotInputs[gNum].trim();
       const check = isValidCardValue(rawVal);
       if (!check.isValid) {
-        setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+        setValidationError(check.error || 'Giá trị không hợp lệ!');
         return;
       }
       onAddCard(check.normalizedRank, numGroups, gNum);
       const gName = groupNames[gNum] || `Nhóm ${gNum}`;
-      showToast(`✨ Đã chia lá "${check.normalizedRank}" vào ${gName}`);
+      showToast(`✨ Đã thêm "${check.normalizedRank}" vào ${gName}`);
       setGroupBotInputs((prev) => ({ ...prev, [gNum]: '' }));
       return;
     }
 
-    setValidationError('Vui lòng nhập giá trị lá bài trước khi chia!');
+    setValidationError('Vui lòng nhập giá trị trước khi ghi nhận!');
   };
 
-  // Thao tác Chia / Bọt riêng cho từng nhóm
+  // Thao tác Thêm riêng cho từng nhóm
   const handleBotSubmit = (groupNum: number) => {
     const raw = (groupBotInputs[groupNum] || '').trim() || manualInput.trim();
     const gName = groupNames[groupNum] || `Nhóm ${groupNum}`;
@@ -615,28 +615,28 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     const isBot = allItemsInGroup.length >= minSlots;
 
     if (!raw) {
-      setValidationError(`Vui lòng nhập giá trị lá bài để ${isBot ? 'bọt' : 'chia'} vào ${gName}!`);
+      setValidationError(`Vui lòng nhập giá trị vào ${gName}!`);
       return;
     }
     const check = isValidCardValue(raw);
     if (!check.isValid) {
-      setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+      setValidationError(check.error || 'Giá trị không hợp lệ!');
       return;
     }
     onAddCard(check.normalizedRank, numGroups, groupNum);
-    showToast(`${isBot ? '+' : '✨'} Đã ${isBot ? 'bọt' : 'chia'} lá "${check.normalizedRank}" vào ${gName}`);
+    showToast(`✨ Đã thêm "${check.normalizedRank}" vào ${gName}`);
     setGroupBotInputs((prev) => ({ ...prev, [groupNum]: '' }));
     if (raw === manualInput.trim()) {
       setManualInput('');
     }
   };
 
-  // Toggle trạng thái Dằn bài của nhóm
+  // Toggle trạng thái Khóa của nhóm
   const toggleDanGroup = (groupNum: number) => {
     const nextState = !danGroups[groupNum];
     setDanGroups((prev) => ({ ...prev, [groupNum]: nextState }));
     const gName = groupNames[groupNum] || `Nhóm ${groupNum}`;
-    showToast(nextState ? `🛡️ ${gName} đã DẰN bài` : `🔓 ${gName} hủy dằn bài`);
+    showToast(nextState ? `🛡️ ${gName} đã KHÓA` : `🔓 ${gName} mở khóa`);
   };
 
   // Bắt đầu sửa tên nhóm
@@ -880,10 +880,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             setIsCardPickerOpen(true);
           }}
           className="px-2.5 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1 shadow transition-all active:scale-95 flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/40"
-          title="Mở bảng chọn mã ký tự (A-K)"
+          title="Mở bảng chọn số (1-13)"
         >
           <LayoutGrid className="w-3.5 h-3.5 text-amber-300" />
-          <span>Bảng Mã</span>
+          <span>Bảng Số</span>
         </button>
 
         <div className="flex-1 flex items-center space-x-1.5 pl-1.5 min-w-0">
@@ -891,7 +891,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             type="text"
             value={manualInput}
             onChange={(e) => setManualInput(e.target.value)}
-            placeholder="Hoặc gõ phím: 8, 9, K, A, 10..."
+            placeholder="Hoặc gõ số: 1, 2, 8, 9, 10, 11, 12, 13..."
             className="w-full bg-transparent text-white font-mono text-xs focus:outline-none placeholder:text-slate-500 truncate"
           />
         </div>
@@ -911,7 +911,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           <span className="px-1.5 py-0.5 rounded font-bold border text-[10px] sm:text-[11px] flex items-center space-x-1 bg-indigo-600/40 text-indigo-200 border-indigo-500/40">
             <span>N{nextGroupIndex}</span>
             <span className="text-[9px] font-normal opacity-90">
-              (Lá {targetGroupAll.length + 1}/{maxInitialCards})
+              (Mục {targetGroupAll.length + 1}/{maxInitialCards})
             </span>
           </span>
         </div>
@@ -1147,7 +1147,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                         handleBotSubmit(groupNum);
                       }
                     }}
-                    placeholder="8, 9, K, A..."
+                    placeholder="8, 9, 10, 11..."
                     className="w-full bg-transparent text-white font-mono text-xs focus:outline-none min-w-0 placeholder:text-slate-600"
                   />
                 </div>
@@ -1202,7 +1202,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <div className="flex items-center space-x-2">
                 <Edit2 className="w-4 h-4 text-amber-400" />
-                <h3 className="font-bold text-sm text-white">Sửa / Xóa Lá Bài</h3>
+                <h3 className="font-bold text-sm text-white">Sửa / Xóa Mục Dữ Liệu</h3>
               </div>
               <button
                 type="button"
@@ -1215,7 +1215,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
             <div className="space-y-2">
               <p className="text-xs text-slate-300">
-                Lá bài hiện tại: <strong className="text-amber-300 font-mono text-sm">{selectedCardForEdit.cardValue}</strong> (Nhóm {selectedCardForEdit.groupIndex}, Lượt #{selectedCardForEdit.sequenceOrder})
+                Mục hiện tại: <strong className="text-amber-300 font-mono text-sm">{selectedCardForEdit.cardValue}</strong> (Nhóm {selectedCardForEdit.groupIndex}, Lượt #{selectedCardForEdit.sequenceOrder})
               </p>
 
               <div>
@@ -1231,13 +1231,13 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   }}
                   autoFocus
                   className="w-full bg-slate-950 text-white font-mono text-sm px-3 py-2 rounded-xl border border-white/20 focus:outline-none focus:border-amber-400"
-                  placeholder="A, 2, 3, 10, J, Q, K..."
+                  placeholder="1, 2, 3, 10, 11, 12, 13, 0..."
                 />
               </div>
 
               {/* Quick Select Buttons */}
               <div className="flex flex-wrap gap-1 pt-1">
-                {['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].map((c) => (
+                {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '0'].map((c) => (
                   <button
                     key={c}
                     type="button"
@@ -1248,7 +1248,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                         : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                     }`}
                   >
-                    {c}
+                    {c === '0' ? '0 (Không thấy)' : c}
                   </button>
                 ))}
               </div>
@@ -1261,7 +1261,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 className="px-3 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 text-xs font-bold flex items-center space-x-1 transition-all"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa Lá Này</span>
+                <span>Xóa Mục Này</span>
               </button>
 
               <div className="flex items-center space-x-1.5">
@@ -1339,7 +1339,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               <AlertTriangle className="w-7 h-7" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white tracking-wide">Lá Bài Không Hợp Lệ</h3>
+              <h3 className="text-base font-bold text-white tracking-wide">Dữ Liệu Không Hợp Lệ</h3>
               <p className="text-xs text-red-300 mt-1.5 font-medium leading-relaxed bg-red-950/40 border border-red-500/20 p-2.5 rounded-xl">
                 {validationError}
               </p>
@@ -1347,15 +1347,15 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <div className="bg-slate-950/90 p-3 rounded-xl border border-white/10 text-xs text-slate-300 space-y-2 text-left">
               <p className="font-bold text-amber-300 flex items-center space-x-1">
                 <span>💡</span>
-                <span>Các lá bài hợp lệ bao gồm:</span>
+                <span>Các số hợp lệ bao gồm (1 ➔ 13 | 0: Không thấy):</span>
               </p>
               <div className="flex flex-wrap gap-1.5 font-mono font-black text-xs">
-                {['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].map((c) => (
+                {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '0'].map((c) => (
                   <span
                     key={c}
                     className="px-2 py-0.5 bg-slate-800 rounded-md border border-amber-400/30 text-amber-300 shadow-sm"
                   >
-                    {c}
+                    {c === '0' ? '0 (Không thấy)' : c}
                   </span>
                 ))}
               </div>

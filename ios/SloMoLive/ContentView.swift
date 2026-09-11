@@ -377,15 +377,7 @@ struct ContentView: View {
                 }
             }
             VolumeObserver.shared.resetVolumeSliderToMid()
-        }
-        // Vuốt từ dưới lên ra Home Screen hoặc Khóa máy -> Thoát hẳn app
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            print("[ContentView] App vào background (vuốt ra home / khóa máy) -> Thoát app ngay lập tức!")
-            exit(0)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
-            print("[ContentView] Khóa máy -> Thoát app ngay lập tức!")
-            exit(0)
+            enableSystemGestureDeferral()
         }
     }
 
@@ -448,30 +440,18 @@ final class BlackScreenManager {
     }
 }
 
-/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng & vuốt từ dưới lên thoát app
+/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng, hoãn cử chỉ vuốt đáy
 private class BlackViewController: UIViewController {
     override var prefersStatusBarHidden: Bool { true }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .none }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.bottom, .all] }
     override var canBecomeFirstResponder: Bool { true }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
         becomeFirstResponder()
-
-        // Gắn MPVolumeView vào màn hình đen để bắt phím âm lượng và ẩn volume HUD
-        VolumeObserver.shared.attachToView(view)
-
-        // Vuốt từ dưới lên là out app
-        let swipeUp = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeUp))
-        swipeUp.direction = .up
-        view.addGestureRecognizer(swipeUp)
-    }
-
-    @objc private func handleSwipeUp() {
-        print("[BlackViewController] Người dùng vuốt từ dưới lên -> Thoát app ngay lập tức!")
-        exit(0)
     }
 }
 
@@ -551,5 +531,40 @@ struct NetworkStatusBanner: View {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
+    }
+}
+
+// MARK: - Chống vuốt đáy thoát app (Defer system gestures on bottom & all edges)
+private var didSwizzleSystemGestures = false
+
+func enableSystemGestureDeferral() {
+    guard !didSwizzleSystemGestures else { return }
+    didSwizzleSystemGestures = true
+
+    let originalSelector = #selector(getter: UIViewController.preferredScreenEdgesDeferringSystemGestures)
+    let swizzledSelector = #selector(UIViewController.swizzled_preferredScreenEdgesDeferringSystemGestures)
+
+    if let originalMethod = class_getInstanceMethod(UIViewController.self, originalSelector),
+       let swizzledMethod = class_getInstanceMethod(UIViewController.self, swizzledSelector) {
+        method_exchangeImplementations(originalMethod, swizzledMethod)
+    }
+
+    let originalHomeSelector = #selector(getter: UIViewController.prefersHomeIndicatorAutoHidden)
+    let swizzledHomeSelector = #selector(UIViewController.swizzled_prefersHomeIndicatorAutoHidden)
+
+    if let originalHomeMethod = class_getInstanceMethod(UIViewController.self, originalHomeSelector),
+       let swizzledHomeMethod = class_getInstanceMethod(UIViewController.self, swizzledHomeSelector) {
+        method_exchangeImplementations(originalHomeMethod, swizzledHomeMethod)
+    }
+    print("[ContentView] Đã kích hoạt hoãn cử chỉ vuốt đáy (chống vuốt thoát app)")
+}
+
+extension UIViewController {
+    @objc func swizzled_preferredScreenEdgesDeferringSystemGestures() -> UIRectEdge {
+        return [.bottom, .all]
+    }
+
+    @objc func swizzled_prefersHomeIndicatorAutoHidden() -> Bool {
+        return true
     }
 }
