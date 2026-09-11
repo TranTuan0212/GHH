@@ -34,7 +34,7 @@ interface CardPickerPopupProps {
 }
 
 const CARDS = [
-  { rank: 'A', label: 'A', color: 'text-red-400', border: 'border-red-500/40 hover:border-red-400', bg: 'bg-gradient-to-b from-red-950/60 to-slate-900' },
+  { rank: '1', label: '1', color: 'text-sky-300', border: 'border-sky-500/40 hover:border-sky-300', bg: 'bg-gradient-to-b from-sky-950/60 to-slate-900' },
   { rank: '2', label: '2', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
   { rank: '3', label: '3', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
   { rank: '4', label: '4', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
@@ -44,9 +44,10 @@ const CARDS = [
   { rank: '8', label: '8', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
   { rank: '9', label: '9', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
   { rank: '10', label: '10', color: 'text-amber-300', border: 'border-amber-500/30 hover:border-amber-400', bg: 'bg-gradient-to-b from-amber-950/40 to-slate-900' },
-  { rank: 'J', label: 'J', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
-  { rank: 'Q', label: 'Q', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
-  { rank: 'K', label: 'K', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
+  { rank: '11', label: '11', color: 'text-amber-300', border: 'border-amber-500/40 hover:border-amber-300', bg: 'bg-gradient-to-b from-amber-950/50 to-slate-900' },
+  { rank: '12', label: '12', color: 'text-amber-300', border: 'border-amber-500/40 hover:border-amber-300', bg: 'bg-gradient-to-b from-amber-950/50 to-slate-900' },
+  { rank: '13', label: '13', color: 'text-amber-300', border: 'border-amber-500/40 hover:border-amber-300', bg: 'bg-gradient-to-b from-amber-950/50 to-slate-900' },
+  { rank: '0', label: '0', sublabel: 'Không thấy', color: 'text-orange-400', border: 'border-orange-500/40 hover:border-orange-300', bg: 'bg-gradient-to-b from-orange-950/60 to-slate-900' },
 ];
 
 export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
@@ -212,9 +213,9 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     onSelectCard(cardVal, target.groupNum, target.cardId);
   };
 
-  // Khi bấm chọn "Không thấy"
+  // Khi bấm chọn "0 Không thấy"
   const handleUnknownClick = () => {
-    onSelectCard('Không thấy', target.groupNum, target.cardId);
+    onSelectCard('0', target.groupNum, target.cardId);
   };
 
   // Kéo dãn kích thước popup (góc phải dưới)
@@ -283,7 +284,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
           <Move className="w-4 h-4 text-amber-400 flex-shrink-0 animate-bounce" />
           <div className="flex items-center space-x-1.5 truncate">
             <span className="text-xs font-black tracking-wide text-amber-300 uppercase">
-              {target.mode === 'edit' ? 'Sửa Ký Tự' : 'Bảng Mã (A ➔ K)'}
+              {target.mode === 'edit' ? 'Sửa Mã Số' : 'Bảng Số (1 ➔ 13 | 0: Không thấy)'}
             </span>
             <span className="text-slate-400 text-xs">•</span>
             <span className="text-xs font-bold text-white truncate">
@@ -357,17 +358,17 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             </div>
           </div>
 
-          {/* Quick Action: Nút "MÃ KHÔNG RÕ (N/A)" & Xóa mục */}
+          {/* Quick Action: Nút "0 • KHÔNG THẤY (N/A)" & Xóa mục */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {/* Nút KHÔNG RÕ MÃ to nổi bật */}
             <button
               type="button"
               onClick={handleUnknownClick}
               className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-500 hover:from-amber-500 hover:to-yellow-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-lg shadow-amber-500/30 transition-all active:scale-95 border border-amber-300"
-              title="Gán trạng thái [Không rõ / Bỏ qua] vào nhóm khi camera bị che khuất hoặc không rõ đối tượng"
+              title="Gán trạng thái [0 • Không thấy / Bỏ qua] vào nhóm"
             >
               <EyeOff className="w-4 h-4 text-slate-950" />
-              <span>⚠️ MÃ KHÔNG RÕ (N/A)</span>
+              <span>⚠️ 0 • KHÔNG THẤY (N/A)</span>
             </button>
 
             {/* Nếu đang sửa: hiển thị nút Xóa mục này */}
@@ -386,14 +387,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               </button>
             ) : (
               <div className="hidden sm:flex items-center justify-center text-[11px] text-slate-400 italic px-2 bg-slate-950/40 rounded-xl border border-white/5">
-                Chọn 1 mã bên dưới để gán ngay
+                Bấm số 1-13 hoặc 0 bên dưới để gán ngay
               </div>
             )}
           </div>
 
-          {/* Bảng Ký Tự Từ A -> K: Khung to, rõ ràng, cực kỳ dễ nhìn và dễ bấm */}
+          {/* Bảng Số từ 1 -> 13 và 0 không thấy: 7 cột x 2 hàng, khung to, rõ ràng, cực kỳ dễ nhìn và dễ bấm */}
           <div className="bg-slate-950/80 p-2 sm:p-2.5 rounded-xl border border-white/10 shadow-inner">
-            <div className="grid grid-cols-7 sm:grid-cols-13 gap-1.5 sm:gap-1">
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
               {CARDS.map((card) => {
                 const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
                 return (
@@ -408,12 +409,19 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                         ? 'ring-2 ring-amber-400 border-amber-400 scale-105 z-10 shadow-amber-500/30'
                         : 'hover:scale-105 hover:border-amber-400/60'
                     }`}
-                    title={`Chọn mã ${card.rank}`}
+                    title={card.rank === '0' ? 'Mã 0: Không thấy' : `Chọn số ${card.rank}`}
                   >
-                    {/* Chữ to rõ ràng */}
+                    {/* Số to rõ ràng */}
                     <span className={`text-xl sm:text-2xl leading-none font-black tracking-tighter ${card.color} drop-shadow-md`}>
                       {card.rank}
                     </span>
+
+                    {/* Sublabel nếu có (ví dụ 'Không thấy' cho số 0) */}
+                    {card.sublabel && (
+                      <span className="text-[9px] sm:text-[10px] text-orange-300 font-bold leading-none mt-1">
+                        {card.sublabel}
+                      </span>
+                    )}
 
                     {/* Hiệu ứng ánh sáng khi hover */}
                     <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
