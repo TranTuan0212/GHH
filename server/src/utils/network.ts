@@ -58,13 +58,15 @@ export function resolveRtmpHostForClient(req: Pick<Request, 'headers'>): { rtmpH
   }
 
   const primaryIp = getPrimaryIp();
-  if (hostHeader === primaryIp) {
-    console.log(`[Network] Host header là IP LAN (${primaryIp}), trả lại cho RTMP.`);
-    return { rtmpHost: primaryIp, rtmpPort: 1935 };
+  if (hostHeader === primaryIp || hostHeader === 'localhost' || hostHeader === '127.0.0.1') {
+    console.log(`[Network] Host header là IP LAN/Localhost (${hostHeader}), trả lại cho RTMP.`);
+    return { rtmpHost: hostHeader, rtmpPort: 1935 };
   }
 
-  console.warn(`[Network] ⚠️ Fallback về IP LAN (${primaryIp}) dù Host header là "${hostHeader}". Nếu client ở xa (5G/mạng khác), RTMP có thể không kết nối được — cần điền RTMP Host Override.`);
-  return { rtmpHost: primaryIp, rtmpPort: 1935 };
+  // Khi người dùng kết nối qua Tên miền (Domain) hoặc IP Public của VPS:
+  // Dùng chính tên miền / IP đó cho đường truyền RTMP từ iPhone vào port 1935
+  console.log(`[Network] Host header là tên miền / IP ngoài (${hostHeader}), dùng cho RTMP.`);
+  return { rtmpHost: hostHeader, rtmpPort: overridePort || 1935 };
 }
 
 /**
