@@ -22,6 +22,21 @@ export const App: React.FC = () => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [currentRoomId, setCurrentRoomId] = useState<string>('');
 
+  // Chế độ bố cục giao diện: 'horizontal' (Khuyên dùng: Player trên, Bảng nhóm full hàng ngang dưới) hoặc 'split' (Chia cột 7/5)
+  const [layoutMode, setLayoutMode] = useState<'horizontal' | 'split'>(() => {
+    try {
+      return (localStorage.getItem('app_layout_mode') as any) || 'horizontal';
+    } catch {
+      return 'horizontal';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('app_layout_mode', layoutMode);
+    } catch {}
+  }, [layoutMode]);
+
   // Set initial currentRoomId when user logs in
   useEffect(() => {
     if (user) {
@@ -310,35 +325,99 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3.5 items-start">
-              {/* Left Column: Custom Live Slow-Mo 240fps Player */}
-              <div className="lg:col-span-7 space-y-2.5">
-                <LivePlayer
-                  stream={activeStream}
-                  socket={socket}
-                  roomId={currentRoomId}
-                  roomName={activeRoomName}
-                  onFinishRound={handleFinishRound}
-                />
-              </div>
-
-              {/* Right Column: Auto Round-Robin Data Grouping System */}
-              <div className="lg:col-span-5 space-y-2.5">
-                <DataGroupingUI
-                  entries={cardEntries}
-                  roomId={currentRoomId}
-                  roomName={activeRoomName}
-                  groupNames={groupNames}
-                  onAddCard={handleAddCard}
-                  onClearCards={handleClearCards}
-                  onUndoCard={handleUndoCard}
-                  onFinishRound={handleFinishRound}
-                  onEditCard={handleEditCard}
-                  onDeleteCard={handleDeleteCard}
-                  onSetGroupNames={handleSetGroupNames}
-                />
+            {/* Thanh chuyển đổi bố cục giao diện: Hàng Ngang / Chia Cột */}
+            <div className="flex items-center justify-between bg-slate-900/80 px-3 py-1.5 rounded-xl border border-white/10 text-xs">
+              <span className="text-slate-400 font-bold text-[11px] flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span>Bố cục hiển thị:</span>
+              </span>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={() => setLayoutMode('horizontal')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${
+                    layoutMode === 'horizontal'
+                      ? 'bg-amber-400 text-slate-950 shadow-md font-black ring-1 ring-amber-300'
+                      : 'bg-slate-800 text-slate-300 hover:text-white'
+                  }`}
+                  title="Player ở trên, Bảng nhóm dàn rộng toàn bộ hàng ngang ở dưới (Khuyên dùng)"
+                >
+                  <span>↔ Hàng Ngang (Khuyên dùng)</span>
+                </button>
+                <button
+                  onClick={() => setLayoutMode('split')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${
+                    layoutMode === 'split'
+                      ? 'bg-indigo-600 text-white shadow-md font-black ring-1 ring-indigo-400'
+                      : 'bg-slate-800 text-slate-300 hover:text-white'
+                  }`}
+                  title="Player bên trái, Bảng nhóm bên phải"
+                >
+                  <span>◫ Chia Cột (7/5)</span>
+                </button>
               </div>
             </div>
+
+            {layoutMode === 'horizontal' ? (
+              <div className="space-y-2.5">
+                {/* 1. Player ở trên, căn giữa gọn gàng */}
+                <div className="w-full max-w-4xl mx-auto space-y-2">
+                  <LivePlayer
+                    stream={activeStream}
+                    socket={socket}
+                    roomId={currentRoomId}
+                    roomName={activeRoomName}
+                    onFinishRound={handleFinishRound}
+                  />
+                </div>
+
+                {/* 2. Bảng nhóm dàn rộng 100% toàn màn hình hàng ngang ở dưới */}
+                <div className="w-full">
+                  <DataGroupingUI
+                    entries={cardEntries}
+                    roomId={currentRoomId}
+                    roomName={activeRoomName}
+                    groupNames={groupNames}
+                    onAddCard={handleAddCard}
+                    onClearCards={handleClearCards}
+                    onUndoCard={handleUndoCard}
+                    onFinishRound={handleFinishRound}
+                    onEditCard={handleEditCard}
+                    onDeleteCard={handleDeleteCard}
+                    onSetGroupNames={handleSetGroupNames}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3.5 items-start">
+                {/* Left Column: Custom Live Slow-Mo 240fps Player */}
+                <div className="lg:col-span-7 space-y-2.5">
+                  <LivePlayer
+                    stream={activeStream}
+                    socket={socket}
+                    roomId={currentRoomId}
+                    roomName={activeRoomName}
+                    onFinishRound={handleFinishRound}
+                  />
+                </div>
+
+                {/* Right Column: Auto Round-Robin Data Grouping System */}
+                <div className="lg:col-span-5 space-y-2.5">
+                  <DataGroupingUI
+                    entries={cardEntries}
+                    roomId={currentRoomId}
+                    roomName={activeRoomName}
+                    groupNames={groupNames}
+                    onAddCard={handleAddCard}
+                    onClearCards={handleClearCards}
+                    onUndoCard={handleUndoCard}
+                    onFinishRound={handleFinishRound}
+                    onEditCard={handleEditCard}
+                    onDeleteCard={handleDeleteCard}
+                    onSetGroupNames={handleSetGroupNames}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>

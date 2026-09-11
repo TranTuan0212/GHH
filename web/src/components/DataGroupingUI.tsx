@@ -18,7 +18,8 @@ import {
   Award,
   AlertTriangle,
   EyeOff,
-  LayoutGrid
+  LayoutGrid,
+  ArrowRightLeft
 } from 'lucide-react';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
@@ -507,6 +508,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // Chế độ bố cục các nhóm: 'horizontal' (Tất cả trên 1 hàng ngang) hoặc 'grid' (Dạng lưới nhiều hàng)
+  const [groupLayoutMode, setGroupLayoutMode] = useState<'horizontal' | 'grid'>('horizontal');
+
   // Floating Draggable Card Picker Popup (Popup nổi kéo thả 52 lá bài - mặc định luôn mở sẵn)
   const [isCardPickerOpen, setIsCardPickerOpen] = useState(true);
   const [cardPickerTarget, setCardPickerTarget] = useState<CardPickerTarget>({
@@ -775,6 +779,21 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <span>52 Lá</span>
           </button>
 
+          {/* Nút Chuyển đổi Bố Cục Hàng Ngang / Lưới */}
+          <button
+            type="button"
+            onClick={() => setGroupLayoutMode(groupLayoutMode === 'horizontal' ? 'grid' : 'horizontal')}
+            className={`px-2 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 border active:scale-95 shadow-sm ${
+              groupLayoutMode === 'horizontal'
+                ? 'bg-indigo-600 text-white border-indigo-400 ring-1 ring-indigo-400'
+                : 'bg-slate-800/90 text-slate-300 hover:text-white border-white/10'
+            }`}
+            title={groupLayoutMode === 'horizontal' ? 'Đang hiện Hàng Ngang (bấm để đổi sang Lưới)' : 'Đang hiện Lưới (bấm để đổi sang Hàng Ngang)'}
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            <span>{groupLayoutMode === 'horizontal' ? 'Hàng Ngang' : 'Dạng Lưới'}</span>
+          </button>
+
           {/* Undo Button */}
           {onUndoCard && entries.length > 0 && (
             <button
@@ -961,17 +980,21 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         })}
       </div>
 
-      {/* 5. Grouped Columns Display - Thiết kế cân đối, không bao giờ bị tràn hay lệch */}
+      {/* 5. Grouped Columns Display - Bố Cục Hàng Ngang (Khuyên dùng) hoặc Dạng Lưới */}
       <div
-        className={`grid ${
-          numGroups === 2
-            ? 'grid-cols-2'
-            : numGroups === 3
-            ? 'grid-cols-2 sm:grid-cols-3'
-            : numGroups === 4
-            ? 'grid-cols-2 sm:grid-cols-2 xl:grid-cols-4'
-            : 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4'
-        } gap-2 sm:gap-2.5`}
+        className={
+          groupLayoutMode === 'horizontal'
+            ? 'flex flex-row gap-2.5 overflow-x-auto pb-2 no-scrollbar'
+            : `grid ${
+                numGroups === 2
+                  ? 'grid-cols-2'
+                  : numGroups === 3
+                  ? 'grid-cols-2 sm:grid-cols-3'
+                  : numGroups === 4
+                  ? 'grid-cols-2 sm:grid-cols-2 xl:grid-cols-4'
+                  : 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4'
+              } gap-2 sm:gap-2.5`
+        }
       >
         {Array.from({ length: numGroups }).map((_, idx) => {
           const groupNum = idx + 1;
@@ -999,6 +1022,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <div
               key={groupNum}
               className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden ${
+                groupLayoutMode === 'horizontal' ? 'flex-shrink-0 w-[230px] sm:w-[250px] md:w-[270px]' : ''
+              } ${
                 isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
@@ -1063,8 +1088,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   </span>
                 </div>
 
-                {/* List of Cards: Thẻ bài hiển thị đầy đủ, không rỗng */}
-                <div className="space-y-1.5 py-0.5 min-h-[64px]">
+                {/* List of Cards: Thẻ bài hiển thị theo HÀNG NGANG (Playing Card Style) */}
+                <div className="grid grid-flow-col auto-cols-fr gap-1.5 py-1 min-h-[66px]">
                   {Array.from({ length: slotCount }).map((_, slotIdx) => {
                     const item = allItemsInGroup[slotIdx];
                     if (item) {
@@ -1074,49 +1099,40 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                         <div
                           key={item.id || slotIdx}
                           onClick={() => handleOpenEditCardPicker(item, groupNum, slotIdx)}
-                          className="flex items-center justify-between px-2 py-1.5 rounded-xl bg-slate-800/90 border border-white/10 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm"
+                          className="flex flex-col items-center justify-between p-1.5 rounded-xl bg-slate-800/95 border border-white/10 hover:border-amber-400 hover:bg-slate-750 cursor-pointer transition-all text-xs group shadow-sm hover:scale-[1.03] active:scale-95"
                           title="Bấm vào lá bài để chọn lại hoặc xóa"
                         >
-                          <div className="flex items-center space-x-1.5 min-w-0">
-                            <span className="text-[10px] font-mono text-slate-400 w-4">
-                              L{slotIdx + 1}
-                            </span>
-
-                            {isUnknown ? (
-                              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center space-x-1">
-                                <EyeOff className="w-3 h-3 text-amber-400" />
-                                <span>Không thấy</span>
-                              </span>
-                            ) : (
-                              <span
-                                className={`font-black font-mono text-sm tracking-wide truncate group-hover:text-amber-300 ${
-                                  item.cardValue.includes('♥')
-                                    ? 'text-red-500'
-                                    : item.cardValue.includes('♦')
-                                    ? 'text-orange-400'
-                                    : item.cardValue.includes('♣')
-                                    ? 'text-emerald-400'
-                                    : item.cardValue.includes('♠')
-                                    ? 'text-indigo-300'
-                                    : 'text-white'
-                                }`}
-                              >
-                                {item.cardValue}
-                              </span>
-                            )}
-
-                            <span className="text-[9px] font-mono text-slate-500">
-                              #{item.sequenceOrder}
-                            </span>
+                          <div className="flex items-center justify-between w-full text-[9px] font-mono text-slate-400 leading-none">
+                            <span>L{slotIdx + 1}</span>
+                            {p.value > 0 && <span className="text-amber-300 font-bold">+{p.value}</span>}
                           </div>
 
-                          <div className="flex items-center space-x-1 flex-shrink-0">
-                            {p.value > 0 && (
-                              <span className="text-[10px] font-mono font-bold text-amber-300 px-1.5 py-0.2 rounded bg-slate-900 border border-white/5">
-                                +{p.value}
-                              </span>
-                            )}
-                            <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          {isUnknown ? (
+                            <div className="my-1 px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold text-xs flex items-center space-x-0.5 border border-amber-500/30">
+                              <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                              <span className="text-[10px]">Ẩn</span>
+                            </div>
+                          ) : (
+                            <div
+                              className={`font-black font-mono text-base sm:text-lg leading-tight tracking-tight my-0.5 truncate group-hover:scale-110 transition-transform ${
+                                item.cardValue.includes('♥')
+                                  ? 'text-red-500'
+                                  : item.cardValue.includes('♦')
+                                  ? 'text-orange-400'
+                                  : item.cardValue.includes('♣')
+                                  ? 'text-emerald-400'
+                                  : item.cardValue.includes('♠')
+                                  ? 'text-indigo-300'
+                                  : 'text-white'
+                              }`}
+                            >
+                              {item.cardValue}
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between w-full text-[8px] font-mono text-slate-500 leading-none">
+                            <span>#{item.sequenceOrder}</span>
+                            <Edit2 className="w-2.5 h-2.5 text-slate-500 group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
                       );
@@ -1125,10 +1141,12 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                         <div
                           key={`empty-${slotIdx}`}
                           onClick={() => handleOpenAddCardPicker(groupNum, slotIdx)}
-                          className="flex items-center justify-center py-2 rounded-xl border border-dashed border-white/10 hover:border-amber-400/50 hover:bg-slate-800/40 text-[11px] text-slate-500 hover:text-amber-300 font-mono select-none cursor-pointer transition-all"
+                          className="flex flex-col items-center justify-between p-1.5 rounded-xl border-2 border-dashed border-white/10 hover:border-amber-400/60 hover:bg-slate-800/50 text-[10px] text-slate-500 hover:text-amber-300 font-mono select-none cursor-pointer transition-all hover:scale-[1.02] active:scale-95"
                           title="Bấm để mở bảng 52 lá bài chọn cho ô này"
                         >
-                          + Lá {slotIdx + 1} (Bấm chọn)
+                          <span className="text-[9px] font-mono text-slate-500 leading-none">L{slotIdx + 1}</span>
+                          <Plus className="w-4 h-4 my-1 text-slate-500 group-hover:text-amber-300" />
+                          <span className="text-[9px] text-slate-500 group-hover:text-amber-300 leading-none">Chọn</span>
                         </div>
                       );
                     }
