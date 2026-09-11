@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Move,
@@ -8,7 +9,8 @@ import {
   RotateCcw,
   Sparkles,
   Trash2,
-  EyeOff
+  EyeOff,
+  Crosshair
 } from 'lucide-react';
 
 export interface CardPickerTarget {
@@ -51,13 +53,33 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   onChangeTargetGroup
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
+  
+  // Tính toán toạ độ an toàn trong viewport
+  const getDefaultPosition = () => {
+    if (typeof window === 'undefined') return { x: 20, y: 70 };
+    const winW = window.innerWidth;
+    if (winW < 640) {
+      return { x: 8, y: 50 };
+    }
+    // Góc trên bên phải màn hình
+    return { x: Math.max(16, winW - 570), y: 70 };
+  };
+
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = localStorage.getItem('card_picker_position');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+          const winW = typeof window !== 'undefined' ? window.innerWidth : 1200;
+          const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
+          if (parsed.x >= 0 && parsed.x < winW - 100 && parsed.y >= 0 && parsed.y < winH - 80) {
+            return parsed;
+          }
+        }
+      }
     } catch {}
-    // Mặc định ở góc phải trên
-    return { x: Math.max(20, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 560), y: 80 };
+    return getDefaultPosition();
   });
 
   const isDraggingRef = useRef(false);
@@ -74,6 +96,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
       localStorage.setItem('card_picker_position', JSON.stringify(position));
     } catch {}
   }, [position]);
+
+  const handleResetPosition = () => {
+    const def = getDefaultPosition();
+    setPosition(def);
+    try {
+      localStorage.removeItem('card_picker_position');
+    } catch {}
+  };
 
   if (!isOpen) return null;
 
@@ -151,43 +181,51 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     onSelectCard('Không thấy', target.groupNum, target.cardId);
   };
 
-  return (
+  const popupContent = (
     <div
       style={{
         position: 'fixed',
         left: `${position.x}px`,
         top: `${position.y}px`,
-        zIndex: 9999
+        zIndex: 999999
       }}
-      className="w-[94vw] sm:w-[540px] max-w-[560px] bg-slate-900/98 backdrop-blur-xl border-2 border-indigo-500/50 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden flex flex-col select-none animate-scaleIn"
+      className="w-[96vw] sm:w-[540px] max-w-[560px] bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
     >
       {/* 1. Header Bar: Cầm nắm kéo thả tự do */}
       <div
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
-        className="px-3 py-2 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950/80 border-b border-indigo-500/30 flex items-center justify-between cursor-move text-white"
-        title="Giữ chuột để kéo thả vị trí popup tùy thích"
+        className="px-3 py-2 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 border-b border-amber-500/30 flex items-center justify-between cursor-move text-white"
+        title="Giữ chuột để kéo thả vị trí bảng bài tùy thích"
       >
         <div className="flex items-center space-x-2 min-w-0 pointer-events-none">
-          <Move className="w-4 h-4 text-indigo-400 flex-shrink-0 animate-pulse" />
+          <Move className="w-4 h-4 text-amber-400 flex-shrink-0 animate-bounce" />
           <div className="flex items-center space-x-1.5 truncate">
             <span className="text-xs font-black tracking-wide text-amber-300 uppercase">
-              {target.mode === 'edit' ? 'Đổi Lá Bài' : 'Chia Bài 52 Lá'}
+              {target.mode === 'edit' ? 'Đổi Lá Bài' : 'Bảng 52 Lá Bài'}
             </span>
             <span className="text-slate-400 text-xs">•</span>
-            <span className="text-xs font-bold text-slate-200 truncate">
+            <span className="text-xs font-bold text-white truncate">
               {currentGroupName} {target.slotIndex !== undefined ? `(Lá ${target.slotIndex + 1})` : ''}
             </span>
             {target.mode === 'edit' && target.currentValue && (
               <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[10px] font-mono font-bold border border-amber-500/40">
-                Lá cũ: {target.currentValue}
+                Cũ: {target.currentValue}
               </span>
             )}
           </div>
         </div>
 
-        {/* Nút Thu nhỏ & Đóng */}
+        {/* Nút Đặt lại vị trí, Thu nhỏ & Đóng */}
         <div className="flex items-center space-x-1 flex-shrink-0">
+          <button
+            type="button"
+            onClick={handleResetPosition}
+            className="p-1 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition-colors"
+            title="Đặt lại vị trí mặc định"
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+          </button>
           <button
             type="button"
             onClick={() => setIsMinimized(!isMinimized)}
@@ -324,4 +362,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
       )}
     </div>
   );
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(popupContent, document.body);
 };

@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { DataEntry } from '../types';
 import {
   Trash2,
@@ -506,8 +507,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Floating Draggable Card Picker Popup (Popup nổi kéo thả 52 lá bài)
-  const [isCardPickerOpen, setIsCardPickerOpen] = useState(false);
+  // Floating Draggable Card Picker Popup (Popup nổi kéo thả 52 lá bài - mặc định luôn mở sẵn)
+  const [isCardPickerOpen, setIsCardPickerOpen] = useState(true);
   const [cardPickerTarget, setCardPickerTarget] = useState<CardPickerTarget>({
     mode: 'add',
     groupNum: 1
@@ -1403,6 +1404,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         onDeleteCard={onDeleteCard}
         onChangeTargetGroup={(gNum) => setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum }))}
       />
+
+      {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng 52 lá bất cứ khi nào */}
+      {!isCardPickerOpen && typeof document !== 'undefined' && createPortal(
+        <button
+          type="button"
+          onClick={() => setIsCardPickerOpen(true)}
+          className="fixed bottom-5 right-5 z-[99998] px-4 py-3 rounded-2xl bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-sm shadow-2xl shadow-amber-500/50 flex items-center space-x-2 border-2 border-amber-300 active:scale-95 transition-all cursor-pointer animate-pulse hover:animate-none"
+          title="Bấm vào đây để mở Bảng 52 Lá Bài Nổi Kéo Thả"
+        >
+          <LayoutGrid className="w-5 h-5 text-slate-950" />
+          <span>🃏 MỞ BẢNG 52 LÁ</span>
+        </button>,
+        document.body
+      )}
     </div>
   );
 };
