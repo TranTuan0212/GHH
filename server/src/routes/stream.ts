@@ -132,7 +132,7 @@ streamRouter.post('/gps', authMiddleware, (req: AuthRequest, res: Response) => {
 // GET /api/stream/active
 streamRouter.get('/active', (req, res) => {
   const targetRoomId = (req.query.roomId as string) || (req.query.userId as string);
-  const activeStream = db.getActiveStream(targetRoomId);
+  const activeStream = db.getLatestStream(targetRoomId);
   const latestGps = db.getLatestGpsLog(targetRoomId);
   const cardEntries = db.getCardEntries(targetRoomId);
 

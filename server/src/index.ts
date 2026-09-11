@@ -219,7 +219,7 @@ io.on('connection', (socket) => {
       socket.join('room_admin');
     }
 
-    const activeStream = db.getActiveStream(roomId);
+    const activeStream = db.getLatestStream(roomId);
     const latestGps = db.getLatestGpsLog(roomId);
     const cardEntries = db.getCardEntries(roomId);
     const ips = getLocalIpAddresses();

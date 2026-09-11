@@ -349,10 +349,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [socket, roomId, stream?.streamKey]);
 
+  // Khi phiên stream kết thúc hoặc được mở ở trạng thái ENDED:
+  // Tự động chuyển sang chế độ Replay để người dùng có thể xem lại toàn bộ video/DVR
+  useEffect(() => {
+    if (stream?.status === 'ENDED') {
+      isLiveRef.current = false;
+      setIsLive(false);
+    }
+  }, [stream?.status]);
+
   // WebRTC Live player (WHEP). Kết nối trực tiếp để xem trực tiếp siêu tốc độ (<0.2s)
+  // Chỉ kết nối khi luồng đang LIVE thực sự (tránh báo lỗi 404 WHEP khi app iPhone tắt/dừng live)
   useEffect(() => {
     const video = liveVideoRef.current;
-    if (!video || !whepUrl) return;
+    if (!video || !whepUrl || stream?.status === 'ENDED') return;
 
     let cancelled = false;
     let peer: RTCPeerConnection | null = null;
@@ -606,25 +616,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       const hls = new Hls({
         // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio):
-        // Giữ buffer lớn để khi tua lùi về quá khứ và phát tiếp không bị cạn buffer.
-        // Với slow motion 0.125x, buffer 120s video = 960s real-time phát → rất ổn định.
-        maxBufferLength: 120,          // Buffering 120s video ahead
-        maxMaxBufferLength: 300,       // Cho phép lên đến 5 phút buffer khi mạng cho phép
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
         maxBufferSize: 256 * 1024 * 1024, // 256MB RAM buffer cho 120fps source
-        backBufferLength: 300,         // Giữ 5 phút buffer lùi để tua qua lại tức thì
-        maxBufferHole: 2.0,            // Bỏ qua lỗ hổng lên đến 2 giây (common khi copy stream)
-        nudgeOffset: 0.5,              // Bước nhảy lớn hơn khi stuck (0.5s thay vì 0.15s)
-        nudgeMaxRetry: 30,             // Thử nhiều lần hơn trước khi báo lỗi
-        // Bật high buffer watchdog để tự kiểm tra buffer level mỗi giây
-        highBufferWatchdogPeriod: 2,
+        backBufferLength: 180, // Giữ 3 phút buffer lùi để tua qua lại tức thì
+        maxBufferHole: 0.4, // Ngưỡng nhỏ để không nhảy cóc frame
+        nudgeOffset: 0.05, // Nhích nhẹ (~6 frame) nếu kẹt buffer thay vì nhảy nửa giây
+        nudgeMaxRetry: 5,
+        // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
+        highBufferWatchdogPeriod: 0,
         liveSyncDuration: 3,
-        // QUAN TRỌNG: Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay.
-        // Nếu không, HLS.js sẽ tự seek về live edge khi currentTime lệch > 10s (liveMaxLatencyDurationCount mặc định).
-        // Đặt liveMaxLatencyDuration rất lớn (24h) để HLS.js không bao giờ tự nhảy về edge.
+        // Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay
         liveMaxLatencyDuration: 86400,
-        // QUAN TRỌNG: Không cho HLS.js tự tăng video.playbackRate để catch-up live edge.
-        // Mặc định maxLiveSyncPlaybackRate = 1.5, tức HLS.js có thể đặt playbackRate = 1.5
-        // khi phát lại — đây là lý do replay 1x thực tế chạy nhanh hơn tốc độ gốc.
+        // Không cho HLS.js tự tăng video.playbackRate để catch-up live edge
         maxLiveSyncPlaybackRate: 1,
         enableWorker: true,
         lowLatencyMode: false,
@@ -722,15 +726,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const onVideoEvent = (ev: Event) => {
         if (ev.type === 'loadedmetadata' && video.videoWidth > 0 && video.videoHeight > 0) {
           setSourceIsPortrait(video.videoHeight > video.videoWidth);
-        }
-
-        // Nếu HLS.js tự ý thay đổi playbackRate (để catch-up live edge) -> khôi phục ngay về tốc độ người dùng chọn
-        if (ev.type === 'ratechange' && !isLiveRef.current) {
-          const expectedRate = playbackRate;
-          if (Math.abs(video.playbackRate - expectedRate) > 0.05) {
-            console.warn(`[LivePlayer] HLS.js tự đặt playbackRate=${video.playbackRate} (kỳ vọng ${expectedRate}) → khôi phục lại.`);
-            video.playbackRate = expectedRate;
-          }
         }
 
         // Xử lý tự động cứu khi video bị khựng (stalled / waiting) trong chế độ xem lại
@@ -1021,9 +1016,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         scrubRafRef.current = null;
         const v = videoRef.current;
         if (!v || pendingScrubTimeRef.current === null) return;
-        const nextTime = pendingScrubTimeRef.current;
+        // Nếu trình duyệt đang bận seek frame trước đó, chờ onSeeked hoàn thành rồi mới seek mốc mới nhất
+        if (isSeekingRef.current) return;
 
-        // Luôn giải mã chính xác 100% từng điểm ảnh gốc (không dùng fastSeek gây nhòe mờ)
+        const nextTime = pendingScrubTimeRef.current;
+        isSeekingRef.current = true;
         v.currentTime = nextTime;
       });
     }

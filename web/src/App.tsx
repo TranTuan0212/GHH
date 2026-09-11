@@ -72,10 +72,10 @@ export const App: React.FC = () => {
     });
 
     newSocket.on('stream_status_changed', (data) => {
-      if (data.status === 'LIVE') {
+      // Khi stream bắt đầu hoặc kết thúc, luôn giữ lại data.session để người xem có thể
+      // tiếp tục xem lại (Replay/DVR) toàn bộ các frame vừa qua thay vì bị mất trắng màn hình.
+      if (data.session) {
         setActiveStream(data.session);
-      } else {
-        setActiveStream(null);
       }
     });
 

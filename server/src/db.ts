@@ -224,6 +224,15 @@ class Database {
     return this.data.streamSessions.find(s => s.status === 'LIVE');
   }
 
+  getLatestStream(userId?: string): StreamSession | undefined {
+    const list = userId
+      ? this.data.streamSessions.filter(s => s.userId === userId)
+      : this.data.streamSessions;
+    if (list.length === 0) return undefined;
+    // Ưu tiên luồng đang LIVE, nếu không còn LIVE thì trả về phiên vừa kết thúc gần nhất để xem lại DVR
+    return list.find(s => s.status === 'LIVE') || list[list.length - 1];
+  }
+
   createStreamSession(session: StreamSession): StreamSession {
     // Chỉ kết thúc luồng live cũ của chính user này
     this.data.streamSessions.forEach(s => {
