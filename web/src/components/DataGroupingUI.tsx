@@ -668,60 +668,60 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     setEditCardValue(card.cardValue);
   };
 
-  // Lưu sửa lá bài
+  // Lưu sửa mục dữ liệu
   const handleSaveEditCard = () => {
     if (!selectedCardForEdit || !onEditCard) return;
     const raw = editCardValue.trim();
     if (!raw) {
-      setValidationError('Vui lòng nhập giá trị mới cho lá bài!');
+      setValidationError('Vui lòng nhập giá trị mới!');
       return;
     }
     const check = isValidCardValue(raw);
     if (!check.isValid) {
-      setValidationError(check.error || 'Giá trị lá bài không hợp lệ!');
+      setValidationError(check.error || 'Giá trị không hợp lệ!');
       return;
     }
     onEditCard(selectedCardForEdit.id, check.normalizedRank);
-    showToast(`🃏 Đã sửa lá bài thành "${check.normalizedRank}"`);
+    showToast(`✏️ Đã sửa thành "${check.normalizedRank}"`);
     setSelectedCardForEdit(null);
   };
 
-  // Xóa lá bài
+  // Xóa mục dữ liệu
   const handleDeleteCurrentCard = () => {
     if (selectedCardForEdit && onDeleteCard) {
       onDeleteCard(selectedCardForEdit.id);
-      showToast(`🗑️ Đã xóa lá bài`);
+      showToast(`🗑️ Đã xóa mục`);
       setSelectedCardForEdit(null);
     }
   };
 
-  // Mở popup xác nhận xóa tất cả bài
+  // Mở popup xác nhận xóa tất cả dữ liệu
   const handleRequestClearCards = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Xóa Toàn Bộ Bài?',
-      message: 'Bạn có chắc chắn muốn xóa toàn bộ các lá bài hiện tại của phiên này không?',
+      title: 'Xóa Dữ Liệu Hiện Tại?',
+      message: 'Bạn có chắc chắn muốn xóa toàn bộ các mục dữ liệu đã phân nhóm không?',
       confirmText: 'Xác Nhận Xóa',
       confirmColor: 'red',
       onConfirm: () => {
         onClearCards();
-        showToast('🗑️ Đã xóa sạch toàn bộ bài');
+        showToast('🗑️ Đã xóa sạch dữ liệu');
         setConfirmModal(null);
       }
     });
   };
 
-  // Mở popup xác nhận kết thúc phiên
+  // Mở popup xác nhận kết thúc chu kỳ
   const handleRequestFinishRound = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Kết Thúc Phiên Chơi?',
-      message: 'Hệ thống sẽ làm mới bộ nhớ DVR video và xóa bài để sẵn sàng cho phiên mới.',
+      title: 'Hoàn Tất Chu Kỳ Dữ Liệu?',
+      message: 'Hệ thống sẽ lưu trữ và đặt lại chu kỳ dữ liệu mới.',
       confirmText: 'Xác Nhận Xong',
       confirmColor: 'emerald',
       onConfirm: () => {
         if (onFinishRound) onFinishRound();
-        showToast('🎉 Đã hoàn tất phiên chơi');
+        showToast('✅ Đã hoàn tất chu kỳ dữ liệu');
         setConfirmModal(null);
       }
     });
@@ -753,14 +753,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   : 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
               }`}
             >
-              {gameMode === '2cards' ? '2 Lá (Xì Lát)' : '3 Lá (Liêng/Sáp)'}
+              {gameMode === '2cards' ? 'Chế Độ 2 Mục (M2)' : 'Chế Độ 3 Mục (M3)'}
             </span>
           </div>
         </div>
 
-        {/* Action Buttons: 52 Lá Popup, Undo, Clear, Finish */}
+        {/* Action Buttons: Bảng Mã, Undo, Clear, Finish */}
         <div className="flex items-center space-x-1.5 flex-shrink-0">
-          {/* Nút Bật/Tắt Popup 52 Lá Bài Kéo Thả Tự Do */}
+          {/* Nút Bật/Tắt Popup Bảng Mã */}
           <button
             type="button"
             onClick={() => setIsCardPickerOpen(!isCardPickerOpen)}
@@ -769,10 +769,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 ? 'bg-amber-400 text-slate-950 border-amber-300 ring-1 ring-amber-400 shadow-amber-500/20'
                 : 'bg-slate-800/90 text-amber-300 hover:text-amber-200 border-amber-500/30 hover:bg-slate-750'
             }`}
-            title="Bật / Tắt Bảng 52 Lá Bài Kéo Thả Tự Do"
+            title="Bật / Tắt Bảng Nhập Mã Kéo Thả"
           >
             <LayoutGrid className="w-3.5 h-3.5" />
-            <span>52 Lá</span>
+            <span>Bảng Mã</span>
           </button>
 
           {/* Undo Button */}
@@ -780,10 +780,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <button
               onClick={() => {
                 onUndoCard();
-                showToast('↩️ Đã hoàn tác lá bài vừa chia');
+                showToast('↩️ Đã hoàn tác mục vừa nhập');
               }}
               className="p-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-amber-300 border border-white/10 text-xs font-medium transition-all active:scale-95"
-              title="Hoàn tác: Xóa lá bài vừa chia"
+              title="Hoàn tác: Xóa mục vừa nhập"
             >
               <Undo2 className="w-3.5 h-3.5" />
             </button>
@@ -794,7 +794,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             type="button"
             onClick={handleRequestClearCards}
             className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-medium transition-all active:scale-95"
-            title="Xóa toàn bộ danh sách hiện tại"
+            title="Xóa toàn bộ dữ liệu hiện tại"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -805,10 +805,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               type="button"
               onClick={handleRequestFinishRound}
               className="px-2 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold transition-all flex items-center space-x-1 active:scale-95"
-              title="Làm mới bộ nhớ và bắt đầu phiên mới"
+              title="Lưu trữ và bắt đầu chu kỳ dữ liệu mới"
             >
               <CheckCircle2 className="w-3 h-3" />
-              <span>Xong Phiên</span>
+              <span>Lưu Chu Kỳ</span>
             </button>
           )}
         </div>
@@ -828,7 +828,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             }`}
           >
             <Award className="w-3.5 h-3.5 text-indigo-300" />
-            <span>3 Lá (Liêng/Sáp)</span>
+            <span>Chế Độ 3 Mục (M3)</span>
           </button>
           <button
             type="button"
@@ -840,7 +840,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             }`}
           >
             <Flame className="w-3.5 h-3.5 text-amber-400" />
-            <span>2 Lá (Xì Lát)</span>
+            <span>Chế Độ 2 Mục (M2)</span>
           </button>
         </div>
 
@@ -877,7 +877,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         onSubmit={handleManualSubmit}
         className="flex items-center gap-1.5 p-1 sm:p-1.5 rounded-xl border bg-slate-900/90 border-indigo-500/25 shadow-inner transition-all"
       >
-        {/* Nút bật Popup 52 Lá trực quan */}
+        {/* Nút bật Popup Bảng Mã trực quan */}
         <button
           type="button"
           onClick={() => {
@@ -888,10 +888,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             setIsCardPickerOpen(true);
           }}
           className="px-2.5 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1 shadow transition-all active:scale-95 flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/40"
-          title="Mở bảng 52 lá bài để chọn nhanh"
+          title="Mở bảng chọn mã ký tự (A-K)"
         >
           <LayoutGrid className="w-3.5 h-3.5 text-amber-300" />
-          <span>Bảng 52 Lá</span>
+          <span>Bảng Mã</span>
         </button>
 
         <div className="flex-1 flex items-center space-x-1.5 pl-1.5 min-w-0">
@@ -909,8 +909,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           className="px-3 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1 shadow transition-all active:scale-95 flex-shrink-0 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white"
         >
           <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-          <span className="hidden xs:inline">Chia Vòng</span>
-          <span className="xs:hidden">Chia</span>
+          <span className="hidden xs:inline">Ghi Nhận</span>
+          <span className="xs:hidden">Ghi</span>
         </button>
 
         {/* Next Target Badge */}
@@ -1057,35 +1057,35 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     )}
                   </div>
 
-                  {/* Card count tag */}
+                  {/* Item count tag */}
                   <span className="text-[10px] font-mono px-1.5 py-0.2 rounded border bg-slate-800/90 text-slate-400 border-white/5 flex-shrink-0">
-                    {allItemsInGroup.length} lá
+                    {allItemsInGroup.length} mục
                   </span>
                 </div>
 
-                {/* List of Cards: Thẻ bài hiển thị đầy đủ, không rỗng */}
+                {/* List of Items: Mục hiển thị đầy đủ */}
                 <div className="space-y-1.5 py-0.5 min-h-[64px]">
                   {Array.from({ length: slotCount }).map((_, slotIdx) => {
                     const item = allItemsInGroup[slotIdx];
                     if (item) {
                       const p = parseCard(item.cardValue);
-                      const isUnknown = item.cardValue.includes('Không thấy') || item.cardValue === '?';
+                      const isUnknown = item.cardValue.includes('Không thấy') || item.cardValue.includes('Không rõ') || item.cardValue === '?';
                       return (
                         <div
                           key={item.id || slotIdx}
                           onClick={() => handleOpenEditCardPicker(item, groupNum, slotIdx)}
                           className="flex items-center justify-between px-2 py-1.5 rounded-xl bg-slate-800/90 border border-white/10 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm"
-                          title="Bấm vào lá bài để chọn lại hoặc xóa"
+                          title="Bấm vào mục để sửa hoặc xóa"
                         >
                           <div className="flex items-center space-x-1.5 min-w-0">
                             <span className="text-[10px] font-mono text-slate-400 w-4">
-                              L{slotIdx + 1}
+                              #{slotIdx + 1}
                             </span>
 
                             {isUnknown ? (
                               <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center space-x-1">
                                 <EyeOff className="w-3 h-3 text-amber-400" />
-                                <span>Không thấy</span>
+                                <span>Không rõ</span>
                               </span>
                             ) : (
                               <span
@@ -1126,9 +1126,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                           key={`empty-${slotIdx}`}
                           onClick={() => handleOpenAddCardPicker(groupNum, slotIdx)}
                           className="flex items-center justify-center py-2 rounded-xl border border-dashed border-white/10 hover:border-amber-400/50 hover:bg-slate-800/40 text-[11px] text-slate-500 hover:text-amber-300 font-mono select-none cursor-pointer transition-all"
-                          title="Bấm để mở bảng 52 lá bài chọn cho ô này"
+                          title="Bấm để mở bảng mã chọn cho ô này"
                         >
-                          + Lá {slotIdx + 1} (Bấm chọn)
+                          + Mục {slotIdx + 1} (Chọn)
                         </div>
                       );
                     }
@@ -1136,7 +1136,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 </div>
               </div>
 
-              {/* Action Bar riêng cho từng nhóm: Bố cục 2 hàng cực kỳ gọn gàng, không bao giờ tràn */}
+              {/* Action Bar riêng cho từng nhóm */}
               <div className="mt-2.5 pt-2 border-t border-white/10 space-y-1.5">
                 {/* Hàng 1: Ô Điền full-width */}
                 <div
@@ -1170,7 +1170,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   />
                 </div>
 
-                {/* Hàng 2: Hai nút cân đối 50-50 (+ Chia/Bọt & Dằn) */}
+                {/* Hàng 2: Hai nút cân đối 50-50 (+ Nhập/Thêm & Khóa) */}
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
@@ -1178,12 +1178,12 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     className="w-full py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center justify-center space-x-1 shadow-sm transition-all active:scale-95"
                     title={
                       allItemsInGroup.length < minSlots
-                        ? `Chia lá vào ${customName}`
-                        : `Rút thêm bài (Bọt) vào ${customName}`
+                        ? `Ghi nhận mục vào ${customName}`
+                        : `Thêm mục vào ${customName}`
                     }
                   >
                     <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                    <span>{allItemsInGroup.length < minSlots ? 'Chia' : 'Bọt'}</span>
+                    <span>{allItemsInGroup.length < minSlots ? 'Nhập' : '+ Thêm'}</span>
                   </button>
 
                   <button
@@ -1194,10 +1194,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                         ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30 font-black'
                         : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10'
                     }`}
-                    title="Đánh dấu nhóm này đã dằn (không rút thêm)"
+                    title="Khóa nhóm này (không nhận thêm mục mới)"
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>{isStoodPat ? 'Đã Dằn' : 'Dằn'}</span>
+                    <span>{isStoodPat ? 'Đã Khóa' : 'Khóa'}</span>
                   </button>
                 </div>
 
@@ -1405,16 +1405,16 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         onChangeTargetGroup={(gNum) => setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum }))}
       />
 
-      {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng 52 lá bất cứ khi nào */}
+      {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng mã bất cứ khi nào */}
       {!isCardPickerOpen && typeof document !== 'undefined' && createPortal(
         <button
           type="button"
           onClick={() => setIsCardPickerOpen(true)}
           className="fixed bottom-5 right-5 z-[99998] px-4 py-3 rounded-2xl bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-sm shadow-2xl shadow-amber-500/50 flex items-center space-x-2 border-2 border-amber-300 active:scale-95 transition-all cursor-pointer animate-pulse hover:animate-none"
-          title="Bấm vào đây để mở Bảng 52 Lá Bài Nổi Kéo Thả"
+          title="Bấm vào đây để mở Bảng Nhập Mã (A-K)"
         >
           <LayoutGrid className="w-5 h-5 text-slate-950" />
-          <span>🃏 MỞ BẢNG CHỌN BÀI (A-K)</span>
+          <span>⌨️ BẢNG NHẬP MÃ (A-K)</span>
         </button>,
         document.body
       )}

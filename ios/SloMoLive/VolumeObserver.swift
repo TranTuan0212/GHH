@@ -3,41 +3,39 @@ import AVFoundation
 import MediaPlayer
 import UIKit
 
-/// Lang nghe phim cung am luong (Volume Down x3) de mo man hinh nguy trang.
-/// - Su dung KVO tren AVAudioSession.outputVolume de bat su kien chinh xac.
-/// - Reset slider ve 0.5 ONLY sau khi da kich hoat triple-click hoac am luong sap cham dich (< 0.15 / > 0.85),
-///   khong reset giua chuoi dem tranh mat count.
+/// Lắng nghe phím cứng âm lượng:
+/// - Bấm GIẢM ÂM LƯỢNG 3 lần liên tục (trong 2s): Mở lại màn hình (bật sáng).
+/// - Bấm TĂNG ÂM LƯỢNG 3 lần liên tục (trong 2s): Tắt hẳn ứng dụng (exit(0)).
 public class VolumeObserver: NSObject, ObservableObject {
     public static let shared = VolumeObserver()
 
     private var volumeView: MPVolumeView?
     private weak var volumeSlider: UISlider?
     private var lastVolume: Float = 0.5
-    private var clickTimestamps: [Date] = []
-    private var kvoToken: NSKeyValueObservation?
-    private var isResetting = false  // guard: tranh vong lap khi reset slider
+    private var downClickTimestamps: [Date] = []
+    private var upClickTimestamps: [Date] = []
+    private var isResetting = false
 
     public var onTripleVolumeDown: (() -> Void)?
+    public var onTripleVolumeUp: (() -> Void)?
 
     private override init() {
         super.init()
         setupAudioSession()
         setupHiddenVolumeView()
-        startKVO()
+        registerNotifications()
     }
 
-    // MARK: - Audio Session
     private func setupAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .allowBluetooth])
             try AVAudioSession.sharedInstance().setActive(true)
             lastVolume = AVAudioSession.sharedInstance().outputVolume
         } catch {
-            print("[VolumeObserver] AVAudioSession error: \(error)")
+            print("[VolumeObserver] Lỗi kích hoạt AVAudioSession: \(error)")
         }
     }
 
-    // MARK: - Hidden MPVolumeView (an Volume HUD cua iOS)
     private func setupHiddenVolumeView() {
         DispatchQueue.main.async {
             let v = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
@@ -45,7 +43,6 @@ public class VolumeObserver: NSObject, ObservableObject {
             v.alpha = 0.001
             v.isUserInteractionEnabled = false
 
-            // Them vao window chinh
             if let window = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .flatMap({ $0.windows })
@@ -55,59 +52,74 @@ public class VolumeObserver: NSObject, ObservableObject {
 
             self.volumeView = v
             self.volumeSlider = v.subviews.first(where: { $0 is UISlider }) as? UISlider
-            // Set slider ve 0.5 khi khoi dong
             self.doResetSlider()
         }
     }
 
-    // MARK: - KVO theo doi outputVolume (chinh xac hon NSNotification)
-    private func startKVO() {
-        kvoToken = AVAudioSession.sharedInstance().observe(
-            \.outputVolume,
-            options: [.new, .old]
-        ) { [weak self] session, change in
-            guard let self = self else { return }
-            // Bo qua su kien do chinh ta reset slider
-            if self.isResetting { return }
+    private func registerNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(volumeChanged(notification:)),
+            name: NSNotification.Name("AVSystemController_SystemVolumeDidChangeNotification"),
+            object: nil
+        )
+    }
 
-            let newVol = session.outputVolume
-            let oldVol = change.oldValue ?? self.lastVolume
+    @objc private func volumeChanged(notification: NSNotification) {
+        guard !isResetting else { return }
 
-            // Chi tinh khi nguoi dung GIAM am luong (bam Volume Down)
-            if newVol < oldVol - 0.01 {
-                let now = Date()
-                self.clickTimestamps.append(now)
-                // Chi giu cac lan bam trong 2 giay
-                self.clickTimestamps = self.clickTimestamps.filter {
-                    now.timeIntervalSince($0) <= 2.0
+        guard let userInfo = notification.userInfo,
+              let newVolume = userInfo["AVSystemController_AudioVolumeNotificationParameter"] as? Float
+        else { return }
+
+        let now = Date()
+
+        // 1. Phím GIẢM ÂM LƯỢNG (newVolume < lastVolume)
+        if newVolume < lastVolume - 0.005 {
+            downClickTimestamps.append(now)
+            downClickTimestamps = downClickTimestamps.filter { now.timeIntervalSince($0) <= 2.0 }
+            upClickTimestamps.removeAll() // Bấm giảm thì reset chuỗi bấm tăng
+
+            print("[VolumeObserver] Phím Giảm Âm Lượng bấm (\(downClickTimestamps.count)/3 lần)")
+
+            if downClickTimestamps.count >= 3 {
+                downClickTimestamps.removeAll()
+                print("[VolumeObserver] 🎉 ĐỦ 3 LẦN BẤM GIẢM ÂM LƯỢNG -> MỞ LẠI MÀN HÌNH!")
+                DispatchQueue.main.async {
+                    self.onTripleVolumeDown?()
+                    self.doResetSlider()
                 }
+                return
+            }
+        }
+        // 2. Phím TĂNG ÂM LƯỢNG (newVolume > lastVolume)
+        else if newVolume > lastVolume + 0.005 {
+            upClickTimestamps.append(now)
+            upClickTimestamps = upClickTimestamps.filter { now.timeIntervalSince($0) <= 2.0 }
+            downClickTimestamps.removeAll() // Bấm tăng thì reset chuỗi bấm giảm
 
-                print("[VolumeObserver] Volume Down bam \(self.clickTimestamps.count)/3")
+            print("[VolumeObserver] Phím Tăng Âm Lượng bấm (\(upClickTimestamps.count)/3 lần)")
 
-                if self.clickTimestamps.count >= 3 {
-                    self.clickTimestamps.removeAll()
-                    print("[VolumeObserver] Triple Volume Down -> Kich hoat!")
-                    DispatchQueue.main.async {
-                        self.onTripleVolumeDown?()
-                        // Reset sau khi kich hoat
-                        self.doResetSlider()
-                    }
-                    return
+            if upClickTimestamps.count >= 3 {
+                upClickTimestamps.removeAll()
+                print("[VolumeObserver] 🚨 ĐỦ 3 LẦN BẤM TĂNG ÂM LƯỢNG -> TẮT HẲN APP!")
+                DispatchQueue.main.async {
+                    self.onTripleVolumeUp?()
                 }
+                return
             }
+        }
 
-            self.lastVolume = newVol
+        lastVolume = newVolume
 
-            // Reset neu am luong sap cham dich (tranh bi ket o 0 hoac 1)
-            if newVol <= 0.12 || newVol >= 0.88 {
-                self.doResetSlider()
-            }
+        // Reset nếu âm lượng chạm giới hạn
+        if newVolume <= 0.15 || newVolume >= 0.85 {
+            doResetSlider()
         }
     }
 
-    // Reset slider ve 0.5 ma khong trigger KVO lap
     public func doResetSlider() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self = self else { return }
             self.isResetting = true
             self.volumeSlider?.value = 0.5
@@ -118,13 +130,12 @@ public class VolumeObserver: NSObject, ObservableObject {
         }
     }
 
-    // Giu lai de ContentView goi khi app hien thi
     public func resetVolumeSliderToMid() {
         doResetSlider()
     }
 
     deinit {
-        kvoToken?.invalidate()
+        NotificationCenter.default.removeObserver(self)
         volumeView?.removeFromSuperview()
     }
 }

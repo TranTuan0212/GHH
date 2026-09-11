@@ -363,28 +363,24 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            // Khởi động VolumeObserver và gắn callback mở màn hình
+            // 1. Bấm 3 lần GIẢM âm lượng -> Mở sáng màn hình
             VolumeObserver.shared.onTripleVolumeDown = {
-                // Gọi từ bất kỳ thread nào -> dispatch về main
                 DispatchQueue.main.async {
                     self.hideFakeBlackScreen()
                 }
             }
-            VolumeObserver.shared.resetVolumeSliderToMid()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
-            // Người dùng bấm nút khóa vật lý -> thoát hẳn app
-            exit(0)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-            // App sắp bị mất focus (notification kéo xuống, multitasking...) -> thoát nếu đang fake lock
-            if isFakeLocked {
-                exit(0)
+            // 2. Bấm 3 lần TĂNG âm lượng -> Tắt hẳn app (exit(0))
+            VolumeObserver.shared.onTripleVolumeUp = {
+                DispatchQueue.main.async {
+                    print("[ContentView] Người dùng bấm 3 lần Tăng Âm Lượng -> Thoát app ngay lập tức!")
+                    exit(0)
+                }
             }
+            VolumeObserver.shared.resetVolumeSliderToMid()
         }
     }
 
-    // MARK: - Black Screen Window (phủ TOÀN BỘ màn hình kể cả status bar + home indicator + banners)
+    // MARK: - Black Screen Window (phủ TOÀN BỘ màn hình kể cả status bar + home indicator)
     func showFakeBlackScreen() {
         isFakeLocked = true
         BlackScreenManager.shared.show()
@@ -413,10 +409,9 @@ final class BlackScreenManager {
             else { return }
 
             let win = UIWindow(windowScene: windowScene)
-            // windowLevel cao hơn mọi thứ kể cả notification banner (level 1000)
             win.windowLevel = UIWindow.Level(rawValue: 2000)
             win.backgroundColor = .black
-            win.isUserInteractionEnabled = false
+            win.isUserInteractionEnabled = true
 
             let vc = BlackViewController()
             win.rootViewController = vc
@@ -425,10 +420,20 @@ final class BlackScreenManager {
             win.makeKeyAndVisible()
             self.blackWindow = win
 
+            // Dự phòng: Chạm 5 lần liên tục vào màn hình đen cũng sẽ mở lại màn hình
+            let tap = UITapGestureRecognizer(target: self, action: #selector(self.handleBackupTap))
+            tap.numberOfTapsRequired = 5
+            win.addGestureRecognizer(tap)
+
             UIScreen.main.brightness = 0.0
             UIApplication.shared.isIdleTimerDisabled = true
-            print("[BlackScreenManager] Màn hình đen ON - windowLevel: \(win.windowLevel.rawValue)")
+            print("[BlackScreenManager] Màn hình đen ON")
         }
+    }
+
+    @objc private func handleBackupTap() {
+        print("[BlackScreenManager] Dự phòng: Tap 5 lần -> Mở màn hình")
+        hide()
     }
 
     func hide() {
@@ -444,15 +449,17 @@ final class BlackScreenManager {
     }
 }
 
-/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator
+/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng
 private class BlackViewController: UIViewController {
     override var prefersStatusBarHidden: Bool { true }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .none }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var canBecomeFirstResponder: Bool { true }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        becomeFirstResponder()
     }
 }
 

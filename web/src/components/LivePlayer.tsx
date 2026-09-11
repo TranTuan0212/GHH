@@ -782,25 +782,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, []);
 
-  // HLS live có duration = Infinity. Dải tua thật nằm trong TimeRanges `seekable`,
-  // không phải video.duration. Dùng range này để DVR slider hoạt động được.
+  // Cập nhật live edge từ video.seekable nhưng KHÔNG ĐƯỢC ghi đè hlsWindowStart,
+  // vì hlsWindowStart phải giữ nguyên mốc bắt đầu của toàn bộ stream từ playlist HLS!
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const updateSeekableWindow = () => {
       const ranges = video.seekable;
       if (ranges.length === 0) return;
-      const start = ranges.start(ranges.length - 1);
       const end = ranges.end(ranges.length - 1);
-      if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-        setHlsWindowStart(start);
-        setHlsLiveEdge(end);
+      if (Number.isFinite(end)) {
+        setHlsLiveEdge((prev) => Math.max(prev, end));
       }
     };
     video.addEventListener('progress', updateSeekableWindow);
     video.addEventListener('durationchange', updateSeekableWindow);
     video.addEventListener('canplay', updateSeekableWindow);
-    const interval = window.setInterval(updateSeekableWindow, 500);
+    const interval = window.setInterval(updateSeekableWindow, 1000);
     return () => {
       video.removeEventListener('progress', updateSeekableWindow);
       video.removeEventListener('durationchange', updateSeekableWindow);
@@ -1147,8 +1145,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const activeDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
   const timelineStart = frozenTimeline?.start ?? hlsWindowStart;
   const currentLiveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (timelineStart + activeDuration);
-  // Khi luồng đang LIVE: timelineEnd luôn dài ra liên tục theo camera, không bao giờ bị khóa ở quá khứ
-  const timelineEnd = (isLive || stream?.status === 'LIVE') ? currentLiveEdge : (frozenTimeline?.end ?? currentLiveEdge);
+  // Khi đang xem Live: timelineEnd dài ra theo camera; Khi đang xem lại (Replay): timelineEnd được giữ cố định theo frozenTimeline để mốc tua không bị trôi giật
+  const timelineEnd = isLive ? currentLiveEdge : (frozenTimeline?.end ?? currentLiveEdge);
 
   // YouTube-style seekbar state
   const seekbarRef = useRef<HTMLDivElement | null>(null);

@@ -34,19 +34,19 @@ interface CardPickerPopupProps {
 }
 
 const CARDS = [
-  { rank: 'A', label: 'A', sub: 'Át', color: 'text-red-400', border: 'border-red-500/40 hover:border-red-400', bg: 'bg-gradient-to-b from-red-950/60 to-slate-900' },
-  { rank: '2', label: '2', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '3', label: '3', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '4', label: '4', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '5', label: '5', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '6', label: '6', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '7', label: '7', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '8', label: '8', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '9', label: '9', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
-  { rank: '10', label: '10', sub: '', color: 'text-amber-300', border: 'border-amber-500/30 hover:border-amber-400', bg: 'bg-gradient-to-b from-amber-950/40 to-slate-900' },
-  { rank: 'J', label: 'J', sub: 'Bồi', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
-  { rank: 'Q', label: 'Q', sub: 'Đầm', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
-  { rank: 'K', label: 'K', sub: 'Già', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
+  { rank: 'A', label: 'A', color: 'text-red-400', border: 'border-red-500/40 hover:border-red-400', bg: 'bg-gradient-to-b from-red-950/60 to-slate-900' },
+  { rank: '2', label: '2', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '3', label: '3', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '4', label: '4', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '5', label: '5', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '6', label: '6', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '7', label: '7', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '8', label: '8', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '9', label: '9', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '10', label: '10', color: 'text-amber-300', border: 'border-amber-500/30 hover:border-amber-400', bg: 'bg-gradient-to-b from-amber-950/40 to-slate-900' },
+  { rank: 'J', label: 'J', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
+  { rank: 'Q', label: 'Q', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
+  { rank: 'K', label: 'K', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
 ];
 
 export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
@@ -277,17 +277,17 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         className="px-3 py-2 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 border-b border-amber-500/30 flex items-center justify-between cursor-move text-white"
-        title="Giữ chuột để kéo thả vị trí bảng bài tùy thích"
+        title="Giữ chuột để kéo thả vị trí bảng mã"
       >
         <div className="flex items-center space-x-2 min-w-0 pointer-events-none">
           <Move className="w-4 h-4 text-amber-400 flex-shrink-0 animate-bounce" />
           <div className="flex items-center space-x-1.5 truncate">
             <span className="text-xs font-black tracking-wide text-amber-300 uppercase">
-              {target.mode === 'edit' ? 'Đổi Lá Bài' : 'Bảng Chọn Bài (A ➔ K)'}
+              {target.mode === 'edit' ? 'Sửa Ký Tự' : 'Bảng Mã (A ➔ K)'}
             </span>
             <span className="text-slate-400 text-xs">•</span>
             <span className="text-xs font-bold text-white truncate">
-              {currentGroupName} {target.slotIndex !== undefined ? `(Lá ${target.slotIndex + 1})` : ''}
+              {currentGroupName} {target.slotIndex !== undefined ? `(Mục ${target.slotIndex + 1})` : ''}
             </span>
             {target.mode === 'edit' && target.currentValue && (
               <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[10px] font-mono font-bold border border-amber-500/40">
@@ -319,7 +319,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
-            title="Đóng bảng chọn bài"
+            title="Đóng bảng mã"
           >
             <X className="w-4 h-4" />
           </button>
@@ -357,20 +357,20 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             </div>
           </div>
 
-          {/* Quick Action: Nút "KHÔNG THẤY" & Xóa lá */}
+          {/* Quick Action: Nút "MÃ KHÔNG RÕ (N/A)" & Xóa mục */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-            {/* Nút KHÔNG THẤY to nổi bật */}
+            {/* Nút KHÔNG RÕ MÃ to nổi bật */}
             <button
               type="button"
               onClick={handleUnknownClick}
               className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-500 hover:from-amber-500 hover:to-yellow-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-lg shadow-amber-500/30 transition-all active:scale-95 border border-amber-300"
-              title="Gán trạng thái [Không thấy] vào nhóm khi camera bị che khuất hoặc không rõ lá bài"
+              title="Gán trạng thái [Không rõ / Bỏ qua] vào nhóm khi camera bị che khuất hoặc không rõ đối tượng"
             >
               <EyeOff className="w-4 h-4 text-slate-950" />
-              <span>👁️‍🗨️ KHÔNG THẤY LÁ BÀI</span>
+              <span>⚠️ MÃ KHÔNG RÕ (N/A)</span>
             </button>
 
-            {/* Nếu đang sửa: hiển thị nút Xóa lá này */}
+            {/* Nếu đang sửa: hiển thị nút Xóa mục này */}
             {target.mode === 'edit' && target.cardId && onDeleteCard ? (
               <button
                 type="button"
@@ -379,19 +379,19 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                   onClose();
                 }}
                 className="w-full py-2 px-3 rounded-xl bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white font-bold text-xs flex items-center justify-center space-x-1.5 border border-red-500/40 transition-all active:scale-95"
-                title="Xóa bỏ lá bài này khỏi nhóm"
+                title="Xóa bỏ mục này khỏi nhóm"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>Xóa lá bài này</span>
+                <span>Xóa mục này</span>
               </button>
             ) : (
               <div className="hidden sm:flex items-center justify-center text-[11px] text-slate-400 italic px-2 bg-slate-950/40 rounded-xl border border-white/5">
-                Bấm vào 1 lá bên dưới để gán ngay
+                Chọn 1 mã bên dưới để gán ngay
               </div>
             )}
           </div>
 
-          {/* Bảng Các Lá Bài Từ A -> K: Khung to, rõ ràng, cực kỳ dễ nhìn và dễ bấm */}
+          {/* Bảng Ký Tự Từ A -> K: Khung to, rõ ràng, cực kỳ dễ nhìn và dễ bấm */}
           <div className="bg-slate-950/80 p-2 sm:p-2.5 rounded-xl border border-white/10 shadow-inner">
             <div className="grid grid-cols-7 sm:grid-cols-13 gap-1.5 sm:gap-1">
               {CARDS.map((card) => {
@@ -408,23 +408,12 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                         ? 'ring-2 ring-amber-400 border-amber-400 scale-105 z-10 shadow-amber-500/30'
                         : 'hover:scale-105 hover:border-amber-400/60'
                     }`}
-                    title={`Chọn lá ${card.rank} ${card.sub ? `(${card.sub})` : ''}`}
+                    title={`Chọn mã ${card.rank}`}
                   >
                     {/* Chữ to rõ ràng */}
                     <span className={`text-xl sm:text-2xl leading-none font-black tracking-tighter ${card.color} drop-shadow-md`}>
                       {card.rank}
                     </span>
-
-                    {/* Nhãn phụ nếu có (Át, Bồi, Đầm, Già) */}
-                    {card.sub ? (
-                      <span className="text-[9px] font-bold text-amber-400/80 leading-none mt-1">
-                        {card.sub}
-                      </span>
-                    ) : (
-                      <span className="text-[8px] text-slate-500 leading-none mt-1 font-mono">
-                        •
-                      </span>
-                    )}
 
                     {/* Hiệu ứng ánh sáng khi hover */}
                     <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
