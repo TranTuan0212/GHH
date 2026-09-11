@@ -310,18 +310,18 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             )}
           </div>
 
-          {/* Bảng 52 Lá Bài: 4 hàng tương ứng 4 chất */}
-          <div className="space-y-1.5 bg-slate-950/70 p-2 rounded-xl border border-white/10">
+          {/* Bảng 52 Lá Bài: Mỗi hàng = 1 chất, 13 lá xếp ngang liền kề */}
+          <div className="space-y-1 bg-slate-950/70 p-2 rounded-xl border border-white/10">
             {SUITS.map((suit) => (
-              <div key={suit.name} className="space-y-0.5">
-                <div className="flex items-center space-x-1 px-1">
-                  <span className={`text-sm font-black ${suit.color}`}>{suit.symbol}</span>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    {suit.name} ({suit.symbol})
-                  </span>
+              <div key={suit.name} className="flex items-center gap-1">
+                {/* Nhãn chất: ký hiệu + tên, cố định bên trái */}
+                <div className={`flex-shrink-0 w-10 flex flex-col items-center justify-center rounded-lg py-1 border ${suit.bg}`}>
+                  <span className={`text-base font-black leading-none ${suit.color}`}>{suit.symbol}</span>
+                  <span className={`text-[8px] font-bold leading-none mt-0.5 ${suit.color} opacity-80`}>{suit.name}</span>
                 </div>
 
-                <div className="grid grid-cols-13 gap-1">
+                {/* 13 lá bài xếp thành 1 hàng ngang */}
+                <div className="flex flex-1 gap-0.5 overflow-x-auto no-scrollbar">
                   {RANKS.map((rank) => {
                     const fullCardCode = `${rank}${suit.symbol}`;
                     const isCurrent = target.mode === 'edit' && target.currentValue === fullCardCode;
@@ -330,19 +330,19 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                         key={fullCardCode}
                         type="button"
                         onClick={() => handleCardClick(fullCardCode)}
-                        className={`h-9 sm:h-10 rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-90 border ${
+                        className={`flex-shrink-0 w-8 sm:w-9 h-11 sm:h-12 rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-90 border ${
                           suit.bg
                         } ${
                           isCurrent
-                            ? 'ring-2 ring-amber-400 bg-amber-500/30 border-amber-400 shadow-md'
-                            : 'shadow-sm'
+                            ? 'ring-2 ring-amber-400 bg-amber-500/30 border-amber-400 shadow-md scale-105'
+                            : 'shadow-sm hover:scale-105'
                         }`}
                         title={`Chọn lá ${rank} ${suit.name}`}
                       >
-                        <span className={`text-xs sm:text-sm leading-none ${suit.color}`}>
+                        <span className={`text-xs sm:text-sm leading-none font-black ${suit.color}`}>
                           {rank}
                         </span>
-                        <span className={`text-[10px] sm:text-xs leading-none ${suit.color}`}>
+                        <span className={`text-[9px] sm:text-[10px] leading-none ${suit.color}`}>
                           {suit.symbol}
                         </span>
                       </button>
