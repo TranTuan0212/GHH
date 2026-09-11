@@ -123,31 +123,42 @@ app.get('/api/server-info', (req, res) => {
  *
  * NMS serve mediaroot tại port 8000 với path prefix /live/ (vd: /live/<streamKey>/index.m3u8),
  * nên proxy chỉ cần forward nguyên originalUrl tới localhost:8000 là đúng.
+/**
+ * Phục vụ trực tiếp HLS (.m3u8 + .ts) từ thư mục ổ đĩa media/replay và media/live.
+ * - Giải quyết triệt để lỗi 404: NodeMediaServer port 8000 không có route /replay,
+ *   khiến request /replay/.../index.m3u8 bị 404 dù file đã được FFmpeg ghi trên đĩa.
+ * - express.static hỗ trợ HTTP Range requests chuẩn (cực kỳ quan trọng để tua/seek video mượt).
+ * - Cấu hình CORS mở và no-cache cho .m3u8 để cập nhật playlist mới nhất.
  */
-app.use(['/live', '/replay'], (req, res) => {
-  const targetPath = req.originalUrl; // /live = 60fps; /replay = master 120/240fps
+const MEDIA_ROOT = path.join(__dirname, '../media');
 
-  console.log(`[HLS Proxy] Forwarding: ${targetPath} -> localhost:8000${targetPath}`);
-
-  const proxyReq = http.request(
-    {
-      hostname: 'localhost',
-      port: 8000,
-      path: targetPath,
-      method: req.method,
-      headers: { ...req.headers, host: 'localhost:8000' }
-    },
-    (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
-      proxyRes.pipe(res, { end: true });
+app.use('/replay', express.static(path.join(MEDIA_ROOT, 'replay'), {
+  setHeaders: (res, filePath) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    if (filePath.endsWith('.m3u8')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    } else if (filePath.endsWith('.ts')) {
+      res.setHeader('Content-Type', 'video/MP2T');
     }
-  );
-  proxyReq.on('error', (err) => {
-    console.error('[HLS Proxy] Lỗi khi proxy tới localhost:8000:', err.message);
-    if (!res.headersSent) res.status(502).json({ error: 'HLS media server (port 8000) không phản hồi.' });
-  });
-  req.pipe(proxyReq, { end: true });
-});
+  }
+}));
+
+app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
+  setHeaders: (res, filePath) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    if (filePath.endsWith('.m3u8')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    } else if (filePath.endsWith('.ts')) {
+      res.setHeader('Content-Type', 'video/MP2T');
+    }
+  }
+}));
 
 /**
  * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
@@ -173,7 +184,9 @@ const webDistPath = path.resolve(__dirname, '../../web/dist');
 app.use(express.static(webDistPath));
 
 app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api')) return next();
+  if (req.path.startsWith('/api') || req.path.startsWith('/replay') || req.path.startsWith('/live')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   const indexPath = path.join(webDistPath, 'index.html');
   res.sendFile(indexPath, (err) => {
     if (err) next();

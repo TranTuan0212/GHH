@@ -56,7 +56,7 @@ if exist "%BUNDLED_FFMPEG%" (
 
 echo [1/5] Dung toan bo dich vu SloMo tu lan chay truoc...
 call "%ROOT%stop_server.bat" --quiet
-timeout /t 1 /nobreak >nul
+ping -n 2 127.0.0.1 >nul
 
 echo [2/5] Kiem tra/cai dependency khi can...
 pushd "%SERVER_DIR%"
@@ -100,7 +100,7 @@ echo [3/5] Khoi dong MediaMTX WebRTC ^(RTSP 8554, WHEP 8889, ICE 8189^)...
 REM Luon tao relay moi voi mediamtx-slomo.yml. Tai su dung process cu chi dua vao
 REM port 8554 co the giu publisher dang treo va lam WHEP tra 404 cho stream moi.
 start "SloMo MediaMTX WebRTC" /D "%SERVER_DIR%\tools\mediamtx" cmd /k ""%MTX_EXE%" "%MTX_CONFIG%""
-timeout /t 2 /nobreak >nul
+ping -n 3 127.0.0.1 >nul
 
 echo [4/5] Khoi dong backend ^(web/API 4000, RTMP 1935, HLS 8000, FFmpeg^)...
 REM Chay node truc tiep nen, khong long trong `cmd /k` (co the dong som ma khong hien loi).
@@ -111,7 +111,7 @@ set "READY="
 for /L %%I in (1,1,15) do (
   if not defined READY (
     powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:4000/api/health).StatusCode -eq 200 } catch { $false }" | findstr /i "True" >nul && set "READY=1"
-    if not defined READY timeout /t 1 /nobreak >nul
+    if not defined READY ping -n 2 127.0.0.1 >nul
   )
 )
 if not defined READY (
@@ -124,12 +124,18 @@ if not defined READY (
   echo [OK] Toan bo dich vu SloMo da san sang.
 )
 
+set "LAN_IP="
+for /f "tokens=*" %%I in ('powershell -NoProfile -Command "(Invoke-RestMethod -Uri http://127.0.0.1:4000/api/server-info).primaryIp"') do set "LAN_IP=%%I"
+if not defined LAN_IP set "LAN_IP=127.0.0.1"
+
 echo.
 echo ========================================================
 echo SAN SANG TEST LAN
-echo   iOS Server URL: http://192.168.1.10:4000
-echo   RTMP ingest:    rtmp://192.168.1.10:1935/live
-echo   Web viewer:     http://192.168.1.10:4000
+echo   iOS Server URL: http://%LAN_IP%:4000
+echo   RTMP ingest:    rtmp://%LAN_IP%:1935/live
+echo   Web viewer:     http://%LAN_IP%:4000
+echo.
+echo   Xem tren may nay: http://localhost:4000
 echo.
 echo Neu iPhone khong ket noi duoc, mo Windows Firewall cho:
 echo   TCP 4000, TCP 1935, TCP 8554, TCP 8889, UDP/TCP 8189

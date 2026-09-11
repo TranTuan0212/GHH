@@ -75,13 +75,15 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     private func updateVideoOrientation() {
+        let isFront = (self.cameraPosition == .front)
         let orientation: AVCaptureVideoOrientation
         switch UIDevice.current.orientation {
-        // Device and camera coordinates are mirrored for landscape orientations.
+        // Với camera sau: thiết bị nghiêng trái (landscapeLeft) thì góc quay video là landscapeRight.
+        // Với camera trước (quay vào mặt): cảm biến được đặt đối xứng gương, nên landscapeLeft thiết bị tương ứng đúng landscapeLeft video!
         case .landscapeLeft:
-            orientation = .landscapeRight
+            orientation = isFront ? .landscapeLeft : .landscapeRight
         case .landscapeRight:
-            orientation = .landscapeLeft
+            orientation = isFront ? .landscapeRight : .landscapeLeft
         case .portraitUpsideDown:
             orientation = .portraitUpsideDown
         default:
@@ -89,9 +91,13 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         sessionQueue.async { [weak self] in
-            guard let connection = self?.videoDataOutput.connection(with: .video),
+            guard let self = self,
+                  let connection = self.videoDataOutput.connection(with: .video),
                   connection.isVideoOrientationSupported else { return }
             connection.videoOrientation = orientation
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = isFront
+            }
         }
     }
 
@@ -521,8 +527,10 @@ public class CameraManager: NSObject, ObservableObject {
                 }
 
                 self.captureSession.commitConfiguration()
+                self.liveSession?.captureDevicePosition = newPosition
                 DispatchQueue.main.async {
                     self.cameraPosition = newPosition
+                    self.updateVideoOrientation()
                     completion?(true)
                 }
             } catch {

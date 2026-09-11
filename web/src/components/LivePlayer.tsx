@@ -48,10 +48,6 @@ export interface TextOverlay {
  * Phím Enter vẫn bật/tắt chế độ Live <-> Slow-Mo như cũ, nhưng logic đơn giản hơn nhiều vì
  * chỉ thao tác trên <video> thay vì tự dựng vòng lặp phát.
  */
-export interface MarkedFrame {
-  time: number; // giây trong timeline HLS
-  timeStr: string;
-}
 
 interface FrozenTimeline {
   start: number;
@@ -93,19 +89,30 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   roomName,
   onFinishRound,
 }) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
+  const replayVideoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = replayVideoRef; // Tương thích ngược với các hàm tiện ích
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const loadedStreamKeyRef = useRef<string | null>(null);
   const pendingReplayTimeRef = useRef<number | null>(null);
+  const pendingReplayRatioRef = useRef<number | null>(null);
+  const isDraggingSeekRef = useRef<boolean>(false);
+  const isSeekingRef = useRef<boolean>(false);
+  const pendingScrubTimeRef = useRef<number | null>(null);
+  const seekingTimeoutRef = useRef<number | null>(null);
+  const wasPlayingBeforeDragRef = useRef<boolean>(false);
+  const isLiveRef = useRef<boolean>(true);
 
   const [hasFrame, setHasFrame] = useState(false);
+  const [hasLiveFrame, setHasLiveFrame] = useState(false);
+  const [isTransitioning, setIsTransitioning] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
   const [isLive, setIsLive] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [rotation, setRotation] = useState<number>(0);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -115,6 +122,24 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // live edge đang tiếp tục tăng, nếu không nút tua sẽ "trôi" khỏi các frame cũ.
   const [frozenTimeline, setFrozenTimeline] = useState<FrozenTimeline | null>(null);
   const [sourceIsPortrait, setSourceIsPortrait] = useState(true);
+  const [liveElapsedSeconds, setLiveElapsedSeconds] = useState<number>(0);
+
+  // Bộ đếm thời gian thực khi đang phát Live (YouTube-style timeline)
+  useEffect(() => {
+    if (!stream?.startedAt) {
+      setLiveElapsedSeconds(0);
+      return;
+    }
+    const startedMs = new Date(stream.startedAt).getTime();
+    const updateElapsed = () => {
+      const now = Date.now();
+      const elapsed = Math.max(0, (now - startedMs) / 1000);
+      setLiveElapsedSeconds(elapsed);
+    };
+    updateElapsed();
+    const timer = setInterval(updateElapsed, 500);
+    return () => clearInterval(timer);
+  }, [stream?.startedAt]);
 
   // Text Overlays state (giữ nguyên UX cũ)
   const [textOverlays, setTextOverlays] = useState<TextOverlay[]>(() => {
@@ -314,11 +339,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [socket, roomId, stream?.streamKey]);
 
-  // Live preview is WHEP/WebRTC. It deliberately has no DVR timeline: when an encoder or
-  // network queue fills, the server may discard old frames and keep the most recent picture.
+  // WebRTC Live player (WHEP). Kết nối trực tiếp để xem trực tiếp siêu tốc độ (<0.2s)
   useEffect(() => {
-    const video = videoRef.current;
-    if (!isLive || !video || !whepUrl) return;
+    const video = liveVideoRef.current;
+    if (!video || !whepUrl) return;
 
     let cancelled = false;
     let peer: RTCPeerConnection | null = null;
@@ -328,6 +352,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       loadedStreamKeyRef.current = stream?.streamKey || null;
       setPlaybackRate(1.0);
       setHasFrame(false);
+      setHasLiveFrame(false);
       video.playbackRate = 1.0;
     }
 
@@ -342,13 +367,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }, { once: true });
     });
 
-    // WHEP trả SDP answer chỉ có nghĩa là MediaMTX đã tạo session. Nó chưa đảm bảo ICE
-    // đã thông hoặc đã có RTP video. Trước đây ta return ngay sau bước này, do đó một
-    // session không có track (relay FFmpeg vừa khởi động / UDP bị chặn) để lại màn đen
-    // vĩnh viễn. Chỉ coi là connected khi browser thực sự nhận được video track.
     const waitForVideoTrack = (connection: RTCPeerConnection, alreadyReceived: () => boolean) => new Promise<void>((resolve, reject) => {
-      // `setRemoteDescription()` có thể dispatch `track` ngay trước khi hàm này được gọi.
-      // Đừng bỏ lỡ track đó rồi tự đóng một kết nối đang phát tốt sau 6 giây.
       if (alreadyReceived()) {
         resolve();
         return;
@@ -380,8 +399,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     });
 
     const connect = async () => {
-      // The stream session is announced before the first RTMP frame reaches MediaMTX.
-      // Keep retrying so the initial Live view becomes available without pressing Enter.
       for (let attempt = 1; !cancelled; attempt++) {
         try {
           peer = new RTCPeerConnection();
@@ -392,9 +409,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             if (cancelled || !streams[0]) return;
             receivedVideoTrack = true;
             video.srcObject = streams[0];
-            // A WebRTC track is not necessarily a decoded picture yet. `loadeddata`
-            // below controls when the black waiting placeholder is removed.
-            video.play().catch(() => {});
+            video.muted = true;
+            setHasLiveFrame(true);
+            setHasFrame(true);
+            video.play().catch((err) => {
+              console.warn('[LivePlayer] Autoplay WebRTC ban đầu:', err);
+            });
           };
           const offer = await peer.createOffer();
           await peer.setLocalDescription(offer);
@@ -406,8 +426,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           });
           if (!response.ok) throw new Error(`WHEP HTTP ${response.status}`);
           const location = response.headers.get('location');
-          // MediaMTX trả `Location: /<path>/whep/<session-id>`. Resolve theo WHEP URL để
-          // DELETE quay lại port 8889, thay vì bị browser hiểu là relative URL ở port 4000.
           sessionUrl = location ? new URL(location, whepUrl).toString() : null;
           await peer.setRemoteDescription({ type: 'answer', sdp: await response.text() });
           await waitForVideoTrack(peer, () => receivedVideoTrack);
@@ -425,20 +443,53 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
     };
 
+    const onLiveReady = () => {
+      setHasLiveFrame(true);
+      setHasFrame(true);
+    };
+    const onLiveVideoResize = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        const isPortrait = video.videoHeight > video.videoWidth;
+        setSourceIsPortrait(isPortrait);
+        console.log(`[LivePlayer] WebRTC video dimensions: ${video.videoWidth}x${video.videoHeight} (isPortrait: ${isPortrait})`);
+      }
+    };
+    video.addEventListener('loadeddata', onLiveReady);
+    video.addEventListener('canplay', onLiveReady);
+    video.addEventListener('playing', onLiveReady);
+    video.addEventListener('loadedmetadata', onLiveVideoResize);
+    video.addEventListener('resize', onLiveVideoResize);
+
     connect();
     return () => {
       cancelled = true;
+      video.removeEventListener('loadeddata', onLiveReady);
+      video.removeEventListener('canplay', onLiveReady);
+      video.removeEventListener('playing', onLiveReady);
+      video.removeEventListener('loadedmetadata', onLiveVideoResize);
+      video.removeEventListener('resize', onLiveVideoResize);
       peer?.close();
       peerConnectionRef.current = null;
       video.srcObject = null;
       if (sessionUrl) fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
     };
-  }, [isLive, whepUrl]);
+  }, [whepUrl]);
 
-  // HLS is the replay/master path only. It preserves the high-FPS timeline used by slow motion.
+  // Điều khiển play/pause của liveVideo khi chuyển chế độ Live <-> Replay
   useEffect(() => {
-    const video = videoRef.current;
-    if (isLive) return;
+    if (isLive) {
+      if (liveVideoRef.current) {
+        liveVideoRef.current.muted = true;
+        liveVideoRef.current.play().catch(() => {});
+      }
+    } else {
+      liveVideoRef.current?.pause();
+    }
+  }, [isLive]);
+
+  // HLS DVR Player. Luôn tải ngầm và đệm sẵn các segment vào RAM để tua tức thì 0ms
+  useEffect(() => {
+    const video = replayVideoRef.current;
     const activeHlsBaseUrl = replayHlsBaseUrl || hlsBaseUrl.replace(/\/live$/, '/replay');
     if (!video || !stream?.streamKey || !activeHlsBaseUrl) {
       console.log('[LivePlayer] Chưa đủ điều kiện load video:', {
@@ -450,15 +501,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
 
     const playlistUrl = `${activeHlsBaseUrl}/${stream.streamKey}/index.m3u8`;
-    console.log('[LivePlayer] === Bắt đầu load HLS ===');
+    console.log('[LivePlayer] === Bắt đầu load HLS DVR ===');
     console.log('[LivePlayer] playlistUrl:', playlistUrl);
 
-    // Chỉ reset khi stream key thay đổi. Chuyển từ live rendition sang replay master phải
-    // giữ nguyên slow-motion rate, không được tự đưa người xem trở lại 1x.
     if (loadedStreamKeyRef.current !== stream.streamKey) {
       loadedStreamKeyRef.current = stream.streamKey;
       setPlaybackRate(1.0);
       setHasFrame(false);
+      setIsTransitioning(false);
       video.playbackRate = 1.0;
     } else {
       video.playbackRate = playbackRate;
@@ -471,12 +521,33 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const applyInitialReplaySeek = (start: number, end: number) => {
       if (isLive || initialReplaySeekApplied || end < start) return;
-      const requestedTime = pendingReplayTimeRef.current;
-      video.currentTime = requestedTime === null
-        ? Math.max(start, end - 5)
-        : Math.max(start, Math.min(end, requestedTime));
+      
+      let targetTime: number;
+      if (pendingReplayRatioRef.current !== null) {
+        // Người dùng kéo thanh tua từ Live: tua đúng theo tỷ lệ timeline
+        targetTime = start + pendingReplayRatioRef.current * (end - start);
+      } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
+        targetTime = pendingReplayTimeRef.current;
+      } else {
+        // Bấm Slow từ Live: lùi 4 giây để xem lại ngay pha vừa qua
+        targetTime = Math.max(start, end - 4);
+      }
+
+      const safeTime = Math.max(start, Math.min(end, targetTime));
+      video.currentTime = safeTime;
+      setCurrentTime(safeTime);
       initialReplaySeekApplied = true;
       pendingReplayTimeRef.current = null;
+      pendingReplayRatioRef.current = null;
+      setFrozenTimeline({ start, end });
+      setIsTransitioning(false);
+      setHasFrame(true);
+      if (isDraggingSeekRef.current) {
+        video.pause();
+        setIsPlaying(false);
+      } else {
+        video.play().catch(() => {});
+      }
     };
 
     // QUAN TRỌNG: ngay sau khi RTMP bắt đầu publish, FFmpeg cần khoảng 1-3 giây để ghi xong
@@ -485,43 +556,33 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     // hình dù stream đã LIVE. Nhánh HLS native (Safari/Edge) đặc biệt dễ dính vì KHÔNG có cơ chế
     // tự retry như hls.js, nên phải tự chờ & thử lại thủ công trước khi gắn playlist cho player.
     const waitForPlaylistReady = async (): Promise<boolean> => {
-      const maxAttempts = 12;
-      const intervalMs = 1000;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        if (cancelled) return false;
+      for (let attempt = 1; !cancelled; attempt++) {
         try {
           const res = await fetch(playlistUrl, { cache: 'no-store' });
-          console.log(`[LivePlayer] Thử playlist .m3u8 (lần ${attempt}/${maxAttempts}) -> status ${res.status}`);
-          if (res.ok) return true;
+          if (res.ok) {
+            console.log(`[LivePlayer] Playlist .m3u8 đã sẵn sàng sau ${attempt} giây thử.`);
+            return true;
+          }
         } catch (err) {
-          console.warn(`[LivePlayer] Thử playlist .m3u8 (lần ${attempt}/${maxAttempts}) lỗi network:`, err);
         }
-        await new Promise((r) => setTimeout(r, intervalMs));
+        await new Promise((r) => setTimeout(r, 1000));
       }
       return false;
     };
 
     (async () => {
       const ready = await waitForPlaylistReady();
-      if (cancelled) return;
-
-      if (!ready) {
-        console.error('[LivePlayer] Playlist .m3u8 KHÔNG sẵn sàng sau nhiều lần thử (~12s). Có thể: RTMP chưa publish thành công, hoặc stream đã dừng trước khi kịp tạo file. Kiểm tra log server phần [MediaServer].');
-        return;
-      }
+      if (cancelled || !ready) return;
 
       console.log('[LivePlayer] Playlist đã sẵn sàng, bắt đầu gắn vào trình phát.');
 
-      // Trình duyệt đã hỗ trợ HLS natively (Safari, và một số bản Edge/Chromium mới) thì dùng
-      // luôn src, không cần hls.js.
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        console.log('[LivePlayer] Dùng HLS native của trình duyệt, không qua hls.js.');
-        video.playbackRate = isLive ? 1.0 : playbackRate;
-        video.src = playlistUrl;
-        return;
-      }
-
       if (!Hls.isSupported()) {
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          console.log('[LivePlayer] Dùng HLS native của trình duyệt (Safari iOS), không qua hls.js.');
+          video.playbackRate = isLive ? 1.0 : playbackRate;
+          video.src = playlistUrl;
+          return;
+        }
         console.error('[LivePlayer] Trình duyệt không hỗ trợ MSE / HLS.js — không thể phát video trên trình duyệt này.');
         return;
       }
@@ -556,11 +617,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const end = last.start + last.duration;
           setHlsWindowStart(start);
           setHlsLiveEdge(end);
-          // When the browser started from the first segment while the playlist was still
-          // tiny, it can remain several seconds behind forever. Keep the normal live view
-          // at the latest safe HLS point; DVR/replay is never moved by this branch.
-          if (isLive && end - video.currentTime > 3 && end - start > 2) {
-            video.currentTime = Math.max(start, end - 1.5);
+          // Khi đang ở chế độ Live và không kéo tua:
+          // Giữ replayVideo đồng bộ ở cạnh LIVE để HLS.js luôn tải sẵn các segment mới nhất vào RAM!
+          if (isLiveRef.current && !isDraggingSeekRef.current) {
+            video.currentTime = Math.max(start, end - 0.5);
           }
           applyInitialReplaySeek(start, end);
         }
@@ -572,8 +632,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
         console.log('[LivePlayer][hls.js] MANIFEST_PARSED — sẵn sàng phát. Số level:', data.levels?.length);
-        video.playbackRate = isLive ? 1.0 : playbackRate;
-        if (!isLive) {
+        video.playbackRate = playbackRate;
+        setHasFrame(true);
+        if (!isLiveRef.current) {
           // Master has its own timeline. Start a few seconds behind its latest keyframe so
           // playback at 0.5x/0.25x has buffered original high-FPS frames immediately.
           window.setTimeout(() => {
@@ -583,10 +644,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               applyInitialReplaySeek(start, end);
             }
           }, 0);
+          video.play().catch(() => {});
+        } else {
+          video.pause();
         }
-        video.play()
-          .then(() => console.log('[LivePlayer] video.play() thành công'))
-          .catch((err) => console.error('[LivePlayer] video.play() bị trình duyệt chặn (autoplay policy?) hoặc lỗi khác:', err));
       });
 
       hls.on(Hls.Events.ERROR, (_e, data) => {
@@ -649,7 +710,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hlsInstance) hlsInstance.destroy();
       hlsRef.current = null;
     };
-  }, [stream?.streamKey, hlsBaseUrl, replayHlsBaseUrl, isLive]);
+  }, [stream?.streamKey, hlsBaseUrl, replayHlsBaseUrl]);
 
   // Đồng bộ <video> currentTime + duration lên UI để vẽ seekbar DVR window.
   useEffect(() => {
@@ -666,6 +727,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const onLoaded = () => {
       if (Number.isFinite(video.duration)) setDuration(video.duration);
       setHasFrame(true);
+      setIsTransitioning(false); // HLS đã có frame, ẩn spinner chuyển đổi
     };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('durationchange', onLoaded);
@@ -710,25 +772,46 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, []);
 
-  // Phát hiện user tua tới đầu cửa sổ live -> auto catch-up về live edge.
+  // Lắng nghe sự kiện seeked: giải phóng cờ isSeekingRef và tiếp tục decode frame tiếp theo nếu đang scrub
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
     const onSeeked = () => {
-      if (!isLive) return;
-      const lag = hlsLiveEdge - video.currentTime;
-      // Nếu còn < 2s lệch live -> tự nhảy về edge để tránh bị stuck ở đầu playlist.
-      if (lag >= 0 && lag < 2) {
-        video.currentTime = hlsLiveEdge;
+      if (seekingTimeoutRef.current !== null) {
+        window.clearTimeout(seekingTimeoutRef.current);
+        seekingTimeoutRef.current = null;
+      }
+      isSeekingRef.current = false;
+
+      // Nếu trong lúc vừa decode frame trước, tay người dùng đã kéo tới vị trí mới -> seek tiếp ngay!
+      if (pendingScrubTimeRef.current !== null) {
+        const nextTime = pendingScrubTimeRef.current;
+        pendingScrubTimeRef.current = null;
+        isSeekingRef.current = true;
+        video.currentTime = nextTime;
+        setCurrentTime(nextTime);
+        return;
+      }
+
+      if (isLive) {
+        const lag = hlsLiveEdge - video.currentTime;
+        // Nếu còn < 2s lệch live -> tự nhảy về edge để tránh bị stuck ở đầu playlist.
+        if (lag >= 0 && lag < 2) {
+          video.currentTime = hlsLiveEdge;
+        }
       }
     };
-    video.addEventListener('seeked', onSeeked);
-    return () => video.removeEventListener('seeked', onSeeked);
-  }, [isLive, hlsLiveEdge]);
 
-  // Enter toggle Live <-> Slow-Mo. Slow-mo chỉ cần đặt playbackRate; tua lại đặt currentTime.
-  const [markedFrame, setMarkedFrame] = useState<MarkedFrame | null>(null);
-  const markedFrameRef = useRef<MarkedFrame | null>(null);
+    video.addEventListener('seeked', onSeeked);
+    return () => {
+      video.removeEventListener('seeked', onSeeked);
+      if (seekingTimeoutRef.current !== null) {
+        window.clearTimeout(seekingTimeoutRef.current);
+        seekingTimeoutRef.current = null;
+      }
+    };
+  }, [isLive, hlsLiveEdge]);
 
   const [modeNotice, setModeNotice] = useState<'slow' | 'live' | null>(null);
   const [modeNoticeTitle, setModeNoticeTitle] = useState<string>('');
@@ -762,106 +845,196 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   }, []);
 
   const jumpToLive = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    setFrozenTimeline(null);
-    pendingReplayTimeRef.current = null;
+    isLiveRef.current = true;
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
-    video.playbackRate = 1.0;
-    // The WHEP source is attached by the live effect; it has no seekable DVR timeline.
+    setFrozenTimeline(null);
+    pendingReplayTimeRef.current = null;
+    pendingReplayRatioRef.current = null;
+
+    replayVideoRef.current?.pause();
+    if (liveVideoRef.current) {
+      liveVideoRef.current.muted = true;
+      liveVideoRef.current.play().catch(() => {});
+    }
+
     showModeNotice(
       'live',
       'LIVE - TRỰC TIẾP',
       'Đã chuyển về luồng video thời gian thực',
-      'Bấm [Enter] để gắn mốc & tua chậm'
+      'Bấm [Enter] hoặc chọn tốc độ để tua chậm'
+    );
+  };
+
+  const switchToSlow = (speed: number) => {
+    isLiveRef.current = false;
+    setIsLive(false);
+    setPlaybackRate(speed);
+    setIsPlaying(true);
+
+    liveVideoRef.current?.pause();
+
+    const video = replayVideoRef.current;
+    if (video) {
+      video.playbackRate = speed;
+      video.muted = true;
+      const start = hlsWindowStart;
+      const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
+      const end = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
+      // Lùi 4 giây để xem lại pha quay chậm vừa qua
+      const targetTime = Math.max(start, end - 4);
+      setFrozenTimeline({ start, end });
+      if (video.readyState >= 1) {
+        video.currentTime = targetTime;
+        setCurrentTime(targetTime);
+      } else {
+        pendingReplayTimeRef.current = targetTime;
+      }
+      video.play().catch((err) => {
+        console.warn('[LivePlayer] Lỗi play replay:', err);
+      });
+    }
+
+    showModeNotice(
+      'slow',
+      `SLOW MOTION - ${speed}x`,
+      'Đang tua chậm (Replay)',
+      'Bấm [Enter] hoặc chọn [VỀ LIVE] để quay lại'
     );
   };
 
   const handleSpeedChange = (speed: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    setPlaybackRate(speed);
-    showModeNotice(speed < 1 ? 'slow' : 'live', speed < 1 ? `SLOW ${speed}x` : 'LIVE - TRỰC TIẾP');
-    video.playbackRate = speed;
-
     if (speed < 1.0) {
-      if (isLive) {
-        // WebRTC và replay cùng bắt đầu từ RTMP master. Chốt cạnh phải tại thời điểm
-        // vừa rời Live; timeline sẽ không chạy tiếp trong lúc người dùng kéo về quá khứ.
-        const replayEnd = Math.max(hlsWindowStart + 0.05, video.currentTime);
-        const replayStart = Math.min(hlsWindowStart, replayEnd);
-        const replayTime = Math.max(replayStart, replayEnd - 5);
-        setFrozenTimeline({ start: replayStart, end: replayEnd });
-        pendingReplayTimeRef.current = replayTime;
-        setIsLive(false);
-      }
+      switchToSlow(speed);
     } else {
-      // Trở về 1.0x: nếu đang Slow, đẩy về live edge để xem tiếp bình thường
-      if (!isLive) jumpToLive();
+      jumpToLive();
     }
   };
 
-  // Tua từng frame (~1/240s cho 240fps nguồn, browser sẽ snap tới keyframe gần nhất nếu segment)
-  const stepFrame = (step: number) => {
+  // Hàm tua thời gian thực (Live Video Scrubbing) - Khung hình nhảy liên tục theo tay kéo
+  const performScrub = (targetTime: number) => {
     const video = videoRef.current;
     if (!video) return;
-    setIsLive(false);
-    setIsPlaying(false);
-    // Bước nhảy 1/240s để xấp xỉ 1 frame nguồn; thực tế sẽ snap về keyframe gần nhất.
-    video.pause();
-    const start = frozenTimeline?.start ?? hlsWindowStart;
-    const end = frozenTimeline?.end ?? hlsLiveEdge;
-    video.currentTime = Math.max(start, Math.min(end, video.currentTime + step * (1 / 240)));
+
+    const start = hlsWindowStart;
+    const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
+    const liveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
+    const end = (isLive || stream?.status === 'LIVE') ? liveEdge : (frozenTimeline?.end ?? liveEdge);
+    const safeTime = Math.max(start, Math.min(end, targetTime));
+
+    setCurrentTime(safeTime);
+
+    // Nếu decoder của trình duyệt đã rảnh (không còn seeking), reset cờ
+    if (!video.seeking) {
+      isSeekingRef.current = false;
+    }
+
+    // Nếu video đang bận decode frame trước: lưu lại targetTime mới nhất vào hàng đợi
+    if (video.seeking || isSeekingRef.current) {
+      pendingScrubTimeRef.current = safeTime;
+    } else {
+      // Decoder đang rảnh: nạp frame mới ngay lập tức
+      isSeekingRef.current = true;
+      video.currentTime = safeTime;
+
+      // Đặt timeout an toàn phòng khi browser không kích hoạt onSeeked
+      if (seekingTimeoutRef.current !== null) {
+        window.clearTimeout(seekingTimeoutRef.current);
+      }
+      seekingTimeoutRef.current = window.setTimeout(() => {
+        isSeekingRef.current = false;
+        if (pendingScrubTimeRef.current !== null && videoRef.current) {
+          const next = pendingScrubTimeRef.current;
+          pendingScrubTimeRef.current = null;
+          videoRef.current.currentTime = next;
+          setCurrentTime(next);
+        }
+      }, 120);
+    }
   };
 
-  // Seek bar (DVR window): nhảy thẳng vào timestamp bất kỳ trong playlist.
-  const handleSeekSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const t = parseFloat(e.target.value);
-    if (!Number.isFinite(t)) return;
-    if (isLive) {
-      // Store a pending point only while changing source. Once replay is open, seeking
-      // always follows the user's drag and is never reapplied on a playlist refresh.
-      pendingReplayTimeRef.current = t;
-      setFrozenTimeline({ start: hlsWindowStart, end: Math.max(hlsWindowStart + 0.05, video.currentTime) });
+  // Tua từng frame (~0.04s cho 25-30fps)
+  const stepFrame = (step: number) => {
+    if (isLiveRef.current) {
+      isLiveRef.current = false;
       setIsLive(false);
+      setIsPlaying(false);
+      liveVideoRef.current?.pause();
+      const start = hlsWindowStart;
+      const end = hlsLiveEdge;
+      const target = Math.max(start, end - 4);
+      setFrozenTimeline({ start, end });
+      performScrub(target);
       return;
     }
-    video.currentTime = t;
+
+    const v = replayVideoRef.current;
+    if (!v) return;
+    setIsPlaying(false);
+    v.pause();
+    const start = frozenTimeline?.start ?? hlsWindowStart;
+    const end = frozenTimeline?.end ?? hlsLiveEdge;
+    const target = Math.max(start, Math.min(end, v.currentTime + step * 0.04));
+    performScrub(target);
   };
 
-  const jumpToMarker = () => {
-    const video = videoRef.current;
-    const marker = markedFrameRef.current;
-    if (!video || !marker) return;
-    setIsLive(false);
-    video.currentTime = marker.time;
-    video.play().catch(() => {});
-    showModeNotice(
-      'slow',
-      'VỀ MỐC KHUNG HÌNH',
-      `Đang xem tại ${marker.timeStr}`,
-      'Bấm [Enter] để quay về LIVE'
-    );
+  // Seek bar (DVR window): nhận ratio (0..1) hoặc timestamp cụ thể
+  const handleSeek = (ratioOrTime: number, isRatio = true) => {
+    const video = replayVideoRef.current;
+    if (!video) return;
+
+    const start = frozenTimeline?.start ?? hlsWindowStart;
+    const end = frozenTimeline?.end ?? hlsLiveEdge;
+    const span = Math.max(0.1, end - start);
+
+    if (isLiveRef.current) {
+      const ratio = isRatio ? ratioOrTime : Math.max(0, Math.min(1, (ratioOrTime - start) / span));
+      isLiveRef.current = false;
+      setIsLive(false);
+      setIsPlaying(false);
+      liveVideoRef.current?.pause();
+      setFrozenTimeline({ start, end });
+      performScrub(start + ratio * span);
+      return;
+    }
+
+    const targetTime = isRatio ? start + ratioOrTime * span : ratioOrTime;
+    performScrub(targetTime);
   };
 
   // Toggle play/pause trên <video> native
   const togglePlay = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      video.play().catch(() => {});
+    if (isLiveRef.current) {
+      // Đang Live mà bấm pause -> chuyển sang Replay và dừng ở khung hình mép Live
+      isLiveRef.current = false;
+      setIsLive(false);
+      setIsPlaying(false);
+      liveVideoRef.current?.pause();
+      const v = replayVideoRef.current;
+      if (v) {
+        v.muted = true;
+        v.currentTime = hlsLiveEdge;
+        v.pause();
+      }
+      return;
+    }
+
+    const v = replayVideoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play().catch(() => {});
+      setIsPlaying(true);
     } else {
-      video.pause();
+      v.pause();
+      setIsPlaying(false);
     }
   };
 
-  // Enter: chuyển chế độ Live <-> Slow-Mo. Khi rời Live, đặt marker tại vị trí hiện tại.
+  // Enter: chuyển chế độ Live <-> Slow-Mo (không gán mốc nữa)
+  // ArrowLeft / ArrowRight: tua từng frame
+  // Phím cách (Space): Play / Pause
   const handleEnterModeSwitch = (e: KeyboardEvent) => {
-    if (e.key !== 'Enter' && e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
     if (isTextOverlayOpen) return;
 
     const target = e.target as HTMLElement | null;
@@ -869,40 +1042,32 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return;
     }
 
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      stepFrame(-1);
+      return;
+    }
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      stepFrame(1);
+      return;
+    }
+
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      togglePlay();
+      return;
+    }
+
+    if (e.key !== 'Enter' && e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
+
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
 
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (isLive) {
-      // Đang Live -> gắn mốc tại vị trí hiện tại, chuyển sang Slow 0.25x
-      const markerTime = video.currentTime;
-      const d = new Date();
-      const timeStr = d.toTimeString().split(' ')[0] + '.' + String(d.getMilliseconds()).padStart(3, '0');
-      const marker: MarkedFrame = { time: markerTime, timeStr };
-      markedFrameRef.current = marker;
-      setMarkedFrame(marker);
-
-      // Chốt timeline tại frame vừa đánh dấu. Mốc seek được chuyển cho effect HLS trước
-      // khi đổi source, tránh việc HLS tự mở ở live edge và chỉ phát được vài giây.
-      const replayEnd = Math.max(hlsWindowStart + 0.05, markerTime);
-      const replayStart = Math.min(hlsWindowStart, replayEnd);
-      const replayTime = Math.max(replayStart, replayEnd - 5);
-      setFrozenTimeline({ start: replayStart, end: replayEnd });
-      pendingReplayTimeRef.current = replayTime;
-      setIsLive(false);
-      setIsPlaying(true);
-      setPlaybackRate(0.25);
-      video.playbackRate = 0.25;
-
-      showModeNotice(
-        'slow',
-        'SLOW MOTION - ĐANG TUA CHẬM',
-        `Mốc #${markerTime.toFixed(2)}s (${timeStr}) - Tốc độ: 0.25x`,
-        'Bấm [Enter] lần nữa để quay về LIVE'
-      );
+    if (isLiveRef.current) {
+      switchToSlow(0.25);
     } else {
       jumpToLive();
     }
@@ -916,7 +1081,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable)) {
         return;
       }
-      if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+      if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -932,8 +1097,196 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   }, [isTextOverlayOpen, isLive]);
 
   const speedOptions = [0.05, 0.1, 0.125, 0.25, 0.5, 0.75, 1.0];
+  const activeDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
   const timelineStart = frozenTimeline?.start ?? hlsWindowStart;
-  const timelineEnd = frozenTimeline?.end ?? hlsLiveEdge;
+  const currentLiveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (timelineStart + activeDuration);
+  // Khi luồng đang LIVE: timelineEnd luôn dài ra liên tục theo camera, không bao giờ bị khóa ở quá khứ
+  const timelineEnd = (isLive || stream?.status === 'LIVE') ? currentLiveEdge : (frozenTimeline?.end ?? currentLiveEdge);
+
+  // YouTube-style seekbar state
+  const seekbarRef = useRef<HTMLDivElement | null>(null);
+  const [seekHoverTime, setSeekHoverTime] = useState<number | null>(null);
+  const [seekHoverX, setSeekHoverX] = useState<number>(0);
+  const [isDraggingSeek, setIsDraggingSeek] = useState(false);
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
+  const dragRatioRef = useRef<number | null>(null);
+
+  // Utility: chuyển giây sang MM:SS hoặc H:MM:SS
+  const formatTime = (seconds: number): string => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
+  // Tính ratio vị trí con trỏ trên seekbar
+  const getSeekRatio = (clientX: number): number => {
+    const bar = seekbarRef.current;
+    if (!bar) return 0;
+    const rect = bar.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  };
+
+  const handleSeekbarMouseMove = (e: React.MouseEvent) => {
+    const bar = seekbarRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const span = Math.max(1, timelineEnd - timelineStart);
+    setSeekHoverTime(timelineStart + ratio * span);
+    setSeekHoverX(e.clientX - rect.left);
+
+    if (isDraggingSeek) {
+      dragRatioRef.current = ratio;
+      setDragRatio(ratio);
+      if (!isLive) {
+        performScrub(timelineStart + ratio * span);
+      }
+    }
+  };
+
+  const handleSeekbarMouseLeave = () => {
+    if (!isDraggingSeek) setSeekHoverTime(null);
+  };
+
+  const handleSeekbarMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const bar = seekbarRef.current;
+    if (!bar) return;
+
+    const initialRatio = getSeekRatio(e.clientX);
+    setIsDraggingSeek(true);
+    isDraggingSeekRef.current = true;
+    dragRatioRef.current = initialRatio;
+    setDragRatio(initialRatio);
+
+    liveVideoRef.current?.pause();
+    const video = replayVideoRef.current;
+    if (video) {
+      wasPlayingBeforeDragRef.current = !video.paused;
+      video.pause();
+      setIsPlaying(false);
+    }
+
+    if (isLiveRef.current) {
+      isLiveRef.current = false;
+      setIsLive(false);
+      setFrozenTimeline({
+        start: hlsWindowStart,
+        end: hlsLiveEdge
+      });
+    }
+
+    const span = Math.max(0.1, timelineEnd - timelineStart);
+    const targetTime = timelineStart + initialRatio * span;
+    performScrub(targetTime);
+
+    const onMouseMove = (mv: MouseEvent) => {
+      const r = getSeekRatio(mv.clientX);
+      dragRatioRef.current = r;
+      setDragRatio(r);
+      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
+      setSeekHoverX(mv.clientX - (seekbarRef.current?.getBoundingClientRect().left ?? 0));
+      setSeekHoverTime(timelineStart + r * curSpan);
+
+      const curTargetTime = timelineStart + r * curSpan;
+      performScrub(curTargetTime);
+    };
+
+    const onMouseUp = (mu: MouseEvent) => {
+      const finalRatio = dragRatioRef.current ?? getSeekRatio(mu.clientX);
+      setIsDraggingSeek(false);
+      isDraggingSeekRef.current = false;
+      setDragRatio(null);
+      dragRatioRef.current = null;
+      setSeekHoverTime(null);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+
+      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
+      const finalTime = timelineStart + finalRatio * curSpan;
+      performScrub(finalTime);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // Touch support
+  const handleSeekbarTouchStart = (e: React.TouchEvent) => {
+    if (!e.touches[0]) return;
+    const initialRatio = getSeekRatio(e.touches[0].clientX);
+    setIsDraggingSeek(true);
+    isDraggingSeekRef.current = true;
+    dragRatioRef.current = initialRatio;
+    setDragRatio(initialRatio);
+
+    liveVideoRef.current?.pause();
+    const video = replayVideoRef.current;
+    if (video) {
+      wasPlayingBeforeDragRef.current = !video.paused;
+      video.pause();
+      setIsPlaying(false);
+    }
+
+    if (isLiveRef.current) {
+      isLiveRef.current = false;
+      setIsLive(false);
+      setFrozenTimeline({
+        start: hlsWindowStart,
+        end: hlsLiveEdge
+      });
+    }
+
+    const span = Math.max(0.1, timelineEnd - timelineStart);
+    const targetTime = timelineStart + initialRatio * span;
+    performScrub(targetTime);
+
+    const onTouchMove = (mv: TouchEvent) => {
+      if (!mv.touches[0]) return;
+      const r = getSeekRatio(mv.touches[0].clientX);
+      dragRatioRef.current = r;
+      setDragRatio(r);
+      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
+      const curTargetTime = timelineStart + r * curSpan;
+      performScrub(curTargetTime);
+    };
+
+    const onTouchEnd = () => {
+      const finalRatio = dragRatioRef.current ?? initialRatio;
+      setIsDraggingSeek(false);
+      isDraggingSeekRef.current = false;
+      setDragRatio(null);
+      dragRatioRef.current = null;
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+
+      const curSpan = Math.max(0.1, timelineEnd - timelineStart);
+      const finalTime = timelineStart + finalRatio * curSpan;
+      performScrub(finalTime);
+    };
+
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd);
+  };
+
+  // Progress ratio cho fill bar: ưu tiên vị trí tay đang kéo mượt mà 60fps
+  const totalSpan = Math.max(1, timelineEnd - timelineStart);
+  const currentVideoRatio = isLive
+    ? 1.0
+    : (timelineEnd > timelineStart
+        ? Math.max(0, Math.min(1, (currentTime - timelineStart) / totalSpan))
+        : 0);
+  const seekFillRatio = dragRatio !== null ? dragRatio : currentVideoRatio;
+
+  // Thời gian hiển thị ở đầu bên trái: đi theo tay kéo mượt mà, khi Live luôn hiện mốc mới nhất
+  const displayCurrentTime = dragRatio !== null
+    ? dragRatio * totalSpan
+    : (isLive ? totalSpan : Math.max(0, currentTime - timelineStart));
 
   return (
     <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col">
@@ -1008,20 +1361,39 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             hasFrame — vì effect khởi tạo HLS cần videoRef.current tồn tại TRƯỚC khi có frame đầu
             tiên. Nếu ẩn video đằng sau `hasFrame ? ... : ...` sẽ tạo deadlock: video chỉ mount khi
             hasFrame=true, nhưng hasFrame chỉ được set true SAU khi HLS đã load được vào video đó. */}
+        {/* Thẻ 1: Live WebRTC siêu tốc (<0.2s) */}
         <video
-          ref={videoRef}
-          className="w-full h-full object-contain bg-black"
+          ref={liveVideoRef}
+          className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
+            isLive && hasLiveFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+          }`}
           style={{
-            // CSS rotate does not change an element's layout box. A portrait camera rotated
-            // 90° would otherwise remain a narrow portrait-sized box in this 16:9 player.
             transform: `rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
             transition: 'transform 0.2s ease-in-out',
-            display: hasFrame ? 'block' : 'none'
+            position: 'absolute',
+            inset: 0
           }}
           playsInline
           muted={isMuted}
           autoPlay
         />
+
+        {/* Thẻ 2: HLS DVR Replay (Luôn chạy ngầm để đệm sẵn buffer vào RAM, phục vụ tua tức thì 0ms) */}
+        <video
+          ref={replayVideoRef}
+          className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
+            !isLive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+          }`}
+          style={{
+            transform: `rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+            transition: 'transform 0.2s ease-in-out',
+            position: 'absolute',
+            inset: 0
+          }}
+          playsInline
+          muted={isMuted}
+        />
+
         {!hasFrame && (
           <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500">
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center text-indigo-400 animate-pulse">
@@ -1116,18 +1488,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 <Gauge className="w-3.5 h-3.5 mr-1 text-amber-400" />
                 Slow {playbackRate}x {isPlaying ? '• Đang tua chậm' : '• Tạm dừng'}
               </span>
-
-              {markedFrame && (
-                <button
-                  type="button"
-                  onClick={jumpToMarker}
-                  className="px-2.5 py-1 rounded-full bg-amber-500/25 hover:bg-amber-500/40 text-amber-300 font-bold font-mono text-[10px] sm:text-[11px] border border-amber-400/50 flex items-center shadow-md transition-all active:scale-95"
-                  title={`Mốc: ${markedFrame.timeStr} - Bấm để nhảy về mốc này`}
-                >
-                  <span className="mr-1">📍</span>
-                  <span>Mốc ({markedFrame.timeStr})</span>
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -1155,33 +1515,82 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           )}
         </div>
 
-        {/* DVR Seekbar: trượt để seek tới bất kỳ timestamp trong playlist */}
-        <div className="flex items-center space-x-2">
-          <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 min-w-[60px]">
-            {currentTime.toFixed(1)}s
+        {/* DVR Seekbar: YouTube-style với hover tooltip, progress fill, drag mượt */}
+        <div className="flex items-center gap-2 px-1">
+          {/* Thời gian hiện tại */}
+          <span className="text-[11px] font-mono text-slate-300 min-w-[36px] tabular-nums flex-shrink-0">
+            {formatTime(displayCurrentTime)}
           </span>
-          <div className="relative w-full flex items-center py-1">
-            <input
-              type="range"
-              min={timelineStart}
-              max={timelineEnd > 0 ? timelineEnd : 1}
-              step={0.05}
-              value={Math.max(timelineStart, Math.min(currentTime, timelineEnd || 1))}
-              onChange={handleSeekSlider}
-              className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400"
-            />
-            {markedFrame && timelineEnd > 0 && (
-              <span
+
+          {/* Seekbar track */}
+          <div
+            ref={seekbarRef}
+            className="relative w-full group cursor-pointer select-none"
+            style={{ height: 20, display: 'flex', alignItems: 'center' }}
+            onMouseMove={handleSeekbarMouseMove}
+            onMouseLeave={handleSeekbarMouseLeave}
+            onMouseDown={handleSeekbarMouseDown}
+            onTouchStart={handleSeekbarTouchStart}
+          >
+            {/* Track background */}
+            <div className="absolute inset-x-0 rounded-full overflow-hidden transition-all"
+              style={{ height: isDraggingSeek || seekHoverTime !== null ? 6 : 4, top: '50%', transform: 'translateY(-50%)' }}>
+              {/* Grey track */}
+              <div className="absolute inset-0 bg-slate-600/70" />
+              {/* Progress fill */}
+              <div
+                className="absolute left-0 top-0 h-full rounded-full"
                 style={{
-                  left: `${Math.min(99, Math.max(1, ((markedFrame.time - timelineStart) / Math.max(0.01, timelineEnd - timelineStart)) * 100))}%`
+                  width: `${seekFillRatio * 100}%`,
+                  background: isLive ? '#ef4444' : '#6366f1',
+                  transition: isDraggingSeek ? 'none' : 'width 0.1s linear'
                 }}
-                className="pointer-events-none absolute -top-1 -translate-x-1/2 w-3.5 h-3.5 bg-amber-400 rounded-full border-2 border-slate-900 shadow-lg z-10"
-                title={`Mốc tại ${markedFrame.time.toFixed(2)}s (${markedFrame.timeStr})`}
               />
+              {/* Hover preview */}
+              {seekHoverTime !== null && seekbarRef.current && (
+                <div
+                  className="absolute top-0 h-full bg-white/20 rounded-full"
+                  style={{
+                    left: `${seekFillRatio * 100}%`,
+                    width: `${Math.max(0, ((seekHoverTime - timelineStart) / Math.max(0.01, timelineEnd - timelineStart)) * 100 - seekFillRatio * 100)}%`,
+                  }}
+                />
+              )}
+            </div>
+
+            {/* Thumb - chỉ hiện khi hover/drag */}
+            <div
+              className="absolute rounded-full shadow-lg pointer-events-none transition-transform"
+              style={{
+                width: isDraggingSeek ? 16 : 12,
+                height: isDraggingSeek ? 16 : 12,
+                left: `${seekFillRatio * 100}%`,
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                background: isLive ? '#ef4444' : '#818cf8',
+                opacity: seekHoverTime !== null || isDraggingSeek ? 1 : 0,
+                boxShadow: isDraggingSeek ? '0 0 0 4px rgba(99,102,241,0.3)' : 'none',
+                transition: isDraggingSeek ? 'none' : 'opacity 0.15s, width 0.1s, height 0.1s',
+              }}
+            />
+
+            {/* Tooltip thời gian hover */}
+            {seekHoverTime !== null && (
+              <div
+                className="absolute pointer-events-none z-20 bottom-full mb-2 px-2 py-0.5 rounded-md bg-slate-900/95 text-white text-[11px] font-mono font-bold border border-white/10 shadow-xl whitespace-nowrap"
+                style={{
+                  left: Math.max(20, Math.min((seekbarRef.current?.getBoundingClientRect().width ?? 200) - 20, seekHoverX)),
+                  transform: 'translateX(-50%)',
+                }}
+              >
+                {formatTime(seekHoverTime - timelineStart)}
+              </div>
             )}
           </div>
-          <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 min-w-[60px] text-right">
-            {timelineEnd.toFixed(1)}s
+
+          {/* Tổng thời lượng */}
+          <span className="text-[11px] font-mono text-slate-400 min-w-[36px] tabular-nums text-right flex-shrink-0">
+            {formatTime(timelineEnd - timelineStart)}
           </span>
         </div>
 
@@ -1213,16 +1622,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               <span>+1</span>
               <ChevronRight className="w-3 h-3" />
             </button>
-
-            {markedFrame && (
-              <button
-                onClick={jumpToMarker}
-                className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center space-x-1 transition-all active:scale-95"
-                title={`Nhảy về mốc tại ${markedFrame.timeStr}`}
-              >
-                <span>Về Mốc</span>
-              </button>
-            )}
 
             <button
               onClick={() => {

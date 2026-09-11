@@ -175,13 +175,13 @@ function startHlsSession(streamKey: string): void {
     // Repeat SPS/PPS on every 1s IDR so a viewer joining an already-running RTSP
     // publisher can decode immediately instead of displaying a black video element.
     '-profile:v', 'baseline',
-    '-level:v', '3.1',
+    '-level:v', '4.1',
     '-pix_fmt', 'yuv420p',
     '-bf', '0',
-    '-x264-params', `keyint=${LIVE_PREVIEW_FPS}:min-keyint=${LIVE_PREVIEW_FPS}:scenecut=0:repeat-headers=1`,
-    '-b:v', '2200k',
-    '-maxrate', '2500k',
-    '-bufsize', '3000k',
+    '-x264-params', `keyint=${LIVE_PREVIEW_FPS}:min-keyint=${LIVE_PREVIEW_FPS}:scenecut=0:repeat-headers=1:aq-mode=2`,
+    '-b:v', '5200k',
+    '-maxrate', '6500k',
+    '-bufsize', '8000k',
     '-g', String(LIVE_PREVIEW_FPS),
     '-keyint_min', String(LIVE_PREVIEW_FPS),
     '-sc_threshold', '0',
@@ -287,9 +287,9 @@ function onStreamEnd(sessionId: string): void {
     hlsSessions.delete(streamKey);
     console.log(`[MediaServer] Stream ${streamKey} ended, HLS ffmpeg stopped`);
   }
-  // BUG FIX: cũ chỉ kill ffmpeg nhưng không xóa files -> thư mục treo trên đĩa.
-  // Gọi cleanupStreamSession để xóa .ts/.m3u8 ngay khi stream kết thúc bình thường.
-  cleanupStreamSession(streamKey);
+  // QUAN TRỌNG: KHÔNG xóa file replay ngay khi RTMP ngắt!
+  // Mục đích của DVR là để người xem tua lại, xem slow motion các pha vừa qua kể cả khi
+  // iPhone dừng phát hoặc mạng gián đoạn tạm thời. Các file cũ sẽ do Cron tự động dọn dẹp sau.
   streamEndedHandler?.(streamKey);
 }
 
