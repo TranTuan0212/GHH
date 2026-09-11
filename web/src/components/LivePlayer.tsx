@@ -607,13 +607,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const hls = new Hls({
         // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio):
         // Giữ buffer lớn để khi tua lùi về quá khứ và phát tiếp không bị cạn buffer.
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        maxBufferSize: 128 * 1024 * 1024, // 128MB RAM buffer
-        backBufferLength: 180, // Giữ 3 phút buffer lùi để tua qua lại tức thì
-        maxBufferHole: 0.8, // Tự động nhảy qua khe hở micro-second giữa các segment không có audio
-        nudgeOffset: 0.15,
-        nudgeMaxRetry: 15,
+        // Với slow motion 0.125x, buffer 120s video = 960s real-time phát → rất ổn định.
+        maxBufferLength: 120,          // Buffering 120s video ahead
+        maxMaxBufferLength: 300,       // Cho phép lên đến 5 phút buffer khi mạng cho phép
+        maxBufferSize: 256 * 1024 * 1024, // 256MB RAM buffer cho 120fps source
+        backBufferLength: 300,         // Giữ 5 phút buffer lùi để tua qua lại tức thì
+        maxBufferHole: 2.0,            // Bỏ qua lỗ hổng lên đến 2 giây (common khi copy stream)
+        nudgeOffset: 0.5,              // Bước nhảy lớn hơn khi stuck (0.5s thay vì 0.15s)
+        nudgeMaxRetry: 30,             // Thử nhiều lần hơn trước khi báo lỗi
+        // Bật high buffer watchdog để tự kiểm tra buffer level mỗi giây
+        highBufferWatchdogPeriod: 2,
         liveSyncDuration: 3,
         // QUAN TRỌNG: Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay.
         // Nếu không, HLS.js sẽ tự seek về live edge khi currentTime lệch > 10s (liveMaxLatencyDurationCount mặc định).
@@ -675,8 +678,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       });
 
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        // Log MỌI lỗi, kể cả không fatal — trước đây bị bỏ qua hoàn toàn, nên không biết tại sao
-        // video giật/không lên hình dù cuối cùng không "chết hẳn".
+        // bufferStalledError là không fatal và rất hay gặp khi tua sang vùng chưa có buffer.
+        // KHÔNG log spam vì nó lặp lại hàng chục lần mỗi giây.
+        if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+          // Không làm gì — stall timer trong onVideoEvent (waiting/stalled) sẽ xử lý sau 3500ms
+          // nếu HLS.js không tự tải xong segment trong thời gian đó.
+          // Nhảy currentTime ngay lập tức ở đây sẽ trigger thêm stall mới (vòng lặp).
+          return;
+        }
+
         console.error('[LivePlayer][hls.js] ERROR:', {
           type: data.type,
           details: data.details,
@@ -685,13 +695,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           response: (data as any).response,
           reason: (data as any).reason
         });
-        // Tự động hồi phục khi gặp BUFFER_STALLED_ERROR (kẹt frame do micro-gap giữa 2 segment video thuần)
-        if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-          console.warn('[LivePlayer][hls.js] BUFFER_STALLED_ERROR -> Tự động nhích frame để vượt qua micro-gap...');
-          if (!isLiveRef.current && !video.paused) {
-            video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.08);
-          }
-        }
 
         if (data.fatal) {
           console.error('[LivePlayer][hls.js] Đây là lỗi FATAL — hls.js sẽ tự hồi phục hoặc dừng hẳn tuỳ loại lỗi.');
