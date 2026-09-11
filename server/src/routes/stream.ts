@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { db, CardEntry, GpsLog, StreamSession } from '../db';
 import { authMiddleware, AuthRequest } from './auth';
-import { cleanupStreamSession } from '../mediaServer';
+import { cleanupStreamSession, stopFfmpegOnly } from '../mediaServer';
 import { resolveRtmpHostForClient } from '../utils/network';
 
 export const streamRouter = Router();
@@ -79,17 +79,18 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
 // resolveRtmpHostForClient được dùng chung từ ../utils/network (đã gộp bản trùng lặp ở đây và
 // ở index.ts để tránh 2 nơi lệch logic khi thêm domain tunnel mới).
 
-// POST /api/stream/end — cleanup segment files + end session
+// POST /api/stream/end — stop ffmpeg nhưng GIỮ LẠI file replay để người xem có thể tua
 streamRouter.post('/end', authMiddleware, (req: AuthRequest, res: Response) => {
   const roomId = req.user?.id || req.body.streamId;
   const session = db.getActiveStream(roomId);
   const streamKey = session?.streamKey;
   const ended = db.endStreamSession(roomId);
 
-  // Xoá toàn bộ file .ts + .m3u8 của session này ngay lập tức
-  // để giải phóng dung lượng ổ đĩa.
+  // CHỈ dừng ffmpeg process, KHÔNG xóa file .ts/.m3u8
+  // Mục đích DVR: người xem vẫn tua lại được sau khi live kết thúc.
+  // File cũ sẽ được cron tự xóa sau CRON_MAX_AGE_SECONDS (mặc định 24h).
   if (streamKey) {
-    cleanupStreamSession(streamKey);
+    stopFfmpegOnly(streamKey);
   }
 
   if (globalIo) {
@@ -97,7 +98,7 @@ streamRouter.post('/end', authMiddleware, (req: AuthRequest, res: Response) => {
     globalIo.to('room_admin').emit('stream_status_changed', { roomId, status: 'ENDED', session: ended });
   }
 
-  res.json({ message: 'Đã dừng Live Stream và dọn dẹp segment video.', stream: ended });
+  res.json({ message: 'Đã dừng Live Stream. Video replay vẫn được giữ lại để xem lại.', stream: ended });
 });
 
 // POST /api/stream/gps

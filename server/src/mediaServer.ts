@@ -97,6 +97,22 @@ export function cleanupStreamSession(streamKey: string): void {
   console.log(`[MediaServer] Cleanup session ${streamKey}: deleted ${deleted} files`);
 }
 
+/**
+ * Chỉ dừng FFmpeg process, KHÔNG xóa file .ts/.m3u8.
+ * Dùng khi người dùng bấm "Dừng Live" — giữ lại file replay để người xem tua lại.
+ * File sẽ được cron xóa sau CRON_MAX_AGE_SECONDS (mặc định 24h).
+ */
+export function stopFfmpegOnly(streamKey: string): void {
+  const session = hlsSessions.get(streamKey);
+  if (session) {
+    for (const process of session.ffmpegProcesses) {
+      if (!process.killed) process.kill('SIGTERM');
+    }
+    hlsSessions.delete(streamKey);
+    console.log(`[MediaServer] FFmpeg stopped for ${streamKey} (files preserved for replay)`);
+  }
+}
+
 /** Start HLS segmentation for a streamKey using ffmpeg directly */
 /*
  * Two independent FFmpeg consumers deliberately read the same RTMP source. This keeps the
