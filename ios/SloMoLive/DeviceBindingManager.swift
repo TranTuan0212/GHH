@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import UIKit
 
 /// DeviceBindingManager chịu trách nhiệm lấy và lưu trữ Hardware UUID cố định trong iOS Keychain.
 /// UUID này sẽ không bị xóa ngay cả khi gỡ ứng dụng và cài đặt lại,
@@ -13,28 +14,46 @@ public class DeviceBindingManager {
 
     /// Lấy Unique Hardware Device UUID cố định của iPhone
     public func getOrCreateDeviceUUID() -> String {
-        if let existingUUID = loadFromKeychain() {
+        if let existingUUID = loadFromKeychain(), !existingUUID.isEmpty {
             return existingUUID
         }
         
-        let newUUID = UUID().uuidString
-        saveToKeychain(uuid: newUUID)
-        return newUUID
+        // Ưu tiên dùng identifierForVendor của Apple (cố định theo phần cứng máy cho nhà phát triển này)
+        // thay vì gọi UUID().uuidString hoàn toàn ngẫu nhiên.
+        let persistentUUID = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+        saveToKeychain(uuid: persistentUUID)
+        return persistentUUID
     }
 
     private func saveToKeychain(uuid: String) {
         guard let data = uuid.data(using: .utf8) else { return }
         
-        let query: [String: Any] = [
+        // BƯỚC 1: Xóa item cũ.
+        // QUAN TRỌNG: Query xóa CHỈ ĐƯỢC CHỨA các thuộc tính định danh (kSecClass, kSecAttrService, kSecAttrAccount).
+        // Tuyệt đối không đưa kSecValueData hay kSecAttrAccessible vào vì SecItemDelete sẽ trả về errSecParam (-50)
+        // và không chịu xóa, dẫn đến SecItemAdd ở bước 2 bị lỗi errSecDuplicateItem (-25299)!
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+        
+        // BƯỚC 2: Thêm item mới với thuộc tính ThisDeviceOnly để khoá chặt vào thiết bị vật lý này
+        let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: keychainAccount,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
 
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        if status != errSecSuccess {
+            print("[DeviceBindingManager] Cảnh báo: SecItemAdd trả về mã lỗi: \(status)")
+        } else {
+            print("[DeviceBindingManager] Đã lưu cố định Hardware UUID vào Keychain thành công.")
+        }
     }
 
     private func loadFromKeychain() -> String? {
