@@ -398,6 +398,7 @@ struct ContentView: View {
 final class BlackScreenManager {
     static let shared = BlackScreenManager()
     private var blackWindow: UIWindow?
+    private var backgroundObserver: NSObjectProtocol?
 
     private init() {}
 
@@ -424,11 +425,28 @@ final class BlackScreenManager {
             UIScreen.main.brightness = 0.0
             UIApplication.shared.isIdleTimerDisabled = true
             print("[BlackScreenManager] Màn hình đen ON")
+
+            // Khi bấm nút khoá phần cứng (Lock/Power) → app vào background → thoát luôn
+            // để tránh khi mở khoá lại bị lộ màn hình đen của app.
+            self.backgroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard self?.blackWindow != nil else { return }
+                print("[BlackScreenManager] App vào background khi màn hình đen → exit(0)")
+                exit(0)
+            }
         }
     }
 
     func hide() {
         DispatchQueue.main.async {
+            // Tháo observer trước khi ẩn để không tự exit khi hide() được gọi tường minh
+            if let obs = self.backgroundObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.backgroundObserver = nil
+            }
             self.blackWindow?.resignKey()
             self.blackWindow?.isHidden = true
             self.blackWindow = nil
