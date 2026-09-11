@@ -1,10 +1,12 @@
-import Foundation
+﻿import Foundation
 import AVFoundation
 import MediaPlayer
 import UIKit
 
-/// Lắng nghe phím cứng âm lượng (Volume Down x3) để mở màn hình ngụy trang
-/// và ẩn thanh System Volume HUD của iOS.
+/// Lang nghe phim cung am luong (Volume Down x3) de mo man hinh nguy trang.
+/// - Su dung KVO tren AVAudioSession.outputVolume de bat su kien chinh xac.
+/// - Reset slider ve 0.5 ONLY sau khi da kich hoat triple-click hoac am luong sap cham dich (< 0.15 / > 0.85),
+///   khong reset giua chuoi dem tranh mat count.
 public class VolumeObserver: NSObject, ObservableObject {
     public static let shared = VolumeObserver()
 
@@ -12,6 +14,8 @@ public class VolumeObserver: NSObject, ObservableObject {
     private weak var volumeSlider: UISlider?
     private var lastVolume: Float = 0.5
     private var clickTimestamps: [Date] = []
+    private var kvoToken: NSKeyValueObservation?
+    private var isResetting = false  // guard: tranh vong lap khi reset slider
 
     public var onTripleVolumeDown: (() -> Void)?
 
@@ -19,85 +23,108 @@ public class VolumeObserver: NSObject, ObservableObject {
         super.init()
         setupAudioSession()
         setupHiddenVolumeView()
+        startKVO()
     }
 
+    // MARK: - Audio Session
     private func setupAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.ambient, options: .mixWithOthers)
+            try AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .allowBluetooth])
             try AVAudioSession.sharedInstance().setActive(true)
             lastVolume = AVAudioSession.sharedInstance().outputVolume
         } catch {
-            print("[VolumeObserver] Lỗi kích hoạt AVAudioSession: \(error)")
+            print("[VolumeObserver] AVAudioSession error: \(error)")
         }
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(volumeChanged(notification:)),
-            name: NSNotification.Name("AVSystemController_SystemVolumeDidChangeNotification"),
-            object: nil
-        )
     }
 
+    // MARK: - Hidden MPVolumeView (an Volume HUD cua iOS)
     private func setupHiddenVolumeView() {
         DispatchQueue.main.async {
-            // Nhúng MPVolumeView kích thước siêu nhỏ ngoài vùng nhìn thấy để ẩn System Volume HUD
-            let v = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+            let v = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
             v.clipsToBounds = true
             v.alpha = 0.001
+            v.isUserInteractionEnabled = false
 
-            let scenes = UIApplication.shared.connectedScenes
-            if let windowScene = scenes.first as? UIWindowScene,
-               let window = windowScene.windows.first {
+            // Them vao window chinh
+            if let window = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .flatMap({ $0.windows })
+                .first(where: { $0.isKeyWindow }) ?? UIApplication.shared.windows.first {
                 window.addSubview(v)
             }
 
             self.volumeView = v
             self.volumeSlider = v.subviews.first(where: { $0 is UISlider }) as? UISlider
-            self.resetVolumeSliderToMid()
+            // Set slider ve 0.5 khi khoi dong
+            self.doResetSlider()
         }
     }
 
-    public func resetVolumeSliderToMid() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.volumeSlider?.value = 0.5
-            self.lastVolume = 0.5
-        }
-    }
+    // MARK: - KVO theo doi outputVolume (chinh xac hon NSNotification)
+    private func startKVO() {
+        kvoToken = AVAudioSession.sharedInstance().observe(
+            \.outputVolume,
+            options: [.new, .old]
+        ) { [weak self] session, change in
+            guard let self = self else { return }
+            // Bo qua su kien do chinh ta reset slider
+            if self.isResetting { return }
 
-    @objc private func volumeChanged(notification: NSNotification) {
-        guard let userInfo = notification.userInfo,
-              let newVolume = userInfo["AVSystemController_AudioVolumeNotificationParameter"] as? Float else {
-            return
-        }
+            let newVol = session.outputVolume
+            let oldVol = change.oldValue ?? self.lastVolume
 
-        // Bắt sự kiện giảm âm lượng (người dùng bấm nút Volume Down)
-        if newVolume < lastVolume {
-            let now = Date()
-            clickTimestamps.append(now)
-            // Giữ các lần nhấn trong vòng 2.0 giây
-            clickTimestamps = clickTimestamps.filter { now.timeIntervalSince($0) <= 2.0 }
+            // Chi tinh khi nguoi dung GIAM am luong (bam Volume Down)
+            if newVol < oldVol - 0.01 {
+                let now = Date()
+                self.clickTimestamps.append(now)
+                // Chi giu cac lan bam trong 2 giay
+                self.clickTimestamps = self.clickTimestamps.filter {
+                    now.timeIntervalSince($0) <= 2.0
+                }
 
-            print("[VolumeObserver] Đã bấm nút Giảm âm lượng (\(clickTimestamps.count)/3 lần)")
+                print("[VolumeObserver] Volume Down bam \(self.clickTimestamps.count)/3")
 
-            if clickTimestamps.count >= 3 {
-                clickTimestamps.removeAll()
-                print("[VolumeObserver] 🎉 Đủ 3 lần bấm Giảm âm lượng -> Kích hoạt mở màn hình!")
-                DispatchQueue.main.async {
-                    self.onTripleVolumeDown?()
+                if self.clickTimestamps.count >= 3 {
+                    self.clickTimestamps.removeAll()
+                    print("[VolumeObserver] Triple Volume Down -> Kich hoat!")
+                    DispatchQueue.main.async {
+                        self.onTripleVolumeDown?()
+                        // Reset sau khi kich hoat
+                        self.doResetSlider()
+                    }
+                    return
                 }
             }
-        }
 
-        lastVolume = newVolume
+            self.lastVolume = newVol
 
-        // Đảm bảo slider luôn ở khoảng giữa (0.5) để không bị kịch sàn âm lượng 0
-        if newVolume < 0.2 || newVolume > 0.8 {
-            resetVolumeSliderToMid()
+            // Reset neu am luong sap cham dich (tranh bi ket o 0 hoac 1)
+            if newVol <= 0.12 || newVol >= 0.88 {
+                self.doResetSlider()
+            }
         }
+    }
+
+    // Reset slider ve 0.5 ma khong trigger KVO lap
+    public func doResetSlider() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self = self else { return }
+            self.isResetting = true
+            self.volumeSlider?.value = 0.5
+            self.lastVolume = 0.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                self.isResetting = false
+            }
+        }
+    }
+
+    // Giu lai de ContentView goi khi app hien thi
+    public func resetVolumeSliderToMid() {
+        doResetSlider()
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        kvoToken?.invalidate()
         volumeView?.removeFromSuperview()
     }
 }

@@ -330,12 +330,7 @@ struct ContentView: View {
 
                             // Fake Lock / Stealth Screen Saver Button
                             Button(action: {
-                                withAnimation {
-                                    isFakeLocked = true
-                                    UIScreen.main.brightness = 0.0
-                                    UIApplication.shared.isIdleTimerDisabled = true
-                                    VolumeObserver.shared.resetVolumeSliderToMid()
-                                }
+                                showFakeBlackScreen()
                             }) {
                                 HStack(spacing: 6) {
                                     Image(systemName: "lock.fill")
@@ -364,34 +359,100 @@ struct ContentView: View {
                         }
                         .padding(.bottom, 40)
                     }
-
-                    // 100% Pure Pitch Black Screen Overlay (Không nhận chạm, mở bằng 3 lần Giảm Âm Lượng)
-                    if isFakeLocked {
-                        Color.black
-                            .edgesIgnoringSafeArea(.all)
-                            .statusBar(hidden: true)
-                    }
                 }
             }
         }
         .onAppear {
+            // Khởi động VolumeObserver và gắn callback mở màn hình
             VolumeObserver.shared.onTripleVolumeDown = {
-                withAnimation {
-                    isFakeLocked = false
-                    UIScreen.main.brightness = 0.6
+                // Gọi từ bất kỳ thread nào -> dispatch về main
+                DispatchQueue.main.async {
+                    self.hideFakeBlackScreen()
                 }
             }
+            VolumeObserver.shared.resetVolumeSliderToMid()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
-            print("[ContentView] Người dùng bấm nút khóa màn hình -> Tự động thoát app!")
+            // Người dùng bấm nút khóa vật lý -> thoát hẳn app
             exit(0)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // App sắp bị mất focus (notification kéo xuống, multitasking...) -> thoát nếu đang fake lock
             if isFakeLocked {
-                print("[ContentView] App vào background khi đang ở màn hình đen -> Thoát app!")
                 exit(0)
             }
         }
+    }
+
+    // MARK: - Black Screen Window (phủ TOÀN BỘ màn hình kể cả status bar + home indicator + banners)
+    func showFakeBlackScreen() {
+        isFakeLocked = true
+        BlackScreenManager.shared.show()
+    }
+
+    func hideFakeBlackScreen() {
+        isFakeLocked = false
+        BlackScreenManager.shared.hide()
+    }
+}
+
+/// Singleton quản lý UIWindow đen phủ toàn màn hình.
+/// Dùng class (reference type) để có thể giữ tham chiếu UIWindow mà không bị giải phóng.
+final class BlackScreenManager {
+    static let shared = BlackScreenManager()
+    private var blackWindow: UIWindow?
+
+    private init() {}
+
+    func show() {
+        DispatchQueue.main.async {
+            guard let windowScene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive })
+                ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
+            else { return }
+
+            let win = UIWindow(windowScene: windowScene)
+            // windowLevel cao hơn mọi thứ kể cả notification banner (level 1000)
+            win.windowLevel = UIWindow.Level(rawValue: 2000)
+            win.backgroundColor = .black
+            win.isUserInteractionEnabled = false
+
+            let vc = BlackViewController()
+            win.rootViewController = vc
+            win.alpha = 1
+            win.isHidden = false
+            win.makeKeyAndVisible()
+            self.blackWindow = win
+
+            UIScreen.main.brightness = 0.0
+            UIApplication.shared.isIdleTimerDisabled = true
+            print("[BlackScreenManager] Màn hình đen ON - windowLevel: \(win.windowLevel.rawValue)")
+        }
+    }
+
+    func hide() {
+        DispatchQueue.main.async {
+            self.blackWindow?.resignKey()
+            self.blackWindow?.isHidden = true
+            self.blackWindow = nil
+            UIScreen.main.brightness = 0.6
+            UIApplication.shared.isIdleTimerDisabled = false
+            VolumeObserver.shared.resetVolumeSliderToMid()
+            print("[BlackScreenManager] Màn hình đen OFF")
+        }
+    }
+}
+
+/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator
+private class BlackViewController: UIViewController {
+    override var prefersStatusBarHidden: Bool { true }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .none }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
     }
 }
 
