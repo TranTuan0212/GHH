@@ -589,11 +589,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
 
       const hls = new Hls({
-        // Đây chỉ là đường replay (Live dùng WebRTC). Giữ sẵn nhiều segment để tua
-        // chậm/qua lại frame cũ không bị cạn buffer sau vài giây.
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        backBufferLength: 300,
+        // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio):
+        // Giữ buffer lớn để khi tua lùi về quá khứ và phát tiếp không bị cạn buffer.
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        maxBufferSize: 128 * 1024 * 1024, // 128MB RAM buffer
+        backBufferLength: 180, // Giữ 3 phút buffer lùi để tua qua lại tức thì
+        maxBufferHole: 0.8, // Tự động nhảy qua khe hở micro-second giữa các segment không có audio
+        nudgeOffset: 0.15,
+        nudgeMaxRetry: 15,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 10,
         enableWorker: true,
         lowLatencyMode: false,
         debug: false
@@ -662,6 +668,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           response: (data as any).response,
           reason: (data as any).reason
         });
+        // Tự động hồi phục khi gặp BUFFER_STALLED_ERROR (kẹt frame do micro-gap giữa 2 segment video thuần)
+        if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+          console.warn('[LivePlayer][hls.js] BUFFER_STALLED_ERROR -> Tự động nhích frame để vượt qua micro-gap...');
+          if (!isLiveRef.current && !video.paused) {
+            video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.08);
+          }
+        }
+
         if (data.fatal) {
           console.error('[LivePlayer][hls.js] Đây là lỗi FATAL — hls.js sẽ tự hồi phục hoặc dừng hẳn tuỳ loại lỗi.');
           switch (data.type) {
@@ -674,8 +688,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               hls.recoverMediaError();
               break;
             default:
-              console.error('[LivePlayer][hls.js] Lỗi fatal không tự hồi phục được -> destroy hls instance. Video sẽ đứng hình vĩnh viễn từ đây, cần load lại trang.');
-              hls.destroy();
+              console.error('[LivePlayer][hls.js] Lỗi fatal khác -> thử recoverMediaError trước khi destroy.');
+              hls.recoverMediaError();
               break;
           }
         }
@@ -684,10 +698,29 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       // Log toàn bộ sự kiện native của thẻ <video> để biết chính xác trạng thái decode/buffer thật sự,
       // vì đôi khi hls.js không báo lỗi gì nhưng <video> vẫn không render được frame nào.
       const videoEvents = ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'playing', 'waiting', 'stalled', 'suspend', 'abort', 'emptied', 'error'];
+      let stallTimer: number | null = null;
       const onVideoEvent = (ev: Event) => {
         if (ev.type === 'loadedmetadata' && video.videoWidth > 0 && video.videoHeight > 0) {
           setSourceIsPortrait(video.videoHeight > video.videoWidth);
         }
+        // Xử lý tự động cứu khi video bị khựng (stalled / waiting) trong chế độ xem lại
+        if (ev.type === 'waiting' || ev.type === 'stalled') {
+          if (!isLiveRef.current && !video.paused) {
+            if (stallTimer) window.clearTimeout(stallTimer);
+            stallTimer = window.setTimeout(() => {
+              if (!isLiveRef.current && !video.paused && video.readyState < 3) {
+                console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 350ms -> Nhích nhẹ để tiếp tục phát...');
+                video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.08);
+              }
+            }, 350);
+          }
+        } else if (ev.type === 'playing' || ev.type === 'canplay') {
+          if (stallTimer) {
+            window.clearTimeout(stallTimer);
+            stallTimer = null;
+          }
+        }
+
         if (ev.type === 'error') {
           console.error('[LivePlayer][<video>] error — MediaError code:', video.error?.code, 'message:', video.error?.message);
         } else {
@@ -701,7 +734,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         }
       };
       videoEvents.forEach((evt) => video.addEventListener(evt, onVideoEvent));
-      videoEventCleanup = () => videoEvents.forEach((evt) => video.removeEventListener(evt, onVideoEvent));
+      videoEventCleanup = () => {
+        if (stallTimer) window.clearTimeout(stallTimer);
+        videoEvents.forEach((evt) => video.removeEventListener(evt, onVideoEvent));
+      };
     })();
 
     return () => {
@@ -906,22 +942,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       });
     }
 
+    const isNormalSpeed = speed === 1.0;
     showModeNotice(
       'slow',
-      `SLOW MOTION - ${speed}x`,
-      'Đang tua chậm (Replay)',
-      'Bấm [Enter] hoặc chọn [VỀ LIVE] để quay lại'
+      isNormalSpeed ? 'TỐC ĐỘ GỐC - 1.0x (REPLAY)' : `SLOW MOTION - ${speed}x`,
+      isNormalSpeed ? 'Đang phát xem lại ở tốc độ chuẩn 1x' : 'Đang phát quay chậm (Replay)',
+      'Bấm [🔴 VỀ LIVE] hoặc phím [Enter] để quay lại trực tiếp'
     );
   };
 
   const handleSpeedChange = (speed: number) => {
-    if (speed < 1.0) {
-      // Nếu không còn ở Live (đang ở Replay hoặc vừa kéo thước tua đến mốc), giữ nguyên vị trí hiện tại!
-      const keepCurrentPosition = !isLiveRef.current;
-      switchToSlow(speed, keepCurrentPosition);
-    } else {
-      jumpToLive();
-    }
+    // Luôn áp dụng tốc độ (kể cả 1.0x) cho luồng Replay để người dùng có thể xem lại ở tốc độ thường!
+    // Không tự ý nhảy về Live khi chọn 1.0x nữa (chỉ về Live khi bấm nút [VỀ LIVE] hoặc phím Enter).
+    const keepCurrentPosition = !isLiveRef.current;
+    switchToSlow(speed, keepCurrentPosition);
   };
 
   // Hàm tua thời gian thực (Live Video Scrubbing) - Khung hình lướt mượt 60/120 FPS theo tay kéo
@@ -1231,6 +1265,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = timelineStart + finalRatio * curSpan;
       // Nhả chuột: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
+      // Tự động phát tiếp mượt mà nếu trước khi kéo đang phát
+      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+        replayVideoRef.current.play().catch(() => {});
+        setIsPlaying(true);
+      }
     };
 
     window.addEventListener('mousemove', onMouseMove);
@@ -1290,6 +1329,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = timelineStart + finalRatio * curSpan;
       // Nhả tay: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
+      // Tự động phát tiếp mượt mà nếu trước khi kéo đang phát
+      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+        replayVideoRef.current.play().catch(() => {});
+        setIsPlaying(true);
+      }
     };
 
     window.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -1718,24 +1762,44 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             )}
           </div>
 
-          {/* Slow Motion Speed Controls */}
-          <div className="flex items-center space-x-0.5 bg-slate-950/60 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
+          {/* Slow Motion Speed Controls & Nút Về Live */}
+          <div className="flex items-center space-x-1 bg-slate-950/70 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
+            {/* Nút VỀ LIVE to nổi bật khi đang xem Replay */}
+            {!isLive ? (
+              <button
+                type="button"
+                onClick={jumpToLive}
+                className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-black text-[11px] shadow-md shadow-red-600/40 flex items-center space-x-1.5 transition-all active:scale-95 animate-pulse flex-shrink-0 border border-red-400"
+                title="Quay lại phát trực tiếp thời gian thực (<0.2s)"
+              >
+                <Radio className="w-3.5 h-3.5 animate-spin" />
+                <span>VỀ LIVE</span>
+              </button>
+            ) : (
+              <div className="flex items-center space-x-1 px-1.5 py-0.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-400 text-[10px] font-bold flex-shrink-0">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
+                <span>LIVE</span>
+              </div>
+            )}
+
             <div
               className="flex items-center space-x-0.5 px-1 text-indigo-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0"
-              title="Enter tự động tua chậm về mốc vừa gắn"
+              title="Chọn tốc độ phát xem lại (Replay)"
             >
               <Gauge className="w-3 h-3" />
-              <span>Slow:</span>
+              <span>Tốc độ:</span>
             </div>
+
             {speedOptions.map((rate) => (
               <button
                 key={rate}
                 onClick={() => handleSpeedChange(rate)}
                 className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
-                  playbackRate === rate
-                    ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
+                  !isLive && playbackRate === rate
+                    ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400 scale-105'
                     : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
                 }`}
+                title={`Phát xem lại ở tốc độ ${rate}x`}
               >
                 {rate}x
               </button>

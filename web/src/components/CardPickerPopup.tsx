@@ -33,14 +33,21 @@ interface CardPickerPopupProps {
   onChangeTargetGroup?: (groupNum: number) => void;
 }
 
-const SUITS = [
-  { name: 'Cơ', symbol: '♥', color: 'text-red-500', bg: 'bg-red-500/10 border-red-500/30 hover:bg-red-500/20' },
-  { name: 'Rô', symbol: '♦', color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/30 hover:bg-orange-500/20' },
-  { name: 'Chuồn', symbol: '♣', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20' },
-  { name: 'Bích', symbol: '♠', color: 'text-indigo-300', bg: 'bg-indigo-500/10 border-indigo-500/30 hover:bg-indigo-500/20' }
+const CARDS = [
+  { rank: 'A', label: 'A', sub: 'Át', color: 'text-red-400', border: 'border-red-500/40 hover:border-red-400', bg: 'bg-gradient-to-b from-red-950/60 to-slate-900' },
+  { rank: '2', label: '2', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '3', label: '3', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '4', label: '4', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '5', label: '5', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '6', label: '6', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '7', label: '7', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '8', label: '8', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '9', label: '9', sub: '', color: 'text-slate-100', border: 'border-white/15 hover:border-white/40', bg: 'bg-gradient-to-b from-slate-800/80 to-slate-900' },
+  { rank: '10', label: '10', sub: '', color: 'text-amber-300', border: 'border-amber-500/30 hover:border-amber-400', bg: 'bg-gradient-to-b from-amber-950/40 to-slate-900' },
+  { rank: 'J', label: 'J', sub: 'Bồi', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
+  { rank: 'Q', label: 'Q', sub: 'Đầm', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
+  { rank: 'K', label: 'K', sub: 'Già', color: 'text-yellow-400', border: 'border-yellow-500/40 hover:border-yellow-300', bg: 'bg-gradient-to-b from-yellow-950/50 to-slate-900' },
 ];
-
-const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
 export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   isOpen,
@@ -59,10 +66,9 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     if (typeof window === 'undefined') return { x: 20, y: 70 };
     const winW = window.innerWidth;
     if (winW < 640) {
-      return { x: 8, y: 50 };
+      return { x: 4, y: 50 };
     }
-    // Góc trên bên phải màn hình
-    return { x: Math.max(16, winW - 570), y: 70 };
+    return { x: Math.max(16, winW - 620), y: 70 };
   };
 
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
@@ -82,6 +88,23 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     return getDefaultPosition();
   });
 
+  // Kích thước popup có thể kéo dãn
+  const getDefaultWidth = () => {
+    if (typeof window === 'undefined') return 600;
+    return window.innerWidth < 640 ? Math.min(window.innerWidth - 8, 600) : 600;
+  };
+
+  const [popupWidth, setPopupWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('card_picker_size');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.w === 'number' && parsed.w >= 420 && parsed.w <= 1000) return parsed.w;
+      }
+    } catch {}
+    return getDefaultWidth();
+  });
+
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; startX: number; startY: number }>({
     mouseX: 0,
@@ -90,6 +113,10 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     startY: 0
   });
 
+  // Resize ref
+  const isResizingRef = useRef(false);
+  const resizeStartRef = useRef<{ mouseX: number; startW: number }>({ mouseX: 0, startW: 600 });
+
   // Lưu vị trí khi di chuyển
   useEffect(() => {
     try {
@@ -97,11 +124,20 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     } catch {}
   }, [position]);
 
+  // Lưu kích thước khi resize
+  useEffect(() => {
+    try {
+      localStorage.setItem('card_picker_size', JSON.stringify({ w: popupWidth }));
+    } catch {}
+  }, [popupWidth]);
+
   const handleResetPosition = () => {
     const def = getDefaultPosition();
     setPosition(def);
+    setPopupWidth(getDefaultWidth());
     try {
       localStorage.removeItem('card_picker_position');
+      localStorage.removeItem('card_picker_size');
     } catch {}
   };
 
@@ -181,15 +217,60 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     onSelectCard('Không thấy', target.groupNum, target.cardId);
   };
 
+  // Kéo dãn kích thước popup (góc phải dưới)
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isResizingRef.current = true;
+    resizeStartRef.current = { mouseX: e.clientX, startW: popupWidth };
+
+    const onMouseMove = (mv: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const delta = mv.clientX - resizeStartRef.current.mouseX;
+      const newW = Math.max(420, Math.min(window.innerWidth - 16, resizeStartRef.current.startW + delta));
+      setPopupWidth(newW);
+    };
+    const onMouseUp = () => {
+      isResizingRef.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleResizeTouchStart = (e: React.TouchEvent) => {
+    if (!e.touches[0]) return;
+    e.stopPropagation();
+    isResizingRef.current = true;
+    resizeStartRef.current = { mouseX: e.touches[0].clientX, startW: popupWidth };
+
+    const onTouchMove = (tv: TouchEvent) => {
+      if (!isResizingRef.current || !tv.touches[0]) return;
+      const delta = tv.touches[0].clientX - resizeStartRef.current.mouseX;
+      const newW = Math.max(420, Math.min(window.innerWidth - 16, resizeStartRef.current.startW + delta));
+      setPopupWidth(newW);
+    };
+    const onTouchEnd = () => {
+      isResizingRef.current = false;
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onTouchEnd);
+  };
+
   const popupContent = (
     <div
       style={{
         position: 'fixed',
         left: `${position.x}px`,
         top: `${position.y}px`,
-        zIndex: 999999
+        zIndex: 999999,
+        width: `${popupWidth}px`,
+        maxWidth: `calc(100vw - ${position.x + 8}px)`
       }}
-      className="w-[96vw] sm:w-[540px] max-w-[560px] bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
+      className="bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
     >
       {/* 1. Header Bar: Cầm nắm kéo thả tự do */}
       <div
@@ -202,7 +283,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
           <Move className="w-4 h-4 text-amber-400 flex-shrink-0 animate-bounce" />
           <div className="flex items-center space-x-1.5 truncate">
             <span className="text-xs font-black tracking-wide text-amber-300 uppercase">
-              {target.mode === 'edit' ? 'Đổi Lá Bài' : 'Bảng 52 Lá Bài'}
+              {target.mode === 'edit' ? 'Đổi Lá Bài' : 'Bảng Chọn Bài (A ➔ K)'}
             </span>
             <span className="text-slate-400 text-xs">•</span>
             <span className="text-xs font-bold text-white truncate">
@@ -310,53 +391,67 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             )}
           </div>
 
-          {/* Bảng 52 Lá Bài: Mỗi hàng = 1 chất, 13 lá xếp ngang liền kề */}
-          <div className="space-y-1 bg-slate-950/70 p-2 rounded-xl border border-white/10">
-            {SUITS.map((suit) => (
-              <div key={suit.name} className="flex items-center gap-1">
-                {/* Nhãn chất: ký hiệu + tên, cố định bên trái */}
-                <div className={`flex-shrink-0 w-10 flex flex-col items-center justify-center rounded-lg py-1 border ${suit.bg}`}>
-                  <span className={`text-base font-black leading-none ${suit.color}`}>{suit.symbol}</span>
-                  <span className={`text-[8px] font-bold leading-none mt-0.5 ${suit.color} opacity-80`}>{suit.name}</span>
-                </div>
+          {/* Bảng Các Lá Bài Từ A -> K: Khung to, rõ ràng, cực kỳ dễ nhìn và dễ bấm */}
+          <div className="bg-slate-950/80 p-2 sm:p-2.5 rounded-xl border border-white/10 shadow-inner">
+            <div className="grid grid-cols-7 sm:grid-cols-13 gap-1.5 sm:gap-1">
+              {CARDS.map((card) => {
+                const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
+                return (
+                  <button
+                    key={card.rank}
+                    type="button"
+                    onClick={() => handleCardClick(card.rank)}
+                    className={`h-14 sm:h-16 rounded-xl flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden ${
+                      card.bg
+                    } ${card.border} ${
+                      isCurrent
+                        ? 'ring-2 ring-amber-400 border-amber-400 scale-105 z-10 shadow-amber-500/30'
+                        : 'hover:scale-105 hover:border-amber-400/60'
+                    }`}
+                    title={`Chọn lá ${card.rank} ${card.sub ? `(${card.sub})` : ''}`}
+                  >
+                    {/* Chữ to rõ ràng */}
+                    <span className={`text-xl sm:text-2xl leading-none font-black tracking-tighter ${card.color} drop-shadow-md`}>
+                      {card.rank}
+                    </span>
 
-                {/* 13 lá bài xếp thành 1 hàng ngang */}
-                <div className="flex flex-1 gap-0.5 overflow-x-auto no-scrollbar">
-                  {RANKS.map((rank) => {
-                    const fullCardCode = `${rank}${suit.symbol}`;
-                    const isCurrent = target.mode === 'edit' && target.currentValue === fullCardCode;
-                    return (
-                      <button
-                        key={fullCardCode}
-                        type="button"
-                        onClick={() => handleCardClick(fullCardCode)}
-                        className={`flex-shrink-0 w-8 sm:w-9 h-11 sm:h-12 rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-90 border ${
-                          suit.bg
-                        } ${
-                          isCurrent
-                            ? 'ring-2 ring-amber-400 bg-amber-500/30 border-amber-400 shadow-md scale-105'
-                            : 'shadow-sm hover:scale-105'
-                        }`}
-                        title={`Chọn lá ${rank} ${suit.name}`}
-                      >
-                        <span className={`text-xs sm:text-sm leading-none font-black ${suit.color}`}>
-                          {rank}
-                        </span>
-                        <span className={`text-[9px] sm:text-[10px] leading-none ${suit.color}`}>
-                          {suit.symbol}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+                    {/* Nhãn phụ nếu có (Át, Bồi, Đầm, Già) */}
+                    {card.sub ? (
+                      <span className="text-[9px] font-bold text-amber-400/80 leading-none mt-1">
+                        {card.sub}
+                      </span>
+                    ) : (
+                      <span className="text-[8px] text-slate-500 leading-none mt-1 font-mono">
+                        •
+                      </span>
+                    )}
+
+                    {/* Hiệu ứng ánh sáng khi hover */}
+                    <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Footer hướng dẫn */}
-          <div className="flex items-center justify-between text-[10px] text-slate-500 px-1 pt-1 border-t border-white/5">
-            <span>Kéo thanh tiêu đề để di chuyển vị trí tùy ý</span>
-            <span className="text-amber-400 font-medium">1 Click = Gán bài ngay</span>
+          {/* Footer + Resize handle */}
+          <div className="relative flex items-center justify-between text-[10px] text-slate-500 px-1 pt-1 pb-4 border-t border-white/5">
+            <span>Kéo header di chuyển · Kéo góc ↘ để thay đổi kích thước</span>
+            <span className="text-amber-400 font-medium">1 Click = Gán ngay</span>
+            {/* Resize handle ở góc dưới bên phải */}
+            <div
+              onMouseDown={handleResizeMouseDown}
+              onTouchStart={handleResizeTouchStart}
+              className="absolute bottom-1 right-1 w-5 h-5 flex items-center justify-center cursor-se-resize text-slate-500 hover:text-amber-400 transition-colors"
+              title="Kéo để thay đổi kích thước popup"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                <path d="M10 0L10 10L0 10Z" opacity="0.5"/>
+                <circle cx="8.5" cy="8.5" r="1.2"/>
+                <circle cx="5.5" cy="8.5" r="1.2"/>
+                <circle cx="8.5" cy="5.5" r="1.2"/>
+              </svg>
+            </div>
           </div>
         </div>
       )}
