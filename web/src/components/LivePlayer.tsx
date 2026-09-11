@@ -79,6 +79,7 @@ interface LivePlayerProps {
   socket?: Socket | null;
   roomId?: string;
   roomName?: string;
+  isAdmin?: boolean;
   onFinishRound?: () => void;
 }
 
@@ -87,6 +88,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   socket,
   roomId,
   roomName,
+  isAdmin = false,
   onFinishRound,
 }) => {
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -1504,25 +1506,29 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               <Camera className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <p className="text-xs sm:text-sm font-medium text-slate-300">Đang chờ điện thoại phát trực tiếp...</p>
-            <div className="flex flex-col items-center space-y-1 max-w-sm">
-              <p className="text-[11px] text-slate-400">
-                Mở app iOS trên iPhone, nhập Server IP:
-              </p>
-              <div className="inline-flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-amber-500/40 shadow-inner">
-                <code className="text-amber-300 font-mono text-xs font-bold select-all">
-                  {detectedServerUrl}
-                </code>
-                <button
-                  type="button"
-                  onClick={handleCopyServerUrl}
-                  className="p-0.5 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-[10px] font-semibold flex items-center space-x-1 transition-all active:scale-95"
-                  title="Sao chép Server IP"
-                >
-                  {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-300" />}
-                  <span>{copied ? 'Đã chép' : 'Chép'}</span>
-                </button>
+            {isAdmin ? (
+              <div className="flex flex-col items-center space-y-1 max-w-sm">
+                <p className="text-[11px] text-slate-400">
+                  Mở app iOS trên iPhone, nhập Server IP:
+                </p>
+                <div className="inline-flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-amber-500/40 shadow-inner">
+                  <code className="text-amber-300 font-mono text-xs font-bold select-all">
+                    {detectedServerUrl}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={handleCopyServerUrl}
+                    className="p-0.5 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-[10px] font-semibold flex items-center space-x-1 transition-all active:scale-95"
+                    title="Sao chép Server IP"
+                  >
+                    {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-300" />}
+                    <span>{copied ? 'Đã chép' : 'Chép'}</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : (
+              <p className="text-[11px] text-slate-500">Vui lòng đợi tín hiệu phát từ máy quay...</p>
+            )}
           </div>
         )}
 

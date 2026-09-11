@@ -345,6 +345,7 @@ export const App: React.FC = () => {
                   socket={socket}
                   roomId={currentRoomId}
                   roomName={activeRoomName}
+                  isAdmin={user.role === 'ADMIN'}
                   onFinishRound={handleFinishRound}
                 />
               </div>

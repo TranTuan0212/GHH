@@ -146,27 +146,29 @@ streamRouter.get('/active', (req, res) => {
 
 // GET /api/stream/items (or /cards)
 const getEntriesHandler = (req: any, res: Response) => {
-  res.json({ entries: db.getCardEntries() });
+  const targetRoomId = (req.query.roomId as string) || (req.query.userId as string);
+  res.json({ entries: db.getCardEntries(targetRoomId) });
 };
 streamRouter.get('/items', getEntriesHandler);
 streamRouter.get('/cards', getEntriesHandler);
 
 // POST /api/stream/items (or /cards)
 const addEntryHandler = (req: AuthRequest, res: Response) => {
-  const { cardValue, groupCount } = req.body;
+  const { cardValue, groupCount, roomId } = req.body;
   if (!cardValue) {
     return res.status(400).json({ error: 'Vui lòng nhập mã dữ liệu.' });
   }
 
+  const targetRoomId = roomId || req.user!.id;
   const numGroups = parseInt(groupCount) || 3;
-  const existingEntries = db.getCardEntries();
+  const existingEntries = db.getCardEntries(targetRoomId);
   const sequenceOrder = existingEntries.length + 1;
   const groupIndex = ((sequenceOrder - 1) % numGroups) + 1;
 
   const newEntry: CardEntry = {
     id: 'item-' + Date.now(),
-    streamId: db.getActiveStream()?.id || 'live-session',
-    userId: req.user!.id,
+    streamId: targetRoomId,
+    userId: targetRoomId,
     cardValue: cardValue.toString().toUpperCase(),
     groupIndex,
     sequenceOrder,
@@ -176,7 +178,8 @@ const addEntryHandler = (req: AuthRequest, res: Response) => {
   db.addCardEntry(newEntry);
 
   if (globalIo) {
-    globalIo.emit('card_added', { entry: newEntry, allEntries: db.getCardEntries() });
+    globalIo.to(`room_${targetRoomId}`).emit('card_added', { entry: newEntry, allEntries: db.getCardEntries(targetRoomId) });
+    globalIo.to('room_admin').emit('card_added', { entry: newEntry, allEntries: db.getCardEntries(targetRoomId), roomId: targetRoomId });
   }
 
   res.json({ message: 'Đã phân loại mã dữ liệu thành công', entry: newEntry });
@@ -186,9 +189,11 @@ streamRouter.post('/cards', authMiddleware, addEntryHandler);
 
 // DELETE /api/stream/items (or /cards)
 const clearEntriesHandler = (req: AuthRequest, res: Response) => {
-  db.clearCardEntries();
+  const targetRoomId = (req.query.roomId as string) || (req.body.roomId as string) || req.user!.id;
+  db.clearCardEntries(targetRoomId);
   if (globalIo) {
-    globalIo.emit('cards_cleared');
+    globalIo.to(`room_${targetRoomId}`).emit('cards_cleared');
+    globalIo.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   }
   res.json({ message: 'Đã xóa toàn bộ danh sách dữ liệu.' });
 };
