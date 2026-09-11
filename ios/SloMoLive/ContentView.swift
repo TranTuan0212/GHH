@@ -378,6 +378,15 @@ struct ContentView: View {
             }
             VolumeObserver.shared.resetVolumeSliderToMid()
         }
+        // Vuốt từ dưới lên ra Home Screen hoặc Khóa máy -> Thoát hẳn app
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            print("[ContentView] App vào background (vuốt ra home / khóa máy) -> Thoát app ngay lập tức!")
+            exit(0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            print("[ContentView] Khóa máy -> Thoát app ngay lập tức!")
+            exit(0)
+        }
     }
 
     // MARK: - Black Screen Window (phủ TOÀN BỘ màn hình kể cả status bar + home indicator)
@@ -420,20 +429,10 @@ final class BlackScreenManager {
             win.makeKeyAndVisible()
             self.blackWindow = win
 
-            // Dự phòng: Chạm 5 lần liên tục vào màn hình đen cũng sẽ mở lại màn hình
-            let tap = UITapGestureRecognizer(target: self, action: #selector(self.handleBackupTap))
-            tap.numberOfTapsRequired = 5
-            win.addGestureRecognizer(tap)
-
             UIScreen.main.brightness = 0.0
             UIApplication.shared.isIdleTimerDisabled = true
             print("[BlackScreenManager] Màn hình đen ON")
         }
-    }
-
-    @objc private func handleBackupTap() {
-        print("[BlackScreenManager] Dự phòng: Tap 5 lần -> Mở màn hình")
-        hide()
     }
 
     func hide() {
@@ -449,7 +448,7 @@ final class BlackScreenManager {
     }
 }
 
-/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng
+/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng & vuốt từ dưới lên thoát app
 private class BlackViewController: UIViewController {
     override var prefersStatusBarHidden: Bool { true }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .none }
@@ -460,6 +459,19 @@ private class BlackViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .black
         becomeFirstResponder()
+
+        // Gắn MPVolumeView vào màn hình đen để bắt phím âm lượng và ẩn volume HUD
+        VolumeObserver.shared.attachToView(view)
+
+        // Vuốt từ dưới lên là out app
+        let swipeUp = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeUp))
+        swipeUp.direction = .up
+        view.addGestureRecognizer(swipeUp)
+    }
+
+    @objc private func handleSwipeUp() {
+        print("[BlackViewController] Người dùng vuốt từ dưới lên -> Thoát app ngay lập tức!")
+        exit(0)
     }
 }
 

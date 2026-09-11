@@ -1,4 +1,4 @@
-﻿import Foundation
+import Foundation
 import AVFoundation
 import MediaPlayer
 import UIKit
@@ -53,6 +53,15 @@ public class VolumeObserver: NSObject, ObservableObject {
             self.volumeView = v
             self.volumeSlider = v.subviews.first(where: { $0 is UISlider }) as? UISlider
             self.doResetSlider()
+        }
+    }
+
+    /// Gắn MPVolumeView vào UIView hiện tại để đảm bảo luôn ở trong KeyWindow đang hiển thị
+    public func attachToView(_ parentView: UIView) {
+        DispatchQueue.main.async {
+            guard let v = self.volumeView else { return }
+            v.removeFromSuperview()
+            parentView.addSubview(v)
         }
     }
 
