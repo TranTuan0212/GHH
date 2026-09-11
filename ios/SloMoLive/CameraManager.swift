@@ -349,7 +349,8 @@ public class CameraManager: NSObject, ObservableObject {
                             }
                         }
                         if connection.isVideoStabilizationSupported {
-                            connection.preferredVideoStabilizationMode = .auto
+                            // Tắt chống rung nội suy để tránh méo viền và mờ chuyển động khi quay 120 FPS
+                            connection.preferredVideoStabilizationMode = .off
                         }
                     }
                 } else {

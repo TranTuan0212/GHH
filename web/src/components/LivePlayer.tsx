@@ -790,11 +790,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const nextTime = pendingScrubTimeRef.current;
         pendingScrubTimeRef.current = null;
         isSeekingRef.current = true;
-        if (typeof (video as any).fastSeek === 'function') {
-          (video as any).fastSeek(nextTime);
-        } else {
-          video.currentTime = nextTime;
-        }
+        // Dùng currentTime chính xác để giải mã đầy đủ 100% chi tiết, không dùng fastSeek làm nhòe/vỡ khối
+        video.currentTime = nextTime;
         setCurrentTime(nextTime);
         return;
       }
@@ -962,12 +959,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         if (!v || pendingScrubTimeRef.current === null) return;
         const nextTime = pendingScrubTimeRef.current;
 
-        // Ưu tiên fastSeek phần cứng GPU nếu trình duyệt hỗ trợ để lướt frame mượt mà
-        if (typeof (v as any).fastSeek === 'function') {
-          (v as any).fastSeek(nextTime);
-        } else {
-          v.currentTime = nextTime;
-        }
+        // Luôn giải mã chính xác 100% từng điểm ảnh gốc (không dùng fastSeek gây nhòe mờ)
+        v.currentTime = nextTime;
       });
     }
   };
