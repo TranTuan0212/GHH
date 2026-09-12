@@ -312,11 +312,20 @@ function onStreamEnd(sessionId: string): void {
 /** Background cleanup: timeout check */
 function startCleanupScheduler(): void {
   const TIMEOUT_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS || '', 10) || 60_000;
-  const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_MS || '', 10) || 24 * 60 * 60_000;
+  // Dọn dẹp định kỳ mỗi 1 tiếng (thay vì 24 tiếng) để ổ cứng không bị đầy segment video test cũ
+  const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_MS || '', 10) || 60 * 60_000;
 
   setInterval(() => {
     timeoutCheckOnce();
   }, TIMEOUT_INTERVAL_MS);
+
+  // Chạy ngay 1 lần sau khi khởi động 5s để giải phóng ổ cứng nếu có session cũ
+  setTimeout(() => {
+    const res = runCronCleanupOnce();
+    if (res.deleted > 0) {
+      console.log(`[MediaServer] Dọn dẹp khởi động: đã giải phóng ${res.deleted} file .ts cũ hết hạn`);
+    }
+  }, 5000);
 
   // Cron: delete .ts files older than CRON_MAX_AGE_SECONDS
   setInterval(() => {

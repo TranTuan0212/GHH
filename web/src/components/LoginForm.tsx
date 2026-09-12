@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Radio, Lock, User as UserIcon, AlertCircle } from 'lucide-react';
+import { Radio, Lock, User as UserIcon, Smartphone, ShieldCheck, Zap, AlertCircle } from 'lucide-react';
 
 interface LoginFormProps {
   onLoginSuccess: (token: string, user: any) => void;
@@ -8,6 +8,8 @@ interface LoginFormProps {
 export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [platform, setPlatform] = useState<'web' | 'mobile'>('web');
+  const [deviceUuid, setDeviceUuid] = useState('iphone-15-pro-demo-uuid-999');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,7 +25,9 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
         body: JSON.stringify({
           username,
           password,
-          platform: 'web'
+          platform,
+          deviceUuid: platform === 'mobile' ? deviceUuid : undefined,
+          deviceModel: 'iPhone 15 Pro Max'
         })
       });
 
@@ -38,6 +42,18 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fillDemoAdmin = () => {
+    setUsername('admin');
+    setPassword('admin123');
+    setPlatform('web');
+  };
+
+  const fillDemoUser = () => {
+    setUsername('demouser');
+    setPassword('user123');
+    setPlatform('web');
   };
 
   return (
@@ -96,6 +112,49 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
             </div>
           </div>
 
+          {/* Platform Login Option */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Quyền Đăng Nhập</label>
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-900/90 rounded-xl border border-white/10 text-xs">
+              <button
+                type="button"
+                onClick={() => setPlatform('web')}
+                className={`py-2 rounded-lg font-bold transition-all ${
+                  platform === 'web'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Web Viewer (Chỉ xem)
+              </button>
+              <button
+                type="button"
+                onClick={() => setPlatform('mobile')}
+                className={`py-2 rounded-lg font-bold transition-all ${
+                  platform === 'mobile'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Mobile Live (Phát Live)
+              </button>
+            </div>
+          </div>
+
+          {platform === 'mobile' && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Hardware Device UUID (Gán duy nhất 1 iPhone - Req 8a)
+              </label>
+              <input
+                type="text"
+                value={deviceUuid}
+                onChange={(e) => setDeviceUuid(e.target.value)}
+                className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-amber-500/30 text-amber-300 font-mono text-xs outline-none"
+              />
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={loading}
@@ -104,6 +163,25 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
             {loading ? 'Đang xác thực...' : 'Đăng Nhập'}
           </button>
         </form>
+
+        {/* Quick Demo Buttons */}
+        <div className="pt-4 border-t border-white/5 space-y-2">
+          <p className="text-[11px] text-slate-400 text-center font-medium">Bấm nhanh để dùng thử tài khoản mẫu:</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={fillDemoAdmin}
+              className="py-1.5 px-3 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all"
+            >
+              Demo Admin (admin/admin123)
+            </button>
+            <button
+              onClick={fillDemoUser}
+              className="py-1.5 px-3 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all"
+            >
+              Demo User (demouser/user123)
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

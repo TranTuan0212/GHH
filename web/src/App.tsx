@@ -253,33 +253,6 @@ export const App: React.FC = () => {
         setActiveTab={setActiveTab}
       />
 
-      {/* Banner thông báo khi tài khoản sắp hết hạn sử dụng (trong vòng 3 ngày) */}
-      {(() => {
-        if (!user.expiresAt) return null;
-        const diffMs = new Date(user.expiresAt).getTime() - Date.now();
-        const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-        const diffHours = Math.ceil(diffMs / (1000 * 60 * 60));
-        if (diffMs > 0 && diffDays <= 3) {
-          return (
-            <div className="bg-gradient-to-r from-amber-600/30 via-orange-600/20 to-amber-600/30 border-b border-amber-500/40 px-4 py-2 text-amber-200 text-xs sm:text-sm font-medium shadow-md">
-              <div className="max-w-[1700px] mx-auto flex items-center justify-between gap-2">
-                <div className="flex items-center space-x-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 animate-bounce" />
-                  <span>
-                    <strong>Thông báo gia hạn:</strong> Tài khoản của bạn sẽ hết hạn trong{' '}
-                    <strong className="text-white underline font-bold">
-                      {diffDays > 1 ? `${diffDays} ngày nữa` : `${diffHours} giờ nữa`}
-                    </strong>{' '}
-                    (ngày {new Date(user.expiresAt).toLocaleDateString('vi-VN')}). Vui lòng liên hệ Admin để gia hạn!
-                  </span>
-                </div>
-              </div>
-            </div>
-          );
-        }
-        return null;
-      })()}
-
       <main className="flex-1 max-w-[1700px] w-full mx-auto p-2 sm:p-3.5 space-y-2.5">
         {user.role === 'ADMIN' && activeTab === 'admin' ? (
           <AdminDashboard
@@ -345,7 +318,6 @@ export const App: React.FC = () => {
                   socket={socket}
                   roomId={currentRoomId}
                   roomName={activeRoomName}
-                  isAdmin={user.role === 'ADMIN'}
                   onFinishRound={handleFinishRound}
                 />
               </div>
