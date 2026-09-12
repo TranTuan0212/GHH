@@ -419,6 +419,91 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   };
 }
 
+export interface GroupAnswerItem {
+  groupNum: number;
+  name: string;
+  items: DataEntry[];
+  label: string;
+  highlightClass: string;
+  isWinner: boolean;
+  score: number;
+  isStoodPat: boolean;
+}
+
+// Hàm tính toán đáp án và nhóm thắng/dẫn đầu của tất cả các nhóm
+export function computeAllGroupAnswers(
+  entries: DataEntry[],
+  numGroups: number,
+  gameMode: GameMode,
+  groupNames: { [groupIndex: number]: string } = {},
+  danGroups: { [groupIndex: number]: boolean } = {}
+): { answers: GroupAnswerItem[]; winnerGroupNum: number | null } {
+  const grouped: { [key: number]: DataEntry[] } = {};
+  for (let i = 1; i <= numGroups; i++) {
+    grouped[i] = [];
+  }
+  entries.forEach((e) => {
+    if (grouped[e.groupIndex]) {
+      grouped[e.groupIndex].push(e);
+    }
+  });
+
+  let bestScore = -1;
+  let winnerGroupNum: number | null = null;
+  const tempAnswers: { groupNum: number; name: string; items: DataEntry[]; label: string; highlightClass: string; score: number; isStoodPat: boolean }[] = [];
+
+  for (let g = 1; g <= numGroups; g++) {
+    const items = grouped[g] || [];
+    const isStoodPat = danGroups[g] || false;
+    let label = '';
+    let highlightClass = '';
+    let scoreForRank = -1;
+
+    if (gameMode === '3cards') {
+      const res = evaluate3Cards(items);
+      label = res.label;
+      highlightClass = res.highlightClass;
+      if (items.length >= 3) {
+        scoreForRank = res.score;
+      }
+    } else {
+      const res = evaluate2Cards(items, isStoodPat);
+      label = res.label;
+      highlightClass = res.highlightClass;
+      if (items.length >= 2) {
+        if (res.status === 'xibang') scoreForRank = 300;
+        else if (res.status === 'xilat') scoreForRank = 200;
+        else if (res.status === 'ngulinh') scoreForRank = 150 + (21 - res.total);
+        else if (res.status === 'points') scoreForRank = res.total;
+        else if (res.status === 'non') scoreForRank = res.total;
+        else if (res.status === 'quac') scoreForRank = -1;
+      }
+    }
+
+    if (scoreForRank > bestScore && scoreForRank > 0) {
+      bestScore = scoreForRank;
+      winnerGroupNum = g;
+    }
+
+    tempAnswers.push({
+      groupNum: g,
+      name: groupNames[g] || `Nhóm ${g}`,
+      items,
+      label,
+      highlightClass,
+      score: scoreForRank,
+      isStoodPat
+    });
+  }
+
+  const answers: GroupAnswerItem[] = tempAnswers.map((a) => ({
+    ...a,
+    isWinner: winnerGroupNum !== null && a.groupNum === winnerGroupNum && bestScore > 0
+  }));
+
+  return { answers, winnerGroupNum };
+}
+
 export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   entries,
   roomId: _roomId,
@@ -703,17 +788,31 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     });
   };
 
-  // Mở popup xác nhận kết thúc chu kỳ
+  // Xong phiên: Xóa sạch toàn bộ dữ liệu bài, reset khóa nhóm, reset input, không lưu lại gì
   const handleRequestFinishRound = () => {
+    if (entries.length === 0) {
+      // Nếu chưa có dữ liệu gì thì chỉ cần reset trạng thái phụ
+      setDanGroups({});
+      setGroupBotInputs({});
+      setManualInput('');
+      setCardPickerTarget({ mode: 'add', groupNum: 1 });
+      showToast('✨ Phiên hiện tại đang trống');
+      return;
+    }
+
     setConfirmModal({
       isOpen: true,
-      title: 'Hoàn Tất Chu Kỳ Dữ Liệu?',
-      message: 'Hệ thống sẽ lưu trữ và đặt lại chu kỳ dữ liệu mới.',
-      confirmText: 'Xác Nhận Xong',
+      title: 'Xong Phiên & Xóa Hết Dữ Liệu?',
+      message: 'Toàn bộ dữ liệu của phiên này sẽ được xóa sạch để bắt đầu phiên mới, không lưu lại gì.',
+      confirmText: 'Xong Phiên (Xóa Hết)',
       confirmColor: 'emerald',
       onConfirm: () => {
         if (onFinishRound) onFinishRound();
-        showToast('✅ Đã hoàn tất chu kỳ dữ liệu');
+        setDanGroups({});
+        setGroupBotInputs({});
+        setManualInput('');
+        setCardPickerTarget({ mode: 'add', groupNum: 1 });
+        showToast('✅ Đã xong phiên: Toàn bộ dữ liệu đã được xóa sạch!');
         setConfirmModal(null);
       }
     });
@@ -1375,16 +1474,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         </div>
       )}
 
-      {/* 9. Floating Draggable 1-13 & 0 Picker Popup */}
+      {/* 9. Floating Draggable 1-13 & 0 Picker Popup (Có kèm Bảng Đáp Án & Xong Phiên) */}
       <CardPickerPopup
         isOpen={isCardPickerOpen}
         onClose={() => setIsCardPickerOpen(false)}
         target={cardPickerTarget}
         numGroups={numGroups}
         groupNames={groupNames}
+        entries={entries}
+        gameMode={gameMode}
+        danGroups={danGroups}
         onSelectCard={handleSelectCardFromPicker}
         onDeleteCard={onDeleteCard}
         onChangeTargetGroup={(gNum) => setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum }))}
+        onFinishRound={handleRequestFinishRound}
       />
 
       {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng số bất cứ khi nào */}

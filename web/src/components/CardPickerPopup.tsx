@@ -10,8 +10,12 @@ import {
   Sparkles,
   Trash2,
   EyeOff,
-  Crosshair
+  Crosshair,
+  Award,
+  CheckCircle2
 } from 'lucide-react';
+import { DataEntry } from '../types';
+import { GameMode, computeAllGroupAnswers } from './DataGroupingUI';
 
 export interface CardPickerTarget {
   mode: 'add' | 'edit';
@@ -28,9 +32,13 @@ interface CardPickerPopupProps {
   target: CardPickerTarget;
   numGroups: number;
   groupNames?: { [groupIndex: number]: string };
+  entries?: DataEntry[];
+  gameMode?: GameMode;
+  danGroups?: { [groupIndex: number]: boolean };
   onSelectCard: (cardValue: string, targetGroup: number, editCardId?: string) => void;
   onDeleteCard?: (cardId: string) => void;
   onChangeTargetGroup?: (groupNum: number) => void;
+  onFinishRound?: () => void;
 }
 
 const CARDS = [
@@ -56,9 +64,13 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   target,
   numGroups,
   groupNames = {},
+  entries = [],
+  gameMode = '2cards',
+  danGroups = {},
   onSelectCard,
   onDeleteCard,
-  onChangeTargetGroup
+  onChangeTargetGroup,
+  onFinishRound
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
   
@@ -261,6 +273,15 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     window.addEventListener('touchend', onTouchEnd);
   };
 
+  // Tính toán đáp án và nhóm thắng/dẫn đầu của tất cả các nhóm trong phiên hiện tại
+  const { answers: groupAnswers } = computeAllGroupAnswers(
+    entries,
+    numGroups,
+    gameMode,
+    groupNames,
+    danGroups
+  );
+
   const popupContent = (
     <div
       style={{
@@ -330,6 +351,92 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
       {/* 2. Body: Khi không bị thu nhỏ */}
       {!isMinimized && (
         <div className="p-2.5 sm:p-3 space-y-2.5 max-h-[82vh] overflow-y-auto no-scrollbar">
+          {/* BẢNG ĐÁP ÁN TRỰC TIẾP TRONG POPUP */}
+          <div className="bg-slate-950/90 p-2 sm:p-2.5 rounded-xl border border-amber-500/40 shadow-lg space-y-1.5 ring-1 ring-amber-500/20">
+            <div className="flex items-center justify-between pb-1.5 border-b border-white/10">
+              <div className="flex items-center space-x-1.5 min-w-0">
+                <Award className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <span className="text-[11px] sm:text-xs font-black text-amber-300 uppercase tracking-wide">
+                  ĐÁP ÁN PHIÊN NÀY ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})
+                </span>
+              </div>
+
+              {/* Nút Xong Phiên (Xóa Hết) ngay trên Popup */}
+              {onFinishRound && (
+                <button
+                  type="button"
+                  onClick={onFinishRound}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
+                  title="Xong phiên: Xóa sạch toàn bộ bài để bắt đầu phiên mới, không lưu lại gì"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Xong Phiên (Xóa Hết)</span>
+                </button>
+              )}
+            </div>
+
+            {/* Grid hiển thị đáp án và các lá bài của từng nhóm */}
+            <div className={`grid gap-1.5 ${numGroups <= 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3 sm:grid-cols-5'}`}>
+              {groupAnswers.map((ans) => {
+                const isSelected = target.groupNum === ans.groupNum;
+                return (
+                  <div
+                    key={ans.groupNum}
+                    onClick={() => onChangeTargetGroup && onChangeTargetGroup(ans.groupNum)}
+                    className={`p-1.5 rounded-xl border flex flex-col justify-between cursor-pointer transition-all ${
+                      ans.isWinner
+                        ? 'bg-amber-500/20 border-amber-400 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
+                        : isSelected
+                        ? 'bg-indigo-950/70 border-indigo-400 ring-1 ring-indigo-400 shadow-sm'
+                        : 'bg-slate-900/90 border-white/10 hover:border-white/25'
+                    }`}
+                    title={`Bấm để chọn nhập cho ${ans.name}`}
+                  >
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[10px] sm:text-[11px] font-bold text-slate-200 truncate">
+                        {ans.name}
+                      </span>
+                      {ans.isWinner ? (
+                        <span className="px-1 py-0.2 rounded bg-amber-400 text-slate-950 font-black text-[9px] flex items-center gap-0.5 shadow-sm">
+                          👑 Thắng
+                        </span>
+                      ) : ans.isStoodPat ? (
+                        <span className="px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-bold text-[9px] border border-emerald-500/30">
+                          Khóa
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* Danh sách các lá bài nhỏ gọn */}
+                    <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar py-0.5 min-h-[22px]">
+                      {ans.items.length === 0 ? (
+                        <span className="text-[9px] text-slate-600 italic">Trống</span>
+                      ) : (
+                        ans.items.map((it, sIdx) => (
+                          <span
+                            key={it.id || sIdx}
+                            className={`px-1.5 py-0.5 rounded font-mono font-black text-[10px] sm:text-[11px] ${
+                              it.cardValue === '0'
+                                ? 'bg-amber-500/25 text-amber-300 border border-amber-500/40'
+                                : 'bg-slate-800 text-white border border-white/15'
+                            }`}
+                          >
+                            {it.cardValue}
+                          </span>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Badge Đáp án / Điểm số */}
+                    <div className={`mt-1 py-0.5 px-1 rounded text-[10px] sm:text-[11px] font-mono font-bold text-center truncate border ${ans.highlightClass}`}>
+                      {ans.label}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Group Switcher Bar: Cho phép bấm đổi nhóm nhanh ngay trên popup */}
           <div className="flex items-center justify-between gap-1.5 bg-slate-950/80 p-1.5 rounded-xl border border-white/10">
             <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap pl-1">
