@@ -192,28 +192,27 @@ struct ContentView: View {
                                     .background(Color.indigo)
                                     .cornerRadius(16)
                             }
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, 8)
 
-                        // Banner cảnh báo tài khoản sắp hết hạn
-                        if let warning = networkManager.expirationWarning {
-                            HStack(spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.yellow)
-                                    .font(.system(size: 12))
-                                Text(warning)
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .lineLimit(2)
+                            // Banner cảnh báo tài khoản sắp hết hạn
+                            if let warning = networkManager.expirationWarning {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.yellow)
+                                        .font(.system(size: 12))
+                                    Text(warning)
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .lineLimit(2)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.orange.opacity(0.9))
+                                .cornerRadius(10)
+                                .shadow(radius: 4)
+                                .padding(.top, 2)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.orange.opacity(0.9))
-                            .cornerRadius(10)
-                            .shadow(radius: 4)
-                            .padding(.top, 2)
                         }
+                        .padding()
                         .background(Color.white.opacity(0.08))
                         .cornerRadius(24)
                     }
