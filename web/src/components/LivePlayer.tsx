@@ -1299,8 +1299,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả chuột: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
-      // Tự động phát tiếp mượt mà nếu trước khi kéo đang phát
-      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+      // Tự động phát tiếp ngay lập tức tại mốc vừa kéo với đúng tốc độ slow đang chọn
+      if (replayVideoRef.current) {
+        replayVideoRef.current.playbackRate = playbackRate;
         replayVideoRef.current.play().catch(() => {});
         setIsPlaying(true);
       }
@@ -1367,8 +1368,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả tay: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
-      // Tự động phát tiếp mượt mà nếu trước khi kéo đang phát
-      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+      // Tự động phát tiếp ngay lập tức tại mốc vừa kéo với đúng tốc độ slow đang chọn
+      if (replayVideoRef.current) {
+        replayVideoRef.current.playbackRate = playbackRate;
         replayVideoRef.current.play().catch(() => {});
         setIsPlaying(true);
       }
