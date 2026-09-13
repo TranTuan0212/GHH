@@ -5,15 +5,12 @@ import {
   Move,
   Minus,
   Maximize2,
-  HelpCircle,
-  RotateCcw,
-  Sparkles,
-  Trash2,
-  EyeOff,
   Crosshair,
   Award,
   CheckCircle2,
-  Swords
+  EyeOff,
+  Trash2,
+  Sparkles
 } from 'lucide-react';
 import { DataEntry } from '../types';
 import { GameMode, computeAllGroupAnswers } from './DataGroupingUI';
@@ -40,6 +37,9 @@ interface CardPickerPopupProps {
   onDeleteCard?: (cardId: string) => void;
   onChangeTargetGroup?: (groupNum: number) => void;
   onFinishRound?: () => void;
+  onSetTarget?: (target: CardPickerTarget) => void;
+  onChangeGameMode?: (mode: GameMode) => void;
+  onChangeNumGroups?: (num: number) => void;
 }
 
 const CARDS = [
@@ -71,11 +71,13 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   onSelectCard,
   onDeleteCard,
   onChangeTargetGroup,
-  onFinishRound
+  onFinishRound,
+  onSetTarget,
+  onChangeGameMode,
+  onChangeNumGroups
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
-  const [showCrossCheckDetail, setShowCrossCheckDetail] = useState(false);
-  
+
   // Tính toán toạ độ an toàn trong viewport
   const getDefaultPosition = () => {
     if (typeof window === 'undefined') return { x: 20, y: 70 };
@@ -162,7 +164,6 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
   // Bắt đầu kéo thả bằng chuột
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Chỉ kéo khi bấm vào header, không phải vào button
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     isDraggingRef.current = true;
@@ -222,7 +223,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     window.addEventListener('touchend', onTouchEnd);
   };
 
-  // Khi bấm chọn 1 lá bài
+  // Khi bấm chọn 1 lá bài từ bàn phím
   const handleCardClick = (cardVal: string) => {
     onSelectCard(cardVal, target.groupNum, target.cardId);
   };
@@ -275,7 +276,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     window.addEventListener('touchend', onTouchEnd);
   };
 
-  // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM trong phiên hiện tại
+  // Tính toán đáp án và thứ hạng của các nhóm trong phiên
   const { answers: groupAnswers, leaderboardText, completeGroupsCount } = computeAllGroupAnswers(
     entries,
     numGroups,
@@ -315,7 +316,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             </span>
             {target.mode === 'edit' && target.currentValue && (
               <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[10px] font-mono font-bold border border-amber-500/40">
-                Cũ: {target.currentValue}
+                Đang sửa: {target.currentValue}
               </span>
             )}
           </div>
@@ -353,66 +354,106 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
       {/* 2. Body: Khi không bị thu nhỏ */}
       {!isMinimized && (
         <div className="p-2.5 sm:p-3 space-y-2.5 max-h-[82vh] overflow-y-auto no-scrollbar">
-          {/* BẢNG ĐÁP ÁN TRỰC TIẾP TRONG POPUP */}
-          <div className="bg-slate-950/90 p-2 sm:p-2.5 rounded-xl border border-amber-500/40 shadow-lg space-y-1.5 ring-1 ring-amber-500/20">
+          {/* BỘ CHỌN CHẾ ĐỘ (3 HOẶC 2) & SỐ NHÓM (2 - 8) NGAY TRONG POPUP */}
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950/90 p-2 rounded-xl border border-white/10 shadow-inner">
+            {/* Chọn Chế Độ: 3 hoặc 2 */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-bold text-slate-400 pl-1 pr-0.5">Chế độ:</span>
+              <button
+                type="button"
+                onClick={() => onChangeGameMode && onChangeGameMode('3cards')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                  gameMode === '3cards'
+                    ? 'bg-indigo-600 text-white shadow-sm border border-indigo-400 ring-1 ring-indigo-400'
+                    : 'bg-slate-800/90 text-slate-400 hover:text-white hover:bg-slate-750'
+                }`}
+                title="Chế độ 3 Lá (M3)"
+              >
+                3 Lá
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeGameMode && onChangeGameMode('2cards')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                  gameMode === '2cards'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm border border-amber-300 ring-1 ring-amber-400'
+                    : 'bg-slate-800/90 text-slate-400 hover:text-white hover:bg-slate-750'
+                }`}
+                title="Chế độ 2 Lá (M2)"
+              >
+                2 Lá
+              </button>
+            </div>
+
+            {/* Chọn Số Nhóm: 2, 3, 4, 5, 6, 7, 8 */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-bold text-slate-400 pr-1">Số nhóm:</span>
+              {[2, 3, 4, 5, 6, 7, 8].map((cnt) => (
+                <button
+                  key={cnt}
+                  type="button"
+                  onClick={() => onChangeNumGroups && onChangeNumGroups(cnt)}
+                  className={`w-6 h-6 rounded-lg text-xs font-bold flex items-center justify-center transition-all cursor-pointer ${
+                    numGroups === cnt
+                      ? 'bg-indigo-600 text-white border border-indigo-400 shadow-sm font-black ring-1 ring-indigo-400'
+                      : 'bg-slate-800/90 text-slate-400 hover:text-white hover:bg-slate-750'
+                  }`}
+                  title={`Chọn ${cnt} nhóm`}
+                >
+                  {cnt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* KẾT QUẢ SAU CÙNG (KHÔNG CẦN BẢNG ĐỐI CHIẾU, CHỈ CẦN KẾT QUẢ) */}
+          <div className="bg-slate-950/90 p-2 sm:p-2.5 rounded-xl border border-amber-500/40 shadow-lg space-y-2 ring-1 ring-amber-500/20">
             <div className="flex items-center justify-between pb-1.5 border-b border-white/10 gap-1.5 flex-wrap">
               <div className="flex items-center space-x-1.5 min-w-0">
                 <Award className="w-4 h-4 text-amber-400 flex-shrink-0" />
                 <span className="text-[11px] sm:text-xs font-black text-amber-300 uppercase tracking-wide">
-                  ĐÁP ÁN PHIÊN NÀY ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})
+                  KẾT QUẢ PHIÊN NÀY ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})
                 </span>
               </div>
 
-              <div className="flex items-center space-x-1.5 flex-shrink-0">
-                {/* Nút bật/tắt bảng ma trận đối chiếu chi tiết */}
-                {completeGroupsCount > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowCrossCheckDetail(!showCrossCheckDetail)}
-                    className={`px-2 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold flex items-center space-x-1 border transition-all ${
-                      showCrossCheckDetail
-                        ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm'
-                        : 'bg-slate-800/90 text-indigo-300 border-indigo-500/30 hover:bg-slate-750'
-                    }`}
-                    title="Xem chi tiết đối chiếu chéo từng nhóm"
-                  >
-                    <Swords className="w-3 h-3 text-amber-300" />
-                    <span>{showCrossCheckDetail ? 'Thu Gọn' : 'Bảng Đối Chiếu'}</span>
-                  </button>
-                )}
-
-                {/* Nút Xong Phiên (Xóa Hết) ngay trên Popup */}
-                {onFinishRound && (
-                  <button
-                    type="button"
-                    onClick={onFinishRound}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
-                    title="Xong phiên: Xóa sạch toàn bộ bài để bắt đầu phiên mới, không lưu lại gì"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Xong Phiên (Xóa Hết)</span>
-                  </button>
-                )}
-              </div>
+              {/* Nút Xong Phiên (Xóa Hết) ngay trên Popup */}
+              {onFinishRound && (
+                <button
+                  type="button"
+                  onClick={onFinishRound}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
+                  title="Xong phiên: Xóa sạch toàn bộ bài để bắt đầu phiên mới, không lưu lại gì"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Xong Phiên (Xóa Hết)</span>
+                </button>
+              )}
             </div>
 
-            {/* Grid hiển thị đáp án và các lá bài của từng nhóm */}
+            {/* Grid hiển thị các nhóm: Tên nhóm, Danh sách số (BẤM ĐƯỢC ĐỂ SỬA TRỰC TIẾP), và Điểm/Đáp án */}
             <div className={`grid gap-1.5 ${numGroups <= 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3 sm:grid-cols-5'}`}>
               {groupAnswers.map((ans) => {
-                const isSelected = target.groupNum === ans.groupNum;
+                const isSelectedGroup = target.groupNum === ans.groupNum && target.mode === 'add';
                 return (
                   <div
                     key={ans.groupNum}
-                    onClick={() => onChangeTargetGroup && onChangeTargetGroup(ans.groupNum)}
+                    onClick={() => {
+                      if (onSetTarget) {
+                        onSetTarget({ mode: 'add', groupNum: ans.groupNum });
+                      } else if (onChangeTargetGroup) {
+                        onChangeTargetGroup(ans.groupNum);
+                      }
+                    }}
                     className={`p-1.5 rounded-xl border flex flex-col justify-between cursor-pointer transition-all ${
                       ans.isWinner
                         ? 'bg-amber-500/20 border-amber-400 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
-                        : isSelected
+                        : isSelectedGroup
                         ? 'bg-indigo-950/70 border-indigo-400 ring-1 ring-indigo-400 shadow-sm'
                         : 'bg-slate-900/90 border-white/10 hover:border-white/25'
                     }`}
-                    title={`Bấm để chọn nhập cho ${ans.name}`}
+                    title={`Bấm vào nhóm để gán thêm số cho ${ans.name}`}
                   >
+                    {/* Header nhóm: Tên & Huy hiệu Thắng/Khóa */}
                     <div className="flex items-center justify-between gap-1 mb-1">
                       <span className="text-[10px] sm:text-[11px] font-bold text-slate-200 truncate">
                         {ans.name}
@@ -428,115 +469,59 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                       ) : null}
                     </div>
 
-                    {/* Danh sách các lá bài nhỏ gọn */}
-                    <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar py-0.5 min-h-[22px]">
+                    {/* DANH SÁCH CÁC LÁ BÀI: BẤM TRỰC TIẾP VÀO SỐ ĐỂ SỬA */}
+                    <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar py-1 min-h-[28px]">
                       {ans.items.length === 0 ? (
-                        <span className="text-[9px] text-slate-600 italic">Trống</span>
+                        <span className="text-[10px] text-slate-600 italic">Trống</span>
                       ) : (
-                        ans.items.map((it, sIdx) => (
-                          <span
-                            key={it.id || sIdx}
-                            className={`px-1.5 py-0.5 rounded font-mono font-black text-[10px] sm:text-[11px] ${
-                              it.cardValue === '0'
-                                ? 'bg-amber-500/25 text-amber-300 border border-amber-500/40'
-                                : 'bg-slate-800 text-white border border-white/15'
-                            }`}
-                          >
-                            {it.cardValue}
-                          </span>
-                        ))
+                        ans.items.map((it, sIdx) => {
+                          const isThisCardEditing = target.mode === 'edit' && target.cardId === it.id;
+                          return (
+                            <button
+                              key={it.id || sIdx}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onSetTarget) {
+                                  onSetTarget({
+                                    mode: 'edit',
+                                    groupNum: ans.groupNum,
+                                    cardId: it.id,
+                                    currentValue: it.cardValue,
+                                    slotIndex: sIdx
+                                  });
+                                }
+                              }}
+                              className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg font-mono font-black text-xs sm:text-sm transition-all cursor-pointer border ${
+                                isThisCardEditing
+                                  ? 'bg-amber-400 text-slate-950 border-amber-300 ring-2 ring-amber-400 ring-offset-1 ring-offset-slate-900 scale-110 shadow-lg shadow-amber-400/50 animate-pulse z-10'
+                                  : it.cardValue === '0'
+                                  ? 'bg-amber-500/25 text-amber-300 border-amber-500/40 hover:border-amber-300 hover:scale-105'
+                                  : 'bg-slate-800 text-white border-white/20 hover:border-amber-400 hover:text-amber-300 hover:scale-105'
+                              }`}
+                              title={`Bấm vào để chọn lại số này (Hiện tại: ${it.cardValue})`}
+                            >
+                              {it.cardValue}
+                            </button>
+                          );
+                        })
                       )}
                     </div>
 
-                    {/* Badge Đáp án / Điểm số */}
+                    {/* Badge Đáp án / Điểm số sau cùng */}
                     <div className={`mt-1 py-0.5 px-1 rounded text-[10px] sm:text-[11px] font-mono font-bold text-center truncate border ${ans.highlightClass}`}>
                       {ans.label}
                     </div>
-
-                    {/* Chi tiết đối chiếu thắng/thua cụ thể từng nhóm */}
-                    {ans.isComplete && completeGroupsCount > 1 && (
-                      <div className="mt-1 pt-1 border-t border-white/10 space-y-0.5 text-[8.5px] font-mono">
-                        <div className="flex items-center justify-between text-slate-400 font-bold">
-                          <span className="text-emerald-400">✓ Thắng {ans.winsCount}</span>
-                          <span className="text-rose-400">✗ Thua {ans.lossesCount}</span>
-                          {ans.tiesCount > 0 && <span className="text-amber-400">= {ans.tiesCount}</span>}
-                        </div>
-                        {ans.wonAgainst.length > 0 && (
-                          <div className="text-emerald-300 truncate font-semibold" title={`Ăn: ${ans.wonAgainst.map(w => w.name).join(', ')}`}>
-                            Ăn: {ans.wonAgainst.map(w => w.name).join(', ')}
-                          </div>
-                        )}
-                        {ans.lostAgainst.length > 0 && (
-                          <div className="text-rose-300 truncate font-semibold" title={`Thua: ${ans.lostAgainst.map(l => l.name).join(', ')}`}>
-                            Thua: {ans.lostAgainst.map(l => l.name).join(', ')}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}
             </div>
 
-            {/* Dòng đối chiếu thứ hạng toàn bộ các nhóm */}
+            {/* KẾT QUẢ SAU CÙNG: Dòng thứ tự xếp hạng duy nhất */}
             {completeGroupsCount > 1 && leaderboardText && (
-              <div className="mt-1.5 px-2 py-1 rounded-xl bg-indigo-950/70 border border-indigo-500/30 text-[10px] font-mono text-indigo-200 flex items-center space-x-1.5 overflow-x-auto no-scrollbar shadow-inner">
-                <span className="font-bold text-amber-300 whitespace-nowrap">👑 Thứ tự:</span>
-                <span className="whitespace-nowrap">{leaderboardText}</span>
-              </div>
-            )}
-
-            {/* BẢNG MA TRẬN ĐỐI CHIẾU CHÉO EXPANDABLE BÊN TRONG POPUP */}
-            {showCrossCheckDetail && completeGroupsCount > 1 && (
-              <div className="mt-2 p-2 rounded-xl bg-slate-900/95 border border-indigo-500/40 space-y-1.5 animate-fadeIn">
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-300 border-b border-white/10 pb-1">
-                  <span className="font-bold text-amber-300 uppercase">MA TRẬN ĐỐI CHIẾU CHÉO (HÀNG VS CỘT):</span>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-emerald-400 font-bold">🟢 Ăn</span>
-                    <span className="text-rose-400 font-bold">🔴 Thua</span>
-                    <span className="text-amber-400 font-bold">🟡 Hòa</span>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto no-scrollbar">
-                  <table className="w-full text-left text-[10px] font-mono border-collapse">
-                    <thead>
-                      <tr className="border-b border-white/10 text-slate-400">
-                        <th className="p-1 font-bold">Nhóm \ ĐT</th>
-                        {groupAnswers.map((col) => (
-                          <th key={col.groupNum} className="p-1 text-center border-l border-white/5 whitespace-nowrap">
-                            {col.name}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {groupAnswers.map((row) => (
-                        <tr key={row.groupNum} className="hover:bg-slate-800/40">
-                          <td className="p-1 font-bold text-white whitespace-nowrap">
-                            {row.rank === 1 && '👑 '}{row.name}
-                          </td>
-                          {groupAnswers.map((col) => {
-                            if (row.groupNum === col.groupNum) {
-                              return <td key={col.groupNum} className="p-1 text-center text-slate-600 border-l border-white/5">—</td>;
-                            }
-                            if (!row.isComplete || !col.isComplete) {
-                              return <td key={col.groupNum} className="p-1 text-center text-slate-600 border-l border-white/5">...</td>;
-                            }
-                            const diff = row.score - col.score;
-                            if (Math.abs(diff) < 0.0001) {
-                              return <td key={col.groupNum} className="p-1 text-center text-amber-300 bg-amber-500/10 border-l border-white/5">🟡</td>;
-                            } else if (diff > 0) {
-                              return <td key={col.groupNum} className="p-1 text-center text-emerald-300 bg-emerald-500/15 border-l border-white/5 font-bold">🟢 Ăn</td>;
-                            } else {
-                              return <td key={col.groupNum} className="p-1 text-center text-rose-300 bg-rose-500/15 border-l border-white/5 font-bold">🔴 Thua</td>;
-                            }
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="mt-1 px-2.5 py-1.5 rounded-xl bg-indigo-950/70 border border-indigo-500/30 text-[11px] font-mono text-indigo-200 flex items-center space-x-2 overflow-x-auto no-scrollbar shadow-inner">
+                <span className="font-black text-amber-300 whitespace-nowrap">👑 Kết Quả:</span>
+                <span className="whitespace-nowrap font-bold text-white">{leaderboardText}</span>
               </div>
             )}
           </div>
@@ -555,8 +540,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                   <button
                     key={gNum}
                     type="button"
-                    onClick={() => onChangeTargetGroup && onChangeTargetGroup(gNum)}
-                    className={`px-2 py-0.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                    onClick={() => {
+                      if (onSetTarget) {
+                        onSetTarget({ mode: 'add', groupNum: gNum });
+                      } else if (onChangeTargetGroup) {
+                        onChangeTargetGroup(gNum);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                       isSelected
                         ? 'bg-indigo-600 text-white shadow-sm border border-indigo-400 ring-1 ring-indigo-400'
                         : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
@@ -569,13 +560,38 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             </div>
           </div>
 
+          {/* THÔNG BÁO TRẠNG THÁI: KHI ĐANG SỬA SỐ HAY ĐANG NHẬP THÊM */}
+          {target.mode === 'edit' ? (
+            <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-400/60 text-amber-300 text-xs font-bold animate-fadeIn">
+              <div className="flex items-center space-x-1.5 truncate">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping flex-shrink-0" />
+                <span className="truncate">
+                  Đang sửa số <strong>"{target.currentValue}"</strong> của <strong>{groupNames[target.groupNum] || `Nhóm ${target.groupNum}`}</strong> ➔ Bấm số bên dưới để đổi ngay
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onSetTarget?.({ mode: 'add', groupNum: target.groupNum })}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-normal border border-white/10 flex-shrink-0 ml-2"
+                title="Hủy sửa và chuyển về thêm số tiếp theo"
+              >
+                Hủy sửa
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between px-2.5 py-1 text-[11px] text-slate-400 bg-slate-950/40 rounded-xl border border-white/5">
+              <span>Đang nhập cho: <strong className="text-white">{groupNames[target.groupNum] || `Nhóm ${target.groupNum}`}</strong></span>
+              <span className="italic text-amber-400/80 font-medium">👉 Bấm vào số bất kỳ ở trên để chọn lại</span>
+            </div>
+          )}
+
           {/* Quick Action: Nút "0 • KHÔNG THẤY (N/A)" & Xóa mục */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {/* Nút KHÔNG RÕ MÃ to nổi bật */}
             <button
               type="button"
               onClick={handleUnknownClick}
-              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-500 hover:from-amber-500 hover:to-yellow-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-lg shadow-amber-500/30 transition-all active:scale-95 border border-amber-300"
+              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-500 hover:from-amber-500 hover:to-yellow-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-lg shadow-amber-500/30 transition-all active:scale-95 border border-amber-300 cursor-pointer"
               title="Gán trạng thái [0 • Không thấy / Bỏ qua] vào nhóm"
             >
               <EyeOff className="w-4 h-4 text-slate-950" />
@@ -588,9 +604,9 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 type="button"
                 onClick={() => {
                   if (target.cardId) onDeleteCard(target.cardId);
-                  onClose();
+                  onSetTarget?.({ mode: 'add', groupNum: target.groupNum });
                 }}
-                className="w-full py-2 px-3 rounded-xl bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white font-bold text-xs flex items-center justify-center space-x-1.5 border border-red-500/40 transition-all active:scale-95"
+                className="w-full py-2 px-3 rounded-xl bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white font-bold text-xs flex items-center justify-center space-x-1.5 border border-red-500/40 transition-all active:scale-95 cursor-pointer"
                 title="Xóa bỏ mục này khỏi nhóm"
               >
                 <Trash2 className="w-4 h-4" />
@@ -613,7 +629,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                     key={card.rank}
                     type="button"
                     onClick={() => handleCardClick(card.rank)}
-                    className={`h-14 sm:h-16 rounded-xl flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden ${
+                    className={`h-14 sm:h-16 rounded-xl flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden cursor-pointer ${
                       card.bg
                     } ${card.border} ${
                       isCurrent
