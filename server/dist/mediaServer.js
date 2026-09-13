@@ -122,28 +122,26 @@ function stopFfmpegOnly(streamKey) {
  */
 function resetReplaySession(streamKey) {
     const session = exports.hlsSessions.get(streamKey);
-    // 1. Dừng tiến trình ffmpeg replay cũ nếu stream đang chạy
+    // 1. Dừng ngay tiến trình ffmpeg replay cũ nếu stream đang chạy
     if (session) {
         const oldReplayFfmpeg = session.ffmpegProcesses[0];
         if (oldReplayFfmpeg && !oldReplayFfmpeg.killed) {
             try {
-                oldReplayFfmpeg.kill('SIGTERM');
+                oldReplayFfmpeg.kill('SIGKILL');
             }
             catch { }
         }
     }
-    // 2. Xóa sạch file .ts và index.m3u8 cũ trong thư mục replay
+    // 2. Xóa sạch file .ts, .m3u8 và toàn bộ tệp trong thư mục replay
     const outputDir = getStreamDir('replay', streamKey);
     try {
         if (fs_1.default.existsSync(outputDir)) {
             const files = fs_1.default.readdirSync(outputDir);
             for (const file of files) {
-                if (file.endsWith('.ts') || file.endsWith('.m3u8') || file.endsWith('.tmp')) {
-                    try {
-                        fs_1.default.unlinkSync(path_1.default.join(outputDir, file));
-                    }
-                    catch { }
+                try {
+                    fs_1.default.unlinkSync(path_1.default.join(outputDir, file));
                 }
+                catch { }
             }
             if (!session) {
                 try {
@@ -190,7 +188,7 @@ function resetReplaySession(streamKey) {
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        '-hls_flags', '+program_date_time',
+        '-hls_flags', 'delete_segments+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
     const newReplayFfmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {

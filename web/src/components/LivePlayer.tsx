@@ -99,6 +99,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const [webrtcReconnectCount, setWebrtcReconnectCount] = useState<number>(0);
+  const [replaySessionId, setReplaySessionId] = useState<number>(() => Date.now());
   const handleRoundFinishedRef = useRef<() => void>(() => {});
   const loadedStreamKeyRef = useRef<string | null>(null);
   const pendingReplayTimeRef = useRef<number | null>(null);
@@ -654,7 +655,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return;
     }
 
-    const playlistUrl = `${activeHlsBaseUrl}/${stream.streamKey}/index.m3u8`;
+    const playlistUrl = `${activeHlsBaseUrl}/${stream.streamKey}/index.m3u8?r=${replaySessionId}`;
     console.log('[LivePlayer] === Bắt đầu load HLS DVR ===');
     console.log('[LivePlayer] playlistUrl:', playlistUrl);
 
@@ -929,7 +930,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hlsInstance) hlsInstance.destroy();
       hlsRef.current = null;
     };
-  }, [stream?.streamKey, hlsBaseUrl, replayHlsBaseUrl]);
+  }, [stream?.streamKey, hlsBaseUrl, replayHlsBaseUrl, replaySessionId]);
 
   // Đồng bộ <video> currentTime + duration lên UI để vẽ seekbar DVR window.
   useEffect(() => {
@@ -1143,21 +1144,35 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   };
 
   const handleRoundFinished = () => {
-    console.log('[LivePlayer] handleRoundFinished -> Resetting all states, wiping overlays and jumping to live...');
-    // 1. Chuyển ngay về Live mode và xóa sạch các mốc tua cũ
+    console.log('[LivePlayer] handleRoundFinished -> Purging all browser video buffers, overlays and jumping to live...');
+    // 1. Phá hủy hoàn toàn HLS cũ và xóa sạch toàn bộ buffer video trong RAM của trình duyệt
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch {}
+      hlsRef.current = null;
+    }
+    if (replayVideoRef.current) {
+      replayVideoRef.current.pause();
+      replayVideoRef.current.removeAttribute('src');
+      replayVideoRef.current.load();
+    }
+    setHasFrame(false);
+    setHlsWindowStart(0);
+    setHlsLiveEdge(0);
+    setCurrentTime(0);
+    setDuration(0);
+    updateFrozenTimeline(null);
+
+    // 2. Chuyển ngay về Live mode
     isLiveRef.current = true;
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
-    updateFrozenTimeline(null);
     setDragRatio(null);
     dragRatioRef.current = null;
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
-    setCurrentTime(0);
-    setDuration(0);
-    setHlsWindowStart(0);
-    setHlsLiveEdge(0);
     setLiveElapsedSeconds(0);
 
     // Xóa sạch toàn bộ chữ chèn trên màn hình và trong localStorage
@@ -1165,13 +1180,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     try {
       localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
     } catch {}
-
-    // 2. Tạm dừng video replay và reset vị trí
-    if (replayVideoRef.current) {
-      replayVideoRef.current.pause();
-      replayVideoRef.current.playbackRate = 1.0;
-      replayVideoRef.current.currentTime = 0;
-    }
 
     // 3. Kích hoạt kết nối lại WebRTC ngay lập tức nếu chưa kết nối hoặc bị ngắt
     if (!peerConnectionRef.current || peerConnectionRef.current.connectionState !== 'connected') {
@@ -1181,17 +1189,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     // 4. Tự động chuyển ngay về luồng Live trực tiếp!
     jumpToLive();
 
-    // 5. Nếu HLS DVR đang chạy: nạp lại buffer cho phiên mới sau khi server reset
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.stopLoad();
-        setTimeout(() => {
-          if (hlsRef.current) {
-            hlsRef.current.startLoad();
-          }
-        }, 500);
-      } catch {}
-    }
+    // 5. Sau 1.5 giây (để server kịp xoá sạch file .ts cũ và tạo playlist mới bắt đầu từ 0s),
+    // cấp replaySessionId mới để nạp HLS mới toanh từ 0s!
+    setTimeout(() => {
+      setReplaySessionId(Date.now());
+    }, 1500);
   };
   handleRoundFinishedRef.current = handleRoundFinished;
 

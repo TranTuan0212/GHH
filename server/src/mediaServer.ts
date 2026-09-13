@@ -124,23 +124,21 @@ export function stopFfmpegOnly(streamKey: string): void {
 export function resetReplaySession(streamKey: string): boolean {
   const session = hlsSessions.get(streamKey);
 
-  // 1. Dừng tiến trình ffmpeg replay cũ nếu stream đang chạy
+  // 1. Dừng ngay tiến trình ffmpeg replay cũ nếu stream đang chạy
   if (session) {
     const oldReplayFfmpeg = session.ffmpegProcesses[0];
     if (oldReplayFfmpeg && !oldReplayFfmpeg.killed) {
-      try { oldReplayFfmpeg.kill('SIGTERM'); } catch {}
+      try { oldReplayFfmpeg.kill('SIGKILL'); } catch {}
     }
   }
 
-  // 2. Xóa sạch file .ts và index.m3u8 cũ trong thư mục replay
+  // 2. Xóa sạch file .ts, .m3u8 và toàn bộ tệp trong thư mục replay
   const outputDir = getStreamDir('replay', streamKey);
   try {
     if (fs.existsSync(outputDir)) {
       const files = fs.readdirSync(outputDir);
       for (const file of files) {
-        if (file.endsWith('.ts') || file.endsWith('.m3u8') || file.endsWith('.tmp')) {
-          try { fs.unlinkSync(path.join(outputDir, file)); } catch {}
-        }
+        try { fs.unlinkSync(path.join(outputDir, file)); } catch {}
       }
       if (!session) {
         try { fs.rmdirSync(outputDir); } catch {}
@@ -179,7 +177,7 @@ export function resetReplaySession(streamKey: string): boolean {
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
     '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
-    '-hls_flags', '+program_date_time',
+    '-hls_flags', 'delete_segments+program_date_time',
     path.join(outputDir, 'index.m3u8')
   ];
 
