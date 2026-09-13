@@ -3,9 +3,9 @@ node_modules/
 .pnp
 .pnp.js
 
-# Build & Dist outputs
-dist/
-build/
+# Build & Dist outputs (dist/ is committed so VPS can deploy without building)
+# dist/
+# build/
 *.app
 *.ipa
 *.dSYM
