@@ -8,6 +8,7 @@ const express_1 = __importDefault(require("express"));
 const http_1 = __importDefault(require("http"));
 const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 const socket_io_1 = require("socket.io");
 const auth_1 = require("./routes/auth");
 const admin_1 = require("./routes/admin");
@@ -172,10 +173,93 @@ function resolveReplayHlsBaseUrl(req) {
     const host = req.headers.host || `localhost:${PORT}`;
     return `${proto}://${host}/replay`;
 }
+// ==========================================
+// Apple OTA iOS IPA Installation Service
+// ==========================================
+const appDir = fs_1.default.existsSync(path_1.default.resolve(__dirname, '../../app'))
+    ? path_1.default.resolve(__dirname, '../../app')
+    : path_1.default.resolve(process.cwd(), 'app');
+app.get('/ios/manifest.plist', (req, res) => {
+    const host = req.headers.host || 'slomoview.stream';
+    const forwardedProto = req.headers['x-forwarded-proto']?.split(',')[0]?.trim();
+    const proto = forwardedProto || req.protocol || 'https';
+    // Apple itms-services bắt buộc HTTPS (trừ localhost test)
+    const scheme = proto === 'http' && !host.includes('localhost') && !host.includes('127.0.0.1') ? 'https' : proto;
+    // Tìm file .ipa trong thư mục app
+    let ipaFilename = 'SloMoLive.ipa';
+    if (fs_1.default.existsSync(appDir)) {
+        const files = fs_1.default.readdirSync(appDir);
+        const found = files.find(f => f.toLowerCase().endsWith('.ipa'));
+        if (found)
+            ipaFilename = found;
+    }
+    const ipaUrl = `${scheme}://${host}/ios/${ipaFilename}`;
+    const iconUrl = `${scheme}://${host}/vite.svg`;
+    const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>assets</key>
+            <array>
+                <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>${ipaUrl}</string>
+                </dict>
+                <dict>
+                    <key>kind</key>
+                    <string>display-image</string>
+                    <key>needs-shine</key>
+                    <false/>
+                    <key>url</key>
+                    <string>${iconUrl}</string>
+                </dict>
+                <dict>
+                    <key>kind</key>
+                    <string>full-size-image</string>
+                    <key>needs-shine</key>
+                    <false/>
+                    <key>url</key>
+                    <string>${iconUrl}</string>
+                </dict>
+            </array>
+            <key>metadata</key>
+            <dict>
+                <key>bundle-identifier</key>
+                <string>com.slomo.live</string>
+                <key>bundle-version</key>
+                <string>1.0.0</string>
+                <key>kind</key>
+                <string>software</string>
+                <key>title</key>
+                <string>SloMo Live 240FPS</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>`;
+    res.setHeader('Content-Type', 'application/xml');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.send(plistXml);
+});
+// Phục vụ trực tiếp file IPA từ folder app
+app.use('/ios', express_1.default.static(appDir, {
+    setHeaders: (res, filePath) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        if (filePath.toLowerCase().endsWith('.ipa')) {
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', 'attachment; filename="' + path_1.default.basename(filePath) + '"');
+        }
+    }
+}));
 const webDistPath = path_1.default.resolve(__dirname, '../../web/dist');
 app.use(express_1.default.static(webDistPath));
 app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/replay') || req.path.startsWith('/live')) {
+    if (req.path.startsWith('/api') || req.path.startsWith('/replay') || req.path.startsWith('/live') || req.path.startsWith('/ios')) {
         return res.status(404).json({ error: 'Not found' });
     }
     const indexPath = path_1.default.join(webDistPath, 'index.html');

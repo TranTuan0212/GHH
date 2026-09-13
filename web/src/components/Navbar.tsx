@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
-import { Radio, Shield, LogOut, Calendar, Eye, Key, X } from 'lucide-react';
+import { Radio, Shield, LogOut, Calendar, Eye, Key, X, Smartphone } from 'lucide-react';
+import { IosInstallModal } from './IosInstallModal';
 
 interface NavbarProps {
   user: User;
@@ -16,6 +17,7 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
   const [confirmPw, setConfirmPw] = useState('');
   const [pwMsg, setPwMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [pwLoading, setPwLoading] = useState(false);
+  const [showIosModal, setShowIosModal] = useState(false);
 
   const openChangePw = () => {
     setCurrentPw(''); setNewPw(''); setConfirmPw(''); setPwMsg(null);
@@ -104,6 +106,16 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                   Hạn: {new Date(user.expiresAt).toLocaleDateString('vi-VN')}
                 </span>
               </div>
+
+              {/* Cài App iOS button */}
+              <button
+                onClick={() => setShowIosModal(true)}
+                className="p-2 sm:px-3 sm:py-2 rounded-xl bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-300 text-slate-400 border border-white/10 transition-all active:scale-95 flex items-center space-x-1 text-xs"
+                title="Cài đặt App iPhone (iOS có chứng chỉ)"
+              >
+                <Smartphone className="w-4 h-4 text-indigo-400" />
+                <span className="hidden md:inline">Cài App iOS</span>
+              </button>
 
               {/* Đổi mật khẩu button */}
               <button
@@ -222,6 +234,12 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
           </div>
         </div>
       )}
+
+      {/* Modal Cài đặt App iOS */}
+      <IosInstallModal
+        isOpen={showIosModal}
+        onClose={() => setShowIosModal(false)}
+      />
     </>
   );
 };

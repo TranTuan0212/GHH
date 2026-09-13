@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Radio, Lock, User as UserIcon, Smartphone, ShieldCheck, Zap, AlertCircle } from 'lucide-react';
+import { Radio, Lock, User as UserIcon, Smartphone, ShieldCheck, Zap, AlertCircle, Download } from 'lucide-react';
+import { IosInstallModal } from './IosInstallModal';
 
 interface LoginFormProps {
   onLoginSuccess: (token: string, user: any) => void;
@@ -12,6 +13,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [deviceUuid, setDeviceUuid] = useState('iphone-15-pro-demo-uuid-999');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showIosModal, setShowIosModal] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,6 +154,22 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           </button>
         </form>
 
+        {/* Nút Cài đặt App iOS trực tiếp */}
+        <div className="pt-2 border-t border-white/10 text-center">
+          <button
+            type="button"
+            onClick={() => setShowIosModal(true)}
+            className="w-full py-2.5 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-indigo-300 hover:text-white border border-indigo-500/30 hover:border-indigo-400 font-bold text-xs flex items-center justify-center space-x-2 transition-all shadow-lg active:scale-95 cursor-pointer"
+          >
+            <Smartphone className="w-4 h-4 text-indigo-400 animate-pulse" />
+            <span>📲 Cài Đặt App iPhone (iOS có sẵn chứng chỉ)</span>
+          </button>
+        </div>
+
+        <IosInstallModal
+          isOpen={showIosModal}
+          onClose={() => setShowIosModal(false)}
+        />
       </div>
     </div>
   );

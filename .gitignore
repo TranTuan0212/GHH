@@ -7,7 +7,9 @@ node_modules/
 # dist/
 # build/
 *.app
-*.ipa
+# *.ipa
+!app/
+!app/*.ipa
 *.dSYM
 
 # Environment & Data
