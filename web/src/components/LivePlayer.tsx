@@ -383,42 +383,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
       } catch {}
 
-      // 2. Nếu stream đã kết thúc hoặc không còn stream: giải phóng hoàn toàn video & HLS player
-      if (!stream || stream.status === 'ENDED') {
-        if (replayVideoRef.current) {
-          replayVideoRef.current.removeAttribute('src');
-          replayVideoRef.current.load();
-        }
-        if (liveVideoRef.current) {
-          liveVideoRef.current.removeAttribute('src');
-          liveVideoRef.current.load();
-        }
-        if (hlsRef.current) {
-          try { hlsRef.current.destroy(); } catch {}
-          hlsRef.current = null;
-        }
-        if (peerConnectionRef.current) {
-          try { peerConnectionRef.current.close(); } catch {}
-          peerConnectionRef.current = null;
-        }
-        loadedStreamKeyRef.current = null;
-        setHasFrame(false);
-        setHasLiveFrame(false);
-      } else {
-        // 3. Nếu luồng vẫn đang LIVE: tua về mốc 0s của phiên mới và nạp lại HLS sau 1.2s
-        if (videoRef.current) {
-          videoRef.current.currentTime = 0;
-        }
-        if (hlsRef.current) {
-          try {
-            hlsRef.current.stopLoad();
-            setTimeout(() => {
-              if (hlsRef.current) {
-                hlsRef.current.startLoad();
-              }
-            }, 1200);
-          } catch {}
-        }
+      // 2. Tự động chuyển ngay về luồng Live trực tiếp!
+      jumpToLive();
+
+      // 3. Nếu HLS DVR đang chạy: nạp lại buffer cho phiên mới sau khi server reset
+      if (hlsRef.current) {
+        try {
+          hlsRef.current.stopLoad();
+          setTimeout(() => {
+            if (hlsRef.current) {
+              hlsRef.current.startLoad();
+            }
+          }, 800);
+        } catch {}
       }
     };
 

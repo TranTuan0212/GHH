@@ -438,13 +438,13 @@ io.on('connection', (socket) => {
     socket.on('finish_round', (data) => {
         const targetRoomId = data?.roomId || data?.userId || 'default';
         db_1.db.clearCardEntries(targetRoomId);
-        const liveSession = db_1.db.getActiveStream(targetRoomId);
-        const latestSession = db_1.db.getLatestStream(targetRoomId);
+        const liveSession = db_1.db.getActiveStream(targetRoomId) || db_1.db.getActiveStream();
+        const latestSession = db_1.db.getLatestStream(targetRoomId) || db_1.db.getLatestStream();
         if (liveSession && liveSession.streamKey) {
             // 1. Nếu stream đang LIVE: làm mới bộ đệm replay về 0s và cập nhật startedAt của round mới
             (0, mediaServer_1.resetReplaySession)(liveSession.streamKey);
             db_1.db.resetStreamStartTime(liveSession.streamKey);
-            const updated = db_1.db.getActiveStream(targetRoomId);
+            const updated = db_1.db.getActiveStream(targetRoomId) || liveSession;
             io.to(`room_${targetRoomId}`).emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session: updated });
             io.to('room_admin').emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session: updated });
         }

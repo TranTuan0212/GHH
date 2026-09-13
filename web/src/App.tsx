@@ -74,7 +74,15 @@ export const App: React.FC = () => {
 
     newSocket.on('round_finished', () => {
       setCardEntries([]);
-      setActiveStream((curr) => (curr?.status === 'ENDED' ? null : curr));
+      // Tự động kiểm tra luồng live hiện tại thay vì ép về null
+      fetch(`/api/stream/active?roomId=${encodeURIComponent(currentRoomId || '')}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.stream && data.stream.status === 'LIVE') {
+            setActiveStream(data.stream);
+          }
+        })
+        .catch(() => {});
     });
 
     newSocket.on('stream_status_changed', (data) => {
@@ -221,9 +229,17 @@ export const App: React.FC = () => {
       socket.emit('finish_round', { roomId: currentRoomId });
     }
     setCardEntries([]);
-    if (activeStream?.status === 'ENDED') {
-      setActiveStream(null);
-    }
+    // Kiểm tra ngay luồng Live từ server
+    fetch(`/api/stream/active?roomId=${encodeURIComponent(currentRoomId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.stream && data.stream.status === 'LIVE') {
+          setActiveStream(data.stream);
+        } else if (activeStream?.status === 'ENDED') {
+          setActiveStream(null);
+        }
+      })
+      .catch(() => {});
   };
 
   // Undo last card callback
