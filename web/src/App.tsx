@@ -54,16 +54,19 @@ export const App: React.FC = () => {
     });
 
     newSocket.on('group_names_updated', (data) => {
+      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
       if (data && data.groupNames) {
         setGroupNames(data.groupNames);
       }
     });
 
-    newSocket.on('gps_updated', (gpsLog: GpsLog) => {
+    newSocket.on('gps_updated', (gpsLog: any) => {
+      if (gpsLog?.userId && currentRoomIdRef.current && gpsLog.userId !== currentRoomIdRef.current) return;
       setCurrentGps(gpsLog);
     });
 
     newSocket.on('card_added', (data) => {
+      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
       if (data.allEntries) {
         setCardEntries(data.allEntries);
       } else if (data.entry) {
@@ -71,11 +74,13 @@ export const App: React.FC = () => {
       }
     });
 
-    newSocket.on('cards_cleared', () => {
+    newSocket.on('cards_cleared', (data: any) => {
+      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
       setCardEntries([]);
     });
 
     newSocket.on('round_finished', (data) => {
+      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
       setCardEntries([]);
       setFinishRoundTrigger((prev) => prev + 1);
       const targetRoom = data?.roomId || currentRoomIdRef.current;
@@ -91,6 +96,7 @@ export const App: React.FC = () => {
     });
 
     newSocket.on('stream_status_changed', (data) => {
+      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
       if (data?.session) {
         setActiveStream(data.session);
       } else if (data?.status === 'ENDED') {
