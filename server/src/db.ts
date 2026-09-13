@@ -217,6 +217,10 @@ class Database {
     return this.data.streamSessions;
   }
 
+  getStreams(): StreamSession[] {
+    return this.data.streamSessions;
+  }
+
   getActiveStream(userId?: string): StreamSession | undefined {
     if (userId) {
       return this.data.streamSessions.find(s => s.userId === userId && s.status === 'LIVE');
@@ -358,6 +362,33 @@ class Database {
     if (!this.data.groupNames) this.data.groupNames = {};
     this.data.groupNames[roomId] = names;
     this.save();
+  }
+
+  // Tự động dọn dẹp các dữ liệu bài (cardEntries) và phiên live (streamSessions) cũ đã qua maxAgeSeconds (mặc định 24h)
+  cleanupOldData(maxAgeSeconds: number = 24 * 3600): { cleanedSessions: number; cleanedCards: number } {
+    const nowMs = Date.now();
+    const thresholdMs = nowMs - maxAgeSeconds * 1000;
+
+    const initialCards = this.data.cardEntries.length;
+    this.data.cardEntries = this.data.cardEntries.filter(c => {
+      if (!c.createdAt) return true;
+      const t = new Date(c.createdAt).getTime();
+      return isNaN(t) || t >= thresholdMs;
+    });
+    const cleanedCards = initialCards - this.data.cardEntries.length;
+
+    const initialSessions = this.data.streamSessions.length;
+    this.data.streamSessions = this.data.streamSessions.filter(s => {
+      if (s.status === 'LIVE') return true;
+      const t = s.endedAt ? new Date(s.endedAt).getTime() : new Date(s.startedAt).getTime();
+      return isNaN(t) || t >= thresholdMs;
+    });
+    const cleanedSessions = initialSessions - this.data.streamSessions.length;
+
+    if (cleanedCards > 0 || cleanedSessions > 0) {
+      this.save();
+    }
+    return { cleanedSessions, cleanedCards };
   }
 }
 

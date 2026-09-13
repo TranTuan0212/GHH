@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { db, CardEntry, GpsLog, StreamSession } from '../db';
 import { authMiddleware, AuthRequest } from './auth';
-import { cleanupStreamSession, stopFfmpegOnly } from '../mediaServer';
+import { cleanupStreamSession, stopFfmpegOnly, getCleanupStatus, runCronCleanupOnce } from '../mediaServer';
 import { resolveRtmpHostForClient } from '../utils/network';
 
 export const streamRouter = Router();
@@ -194,3 +194,21 @@ const clearEntriesHandler = (req: AuthRequest, res: Response) => {
 };
 streamRouter.delete('/items', authMiddleware, clearEntriesHandler);
 streamRouter.delete('/cards', authMiddleware, clearEntriesHandler);
+
+// GET /api/stream/cleanup-status — Xem thống kê trạng thái dọn dẹp 24h
+streamRouter.get('/cleanup-status', (_req, res) => {
+  res.json({
+    status: 'ok',
+    ...getCleanupStatus()
+  });
+});
+
+// POST /api/stream/trigger-cleanup — Kích hoạt quét dọn dẹp ngay lập tức (Test auto-xóa)
+streamRouter.post('/trigger-cleanup', authMiddleware, (_req: AuthRequest, res: Response) => {
+  const report = runCronCleanupOnce();
+  res.json({
+    message: 'Đã kích hoạt quét dọn dẹp dữ liệu cũ thành công',
+    report,
+    currentStatus: getCleanupStatus()
+  });
+});

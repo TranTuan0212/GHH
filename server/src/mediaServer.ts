@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import { EventEmitter } from 'events';
+import { db } from './db';
 
 /**
  * Custom HLS Segmenter — bỏ qua NMS trans pipeline (có bug trên Windows).
@@ -322,16 +323,16 @@ function startCleanupScheduler(): void {
   // Chạy ngay 1 lần sau khi khởi động 5s để giải phóng ổ cứng nếu có session cũ
   setTimeout(() => {
     const res = runCronCleanupOnce();
-    if (res.deleted > 0) {
-      console.log(`[MediaServer] Dọn dẹp khởi động: đã giải phóng ${res.deleted} file .ts cũ hết hạn`);
+    if (res.deletedFiles > 0) {
+      console.log(`[MediaServer] Dọn dẹp khởi động: đã giải phóng ${res.deletedFiles} file .ts cũ hết hạn`);
     }
   }, 5000);
 
   // Cron: delete .ts files older than CRON_MAX_AGE_SECONDS
   setInterval(() => {
     const result = runCronCleanupOnce();
-    if (result.deleted > 0) {
-      console.log(`[MediaServer] Cron cleanup: deleted ${result.deleted} old .ts files`);
+    if (result.deletedFiles > 0) {
+      console.log(`[MediaServer] Cron cleanup: deleted ${result.deletedFiles} old .ts files`);
     }
   }, CRON_INTERVAL_MS);
 }
@@ -361,10 +362,20 @@ export function timeoutCheckOnce(): string[] {
   return cleaned;
 }
 
-export function runCronCleanupOnce(): { deleted: number; errors: number } {
+export interface CleanupReport {
+  deletedFiles: number;
+  deletedDirs: number;
+  cleanedSessions: number;
+  cleanedCards: number;
+  errors: number;
+}
+
+export function runCronCleanupOnce(): CleanupReport {
   const now = Date.now() / 1000;
-  let deleted = 0;
+  let deletedFiles = 0;
+  let deletedDirs = 0;
   let errors = 0;
+
   for (const rendition of ['live', 'replay'] as const) {
     const renditionDir = path.join(MEDIA_ROOT, rendition);
     if (!fs.existsSync(renditionDir)) continue;
@@ -375,14 +386,38 @@ export function runCronCleanupOnce(): { deleted: number; errors: number } {
         const streamDir = path.join(renditionDir, entry.name);
         try {
           const files = fs.readdirSync(streamDir);
+          let remainingTsCount = 0;
+
           for (const file of files) {
-            if (!file.endsWith('.ts')) continue;
             const filePath = path.join(streamDir, file);
-            const stats = fs.statSync(filePath);
-            if (now - stats.mtime.getTime() / 1000 > CRON_MAX_AGE_SECONDS) {
-              fs.unlinkSync(filePath);
-              deleted++;
+            try {
+              const stats = fs.statSync(filePath);
+              const ageSeconds = now - stats.mtime.getTime() / 1000;
+              if (file.endsWith('.ts')) {
+                if (ageSeconds > CRON_MAX_AGE_SECONDS) {
+                  fs.unlinkSync(filePath);
+                  deletedFiles++;
+                } else {
+                  remainingTsCount++;
+                }
+              }
+            } catch {
+              errors++;
             }
+          }
+
+          // Nếu thư mục không còn segment .ts nào và không phải là phiên đang live, dọn dẹp toàn bộ thư mục
+          const isCurrentlyActive = hlsSessions.has(entry.name);
+          if (remainingTsCount === 0 && !isCurrentlyActive) {
+            try {
+              const remaining = fs.readdirSync(streamDir);
+              for (const rf of remaining) {
+                fs.unlinkSync(path.join(streamDir, rf));
+                deletedFiles++;
+              }
+              fs.rmdirSync(streamDir);
+              deletedDirs++;
+            } catch {}
           }
         } catch {
           errors++;
@@ -392,7 +427,98 @@ export function runCronCleanupOnce(): { deleted: number; errors: number } {
       errors++;
     }
   }
-  return { deleted, errors };
+
+  // Tự động dọn dẹp các session và bài cũ trong database quá 24h
+  const dbCleanup = db.cleanupOldData(CRON_MAX_AGE_SECONDS);
+
+  return {
+    deletedFiles,
+    deletedDirs,
+    cleanedSessions: dbCleanup.cleanedSessions,
+    cleanedCards: dbCleanup.cleanedCards,
+    errors
+  };
+}
+
+/** Lấy thông tin thống kê trạng thái dọn dẹp tự động 24h */
+export function getCleanupStatus(): {
+  cronMaxAgeSeconds: number;
+  cronMaxAgeHours: number;
+  cronIntervalMinutes: number;
+  totalMediaFiles: number;
+  totalMediaSizeBytes: number;
+  streams: {
+    rendition: string;
+    streamKey: string;
+    fileCount: number;
+    oldestFileAgeHours: number;
+    newestFileAgeHours: number;
+    isEligibleForAutoDelete: boolean;
+  }[];
+  dbStats: {
+    cardEntriesCount: number;
+    streamSessionsCount: number;
+  };
+} {
+  const now = Date.now() / 1000;
+  let totalMediaFiles = 0;
+  let totalMediaSizeBytes = 0;
+  const streams: any[] = [];
+
+  for (const rendition of ['live', 'replay'] as const) {
+    const renditionDir = path.join(MEDIA_ROOT, rendition);
+    if (!fs.existsSync(renditionDir)) continue;
+    try {
+      const entries = fs.readdirSync(renditionDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const streamDir = path.join(renditionDir, entry.name);
+        try {
+          const files = fs.readdirSync(streamDir);
+          let oldestMs = Infinity;
+          let newestMs = 0;
+
+          for (const file of files) {
+            const filePath = path.join(streamDir, file);
+            try {
+              const st = fs.statSync(filePath);
+              totalMediaFiles++;
+              totalMediaSizeBytes += st.size;
+              const mt = st.mtime.getTime();
+              if (mt < oldestMs) oldestMs = mt;
+              if (mt > newestMs) newestMs = mt;
+            } catch {}
+          }
+
+          const oldestAgeHours = oldestMs !== Infinity ? (Date.now() - oldestMs) / 3600000 : 0;
+          const newestAgeHours = newestMs !== 0 ? (Date.now() - newestMs) / 3600000 : 0;
+          const isEligible = oldestAgeHours >= (CRON_MAX_AGE_SECONDS / 3600);
+
+          streams.push({
+            rendition,
+            streamKey: entry.name,
+            fileCount: files.length,
+            oldestFileAgeHours: Math.round(oldestAgeHours * 10) / 10,
+            newestFileAgeHours: Math.round(newestAgeHours * 10) / 10,
+            isEligibleForAutoDelete: isEligible
+          });
+        } catch {}
+      }
+    } catch {}
+  }
+
+  return {
+    cronMaxAgeSeconds: CRON_MAX_AGE_SECONDS,
+    cronMaxAgeHours: Math.round(CRON_MAX_AGE_SECONDS / 3600),
+    cronIntervalMinutes: 60,
+    totalMediaFiles,
+    totalMediaSizeBytes,
+    streams,
+    dbStats: {
+      cardEntriesCount: db.getCardEntries().length,
+      streamSessionsCount: db.getStreams().length
+    }
+  };
 }
 
 export function startNativeMediaServer(): void {

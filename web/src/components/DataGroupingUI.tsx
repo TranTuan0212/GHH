@@ -1021,33 +1021,28 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   // Xong phiên: Xóa sạch toàn bộ dữ liệu bài, reset khóa nhóm, reset input, không lưu lại gì
   const handleRequestFinishRound = () => {
+    if (onFinishRound) onFinishRound();
+    setDanGroups({});
+    setGroupBotInputs({});
+    setManualInput('');
+    setCardPickerTarget({ mode: 'add', groupNum: 1 });
+    setEditingGroupId(null);
+    setSelectedCardForEdit(null);
+    setShowMatrixModal(false);
+    showToast('✅ Đã xong phiên: Toàn bộ bài và trạng thái khóa đã được xóa sạch!');
+  };
+
+  // Tự động dọn sạch mọi trạng thái khóa nhóm & ô nhập mỗi khi danh sách bài trở về rỗng (từ socket, nút xong phiên, v.v.)
+  React.useEffect(() => {
     if (entries.length === 0) {
-      // Nếu chưa có dữ liệu gì thì chỉ cần reset trạng thái phụ
       setDanGroups({});
       setGroupBotInputs({});
       setManualInput('');
       setCardPickerTarget({ mode: 'add', groupNum: 1 });
-      showToast('✨ Phiên hiện tại đang trống');
-      return;
+      setEditingGroupId(null);
+      setSelectedCardForEdit(null);
     }
-
-    setConfirmModal({
-      isOpen: true,
-      title: 'Xong Phiên & Xóa Hết Dữ Liệu?',
-      message: 'Toàn bộ dữ liệu của phiên này sẽ được xóa sạch để bắt đầu phiên mới, không lưu lại gì.',
-      confirmText: 'Xong Phiên (Xóa Hết)',
-      confirmColor: 'emerald',
-      onConfirm: () => {
-        if (onFinishRound) onFinishRound();
-        setDanGroups({});
-        setGroupBotInputs({});
-        setManualInput('');
-        setCardPickerTarget({ mode: 'add', groupNum: 1 });
-        showToast('✅ Đã xong phiên: Toàn bộ dữ liệu đã được xóa sạch!');
-        setConfirmModal(null);
-      }
-    });
-  };
+  }, [entries.length]);
 
   return (
     <div className="glass-panel rounded-2xl p-2.5 sm:p-3.5 border border-indigo-500/20 space-y-2.5 flex flex-col justify-between relative">
@@ -1808,7 +1803,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 7. Custom App Confirmation Modal (Thay thế window.confirm local) */}
       {confirmModal && confirmModal.isOpen && (
-        <div className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+        <div className="fixed inset-0 z-[1000005] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-slate-900 border border-white/20 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl text-center">
             <div
               className={`w-12 h-12 rounded-full mx-auto flex items-center justify-center ${

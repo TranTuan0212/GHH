@@ -356,6 +356,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         hlsRef.current.startLoad();
         videoRef.current.currentTime = 0;
       }
+      setIsLive(true);
+      isLiveRef.current = true;
+      updateFrozenTimeline(null);
+      setPlaybackRate(1.0);
+      setTextOverlays([]);
+      try {
+        localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
+      } catch {}
     };
 
     socket.on('initial_state', handleInitialState);
