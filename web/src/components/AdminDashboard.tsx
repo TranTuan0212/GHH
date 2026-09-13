@@ -482,7 +482,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               </div>
               <div className="bg-slate-950 p-2.5 rounded font-mono text-[10px] text-slate-300 overflow-x-auto select-all border border-white/5">
-                apt-get update && apt-get install -y unzip zip clang g++ libssl-dev zlib1g-dev && git clone https://github.com/zhlynn/zsign.git /tmp/zsign && cd /tmp/zsign && g++ *.cpp -lcrypto -lz -O3 -o /usr/local/bin/zsign && rm -rf /tmp/zsign
+                apt-get install -y pkg-config && cd /tmp/zsign/build/linux && make clean && make && cp zsign /usr/local/bin/zsign && cd /var/www/liveapp
               </div>
               <p className="text-[10px] text-slate-400 italic">
                 * Copy câu lệnh trên dán vào terminal SSH VPS một lần duy nhất, sau đó tải lại trang này zsign sẽ chuyển sang màu xanh "Sẵn sàng".
