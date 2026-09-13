@@ -17,6 +17,7 @@ import {
   Copy,
   Check,
   RotateCw,
+  FlipHorizontal,
   Type,
   Plus,
   Trash2,
@@ -115,6 +116,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(true);
   const [rotation, setRotation] = useState<number>(0);
+  const [isFlipped, setIsFlipped] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('player_flipped') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleFlip = () => {
+    setIsFlipped((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('player_flipped', String(next));
+      } catch {}
+      return next;
+    });
+  };
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [hlsWindowStart, setHlsWindowStart] = useState<number>(0);
@@ -1136,6 +1154,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return;
     }
 
+    if (e.key === 'm' || e.key === 'M' || e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      toggleFlip();
+      return;
+    }
+
     if (e.key !== 'Enter' && e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
 
     e.preventDefault();
@@ -1474,7 +1498,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             isLive && hasLiveFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
           }`}
           style={{
-            transform: `rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
             transition: 'transform 0.2s ease-in-out',
             position: 'absolute',
             inset: 0
@@ -1491,7 +1515,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             !isLive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
           }`}
           style={{
-            transform: `rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
             transition: 'transform 0.2s ease-in-out',
             position: 'absolute',
             inset: 0
@@ -1770,6 +1794,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             >
               <RotateCw className="w-3 h-3" />
               <span>{rotation !== 0 ? `${rotation}°` : 'Xoay'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleFlip}
+              className={`px-2 py-1 rounded-lg border text-xs font-medium flex items-center space-x-1 transition-all ${
+                isFlipped
+                  ? 'bg-amber-500/25 text-amber-300 border-amber-500/50 shadow-sm ring-1 ring-amber-400/40'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-white/10'
+              }`}
+              title="Lật ngược hình ảnh ngang (Phím M hoặc F: Chống chữ bị ngược khi quay Camera trước)"
+            >
+              <FlipHorizontal className="w-3.5 h-3.5 text-amber-400" />
+              <span>{isFlipped ? 'Đã Lật' : 'Lật Ảnh'}</span>
             </button>
 
             <button

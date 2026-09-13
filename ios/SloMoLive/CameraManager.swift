@@ -348,6 +348,9 @@ public class CameraManager: NSObject, ObservableObject {
                             default: connection.videoOrientation = .portrait
                             }
                         }
+                        if connection.isVideoMirroringSupported {
+                            connection.isVideoMirrored = (self.cameraPosition == .front)
+                        }
                         if connection.isVideoStabilizationSupported {
                             // Tắt chống rung nội suy để tránh méo viền và mờ chuyển động khi quay 120 FPS
                             connection.preferredVideoStabilizationMode = .off
@@ -364,6 +367,7 @@ public class CameraManager: NSObject, ObservableObject {
                 self.captureSession.commitConfiguration()
                 self.streamEpochOffset = nil
                 self.captureSession.startRunning()
+                self.updateVideoOrientation()
 
                 DispatchQueue.main.async {
                     completion(true)

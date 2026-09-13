@@ -182,6 +182,28 @@ export function isValidCardValue(raw: string): { isValid: boolean; normalizedRan
   return validateSingleCard(raw);
 }
 
+// Helper tính độ mạnh của quân bài (Át = 14 trong so bài Liêng/Sáp, K = 13, Q = 12, J = 11, 10..2)
+export function getRankPower(r: string): number {
+  const s = r.trim().toUpperCase();
+  if (s === '1' || s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE') return 14;
+  if (s === '13' || s === 'K' || s === 'GIÀ' || s === 'KING') return 13;
+  if (s === '12' || s === 'Q' || s === 'ĐẦM' || s === 'QUEEN') return 12;
+  if (s === '11' || s === 'J' || s === 'BỒI' || s === 'JACK') return 11;
+  const n = parseInt(s, 10);
+  if (!isNaN(n) && n >= 2 && n <= 10) return n;
+  return 0;
+}
+
+// Helper hiển thị tên quân bài thân thiện
+export function getRankDisplay(r: string): string {
+  const s = r.trim().toUpperCase();
+  if (s === '1' || s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE') return 'A';
+  if (s === '13' || s === 'K' || s === 'GIÀ' || s === 'KING') return 'K';
+  if (s === '12' || s === 'Q' || s === 'ĐẦM' || s === 'QUEEN') return 'Q';
+  if (s === '11' || s === 'J' || s === 'BỒI' || s === 'JACK') return 'J';
+  return s;
+}
+
 // Tính kết quả Chế độ 3 Mục
 export function evaluate3Cards(cards: DataEntry[]): {
   type: 'empty' | 'partial' | 'sap' | 'lieng' | '3tay' | 'points';
@@ -207,17 +229,23 @@ export function evaluate3Cards(cards: DataEntry[]): {
   const parsed = last3.map((c) => parseCard(c.cardValue));
   const ranks = parsed.map((p) => p.rank);
 
-  // 1. Kiểm tra Bộ 3 giống nhau (3 mục cùng số)
+  // 1. Kiểm tra Sáp (Bộ 3 giống nhau / 3 mục cùng số)
+  // Quy tắc: Sáp số lớn hơn THẮNG Sáp số nhỏ hơn! (Sáp A = 14 > Sáp K = 13 > ... > Sáp 2 = 2)
   if (ranks[0] !== '0' && ranks[0] === ranks[1] && ranks[1] === ranks[2]) {
+    const power = getRankPower(ranks[0]);
+    const display = getRankDisplay(ranks[0]);
     return {
       type: 'sap',
-      label: `Bộ Ba (${ranks[0]}-${ranks[0]}-${ranks[0]}) 👑`,
-      score: 100,
-      highlightClass: 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black shadow-lg shadow-amber-500/30 border-amber-300'
+      label: `Bộ Ba (${display}) 👑`,
+      // Base score 10,000 + power đảm bảo Sáp luôn thắng mọi Liêng, và Sáp to thắng Sáp nhỏ
+      score: 10000 + power,
+      highlightClass: 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black shadow-lg shadow-amber-500/30 border-amber-300 animate-pulse'
     };
   }
 
-  // 2. Kiểm tra Chuỗi liên tiếp (3 số liên tiếp)
+  // 2. Kiểm tra Chuỗi liên tiếp (Liêng / 3 số liên tiếp)
+  // Quy tắc: Chuỗi lớn hơn THẮNG Chuỗi nhỏ hơn!
+  // Thứ tự: Q-K-A (cao nhất = 14) > J-Q-K (13) > 10-J-Q (12) > ... > 7-8-9 (9) > 4-5-6 (6) > A-2-3 (nhỏ nhất = 3)
   const rankOrderMap: { [k: string]: number } = {
     '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
     '11': 11, '12': 12, '13': 13, A: 1, J: 11, Q: 12, K: 13
@@ -225,23 +253,30 @@ export function evaluate3Cards(cards: DataEntry[]): {
   const orderNums = ranks.map((r) => rankOrderMap[r] || 0).sort((a, b) => a - b);
 
   let isLieng = false;
+  let liengPower = 0;
   let liengLabel = '';
 
   if (orderNums[0] > 0 && orderNums[1] > 0 && orderNums[2] > 0) {
-    // Chuỗi liên tiếp thông thường (ví dụ: 4-5-6, 9-10-11, 10-11-12, 11-12-13)
-    if (orderNums[0] + 1 === orderNums[1] && orderNums[1] + 1 === orderNums[2]) {
+    // Chuỗi cao nhất: 12-13-1 (Q-K-A) -> Quân kết thúc là Át (power = 14)
+    if (orderNums[0] === 1 && orderNums[1] === 12 && orderNums[2] === 13) {
       isLieng = true;
-      liengLabel = `Chuỗi (${orderNums.join('-')})`;
+      liengPower = 14;
+      liengLabel = 'Chuỗi Cao (Q-K-A) ⭐';
     }
-    // Chuỗi 1-2-3
+    // Chuỗi thấp nhất: 1-2-3 (A-2-3) -> Quân kết thúc là 3 (power = 3)
     else if (orderNums[0] === 1 && orderNums[1] === 2 && orderNums[2] === 3) {
       isLieng = true;
-      liengLabel = 'Chuỗi (1-2-3)';
+      liengPower = 3;
+      liengLabel = 'Chuỗi (A-2-3)';
     }
-    // Chuỗi cao 12-13-1 (tương ứng Q-K-A)
-    else if (orderNums[0] === 1 && orderNums[1] === 12 && orderNums[2] === 13) {
+    // Chuỗi liên tiếp thông thường: 2-3-4, 4-5-6, 7-8-9, ..., 11-12-13 (J-Q-K)
+    else if (orderNums[0] + 1 === orderNums[1] && orderNums[1] + 1 === orderNums[2]) {
       isLieng = true;
-      liengLabel = 'Chuỗi Cao (12-13-1) ⭐';
+      liengPower = orderNums[2]; // 4..13
+      const d0 = getRankDisplay(orderNums[0].toString());
+      const d1 = getRankDisplay(orderNums[1].toString());
+      const d2 = getRankDisplay(orderNums[2].toString());
+      liengLabel = `Chuỗi (${d0}-${d1}-${d2})`;
     }
   }
 
@@ -249,29 +284,42 @@ export function evaluate3Cards(cards: DataEntry[]): {
     return {
       type: 'lieng',
       label: liengLabel,
-      score: 80,
+      // Base score 5,000 + liengPower đảm bảo:
+      // Chuỗi 7-8-9 (5009) > Chuỗi 4-5-6 (5006)
+      // Chuỗi Q-K-A (5014) > Chuỗi J-Q-K (5013)
+      score: 5000 + liengPower,
       highlightClass: 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-black shadow-md shadow-indigo-500/30 border-indigo-400'
     };
   }
 
-  // 3. Kiểm tra Nhóm Cao (cả 3 mục đều là 11, 12, 13)
+  // 3. Kiểm tra Nhóm Cao (Ba Tây / cả 3 mục đều là J, Q, K / 11, 12, 13)
   const is3Tay = ranks.every((r) => r === '11' || r === '12' || r === '13' || r === 'J' || r === 'Q' || r === 'K');
   if (is3Tay) {
+    const tayPowers = ranks.map(getRankPower).sort((a, b) => a - b);
     return {
       type: '3tay',
       label: 'Nhóm Cao (11-13) ✨',
-      score: 70,
+      // Base score 1,000 + phân cấp theo quân cao nhất
+      score: 1000 + tayPowers[2] * 20 + tayPowers[1],
       highlightClass: 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
     };
   }
 
   // 4. Tính điểm thường: tổng điểm mod 10
+  // Nếu bằng điểm nhau, nhóm có quân bài lớn nhất (A=14, K=13..2) sẽ THẮNG!
   const sum = parsed.reduce((acc, p) => acc + p.value, 0);
   const mod10 = sum % 10;
+  const sortedPowers = ranks.map(getRankPower).sort((a, b) => a - b);
+  const maxPower = sortedPowers[2] || 0;
+  const midPower = sortedPowers[1] || 0;
+  const minPower = sortedPowers[0] || 0;
+  // mod10 quyết định điểm chính (0..9); quân bài cao nhất phá vỡ hòa điểm
+  const normalScore = mod10 * 100 + maxPower + (midPower / 20) + (minPower / 400);
+
   return {
     type: 'points',
     label: mod10 === 0 ? '0 Điểm' : `${mod10} Điểm`,
-    score: mod10,
+    score: normalScore,
     highlightClass:
       mod10 >= 8
         ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
@@ -498,7 +546,7 @@ export function computeAllGroupAnswers(
 
   const answers: GroupAnswerItem[] = tempAnswers.map((a) => ({
     ...a,
-    isWinner: winnerGroupNum !== null && a.groupNum === winnerGroupNum && bestScore > 0
+    isWinner: bestScore > 0 && a.score > 0 && Math.abs(a.score - bestScore) < 0.0001
   }));
 
   return { answers, winnerGroupNum };
