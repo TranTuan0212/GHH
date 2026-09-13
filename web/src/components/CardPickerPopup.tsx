@@ -273,8 +273,8 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     window.addEventListener('touchend', onTouchEnd);
   };
 
-  // Tính toán đáp án và nhóm thắng/dẫn đầu của tất cả các nhóm trong phiên hiện tại
-  const { answers: groupAnswers } = computeAllGroupAnswers(
+  // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM trong phiên hiện tại
+  const { answers: groupAnswers, leaderboardText, completeGroupsCount } = computeAllGroupAnswers(
     entries,
     numGroups,
     gameMode,
@@ -396,9 +396,9 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                       <span className="text-[10px] sm:text-[11px] font-bold text-slate-200 truncate">
                         {ans.name}
                       </span>
-                      {ans.isWinner ? (
-                        <span className="px-1 py-0.2 rounded bg-amber-400 text-slate-950 font-black text-[9px] flex items-center gap-0.5 shadow-sm">
-                          👑 Thắng
+                      {ans.rankBadgeText ? (
+                        <span className={`px-1 py-0.2 rounded font-black text-[9px] flex items-center gap-0.5 shadow-sm whitespace-nowrap ${ans.rankBadgeClass}`}>
+                          {ans.rankBadgeText}
                         </span>
                       ) : ans.isStoodPat ? (
                         <span className="px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-bold text-[9px] border border-emerald-500/30">
@@ -435,6 +435,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 );
               })}
             </div>
+
+            {/* Dòng đối chiếu thứ hạng toàn bộ các nhóm */}
+            {completeGroupsCount > 1 && leaderboardText && (
+              <div className="mt-1.5 px-2 py-1 rounded-xl bg-indigo-950/70 border border-indigo-500/30 text-[10px] font-mono text-indigo-200 flex items-center space-x-1.5 overflow-x-auto no-scrollbar shadow-inner">
+                <span className="font-bold text-amber-300 whitespace-nowrap">Đối chiếu:</span>
+                <span className="whitespace-nowrap">{leaderboardText}</span>
+              </div>
+            )}
           </div>
 
           {/* Group Switcher Bar: Cho phép bấm đổi nhóm nhanh ngay trên popup */}

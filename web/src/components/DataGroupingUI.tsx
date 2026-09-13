@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { DataEntry } from '../types';
 import {
@@ -476,16 +476,30 @@ export interface GroupAnswerItem {
   isWinner: boolean;
   score: number;
   isStoodPat: boolean;
+  isComplete: boolean;
+  rank: number | null;
+  winsCount: number;
+  lossesCount: number;
+  tiesCount: number;
+  totalCompared: number;
+  rankBadgeText: string;
+  rankBadgeClass: string;
 }
 
-// Hàm tính toán đáp án và nhóm thắng/dẫn đầu của tất cả các nhóm
+// Hàm tính toán đáp án và ĐỐI CHIẾU TẤT CẢ CÁC NHÓM VỚI NHAU (Cross-Check & Leaderboard)
 export function computeAllGroupAnswers(
   entries: DataEntry[],
   numGroups: number,
   gameMode: GameMode,
   groupNames: { [groupIndex: number]: string } = {},
   danGroups: { [groupIndex: number]: boolean } = {}
-): { answers: GroupAnswerItem[]; winnerGroupNum: number | null } {
+): {
+  answers: GroupAnswerItem[];
+  winnerGroupNum: number | null;
+  leaderboardText: string;
+  completeGroupsCount: number;
+  sortedComplete: GroupAnswerItem[];
+} {
   const grouped: { [key: number]: DataEntry[] } = {};
   for (let i = 1; i <= numGroups; i++) {
     grouped[i] = [];
@@ -496,9 +510,16 @@ export function computeAllGroupAnswers(
     }
   });
 
-  let bestScore = -1;
-  let winnerGroupNum: number | null = null;
-  const tempAnswers: { groupNum: number; name: string; items: DataEntry[]; label: string; highlightClass: string; score: number; isStoodPat: boolean }[] = [];
+  const tempAnswers: {
+    groupNum: number;
+    name: string;
+    items: DataEntry[];
+    label: string;
+    highlightClass: string;
+    score: number;
+    isStoodPat: boolean;
+    isComplete: boolean;
+  }[] = [];
 
   for (let g = 1; g <= numGroups; g++) {
     const items = grouped[g] || [];
@@ -506,6 +527,7 @@ export function computeAllGroupAnswers(
     let label = '';
     let highlightClass = '';
     let scoreForRank = -1;
+    let isComplete = false;
 
     if (gameMode === '3cards') {
       const res = evaluate3Cards(items);
@@ -513,24 +535,21 @@ export function computeAllGroupAnswers(
       highlightClass = res.highlightClass;
       if (items.length >= 3) {
         scoreForRank = res.score;
+        isComplete = true;
       }
     } else {
       const res = evaluate2Cards(items, isStoodPat);
       label = res.label;
       highlightClass = res.highlightClass;
       if (items.length >= 2) {
-        if (res.status === 'xibang') scoreForRank = 300;
-        else if (res.status === 'xilat') scoreForRank = 200;
-        else if (res.status === 'ngulinh') scoreForRank = 150 + (21 - res.total);
-        else if (res.status === 'points') scoreForRank = res.total;
-        else if (res.status === 'non') scoreForRank = res.total;
-        else if (res.status === 'quac') scoreForRank = -1;
+        isComplete = true;
+        if (res.status === 'xibang') scoreForRank = 5000 + 21;
+        else if (res.status === 'xilat') scoreForRank = 4000;
+        else if (res.status === 'ngulinh') scoreForRank = 3000 + (21 - res.total);
+        else if (res.status === 'points') scoreForRank = 2000 + res.total;
+        else if (res.status === 'non') scoreForRank = 1000 + res.total;
+        else if (res.status === 'quac') scoreForRank = Math.max(0, 35 - res.total);
       }
-    }
-
-    if (scoreForRank > bestScore && scoreForRank > 0) {
-      bestScore = scoreForRank;
-      winnerGroupNum = g;
     }
 
     tempAnswers.push({
@@ -540,16 +559,110 @@ export function computeAllGroupAnswers(
       label,
       highlightClass,
       score: scoreForRank,
-      isStoodPat
+      isStoodPat,
+      isComplete
     });
   }
 
-  const answers: GroupAnswerItem[] = tempAnswers.map((a) => ({
-    ...a,
-    isWinner: bestScore > 0 && a.score > 0 && Math.abs(a.score - bestScore) < 0.0001
-  }));
+  // 1. Lọc các nhóm đã hoàn thành bài để đối chiếu
+  const completeList = tempAnswers.filter((a) => a.isComplete && a.score > 0);
+  const completeGroupsCount = completeList.length;
 
-  return { answers, winnerGroupNum };
+  // 2. Đối chiếu trực tiếp từng cặp nhóm (Head-to-head Cross-Check)
+  const headToHead: { [groupNum: number]: { wins: number; losses: number; ties: number } } = {};
+  for (let g = 1; g <= numGroups; g++) {
+    headToHead[g] = { wins: 0, losses: 0, ties: 0 };
+  }
+
+  for (let i = 0; i < completeList.length; i++) {
+    for (let j = i + 1; j < completeList.length; j++) {
+      const a = completeList[i];
+      const b = completeList[j];
+      const diff = a.score - b.score;
+      if (Math.abs(diff) < 0.0001) {
+        headToHead[a.groupNum].ties++;
+        headToHead[b.groupNum].ties++;
+      } else if (diff > 0) {
+        headToHead[a.groupNum].wins++;
+        headToHead[b.groupNum].losses++;
+      } else {
+        headToHead[a.groupNum].losses++;
+        headToHead[b.groupNum].wins++;
+      }
+    }
+  }
+
+  // 3. Xếp hạng đối chiếu toàn cục từ cao xuống thấp (Hạng 1, 2, 3...)
+  const sortedComplete = [...completeList].sort((a, b) => b.score - a.score);
+  const ranksMap: { [groupNum: number]: number } = {};
+  let currentRank = 1;
+  for (let i = 0; i < sortedComplete.length; i++) {
+    if (i > 0 && Math.abs(sortedComplete[i].score - sortedComplete[i - 1].score) >= 0.0001) {
+      currentRank = i + 1;
+    }
+    ranksMap[sortedComplete[i].groupNum] = currentRank;
+  }
+
+  const winnerGroupNum: number | null = sortedComplete.length > 0 ? sortedComplete[0].groupNum : null;
+
+  const answers: GroupAnswerItem[] = tempAnswers.map((a) => {
+    const isComplete = a.isComplete && a.score > 0;
+    const r = isComplete ? ranksMap[a.groupNum] : null;
+    const isWinner = r === 1;
+    const wins = headToHead[a.groupNum]?.wins || 0;
+    const losses = headToHead[a.groupNum]?.losses || 0;
+    const ties = headToHead[a.groupNum]?.ties || 0;
+    const totalCompared = Math.max(0, completeGroupsCount - 1);
+
+    let rankBadgeText = '';
+    let rankBadgeClass = '';
+
+    if (r === 1) {
+      rankBadgeText = '👑 Hạng 1 (Thắng)';
+      rankBadgeClass = 'bg-amber-400 text-slate-950 font-black shadow-md shadow-amber-400/30 border border-amber-300 ring-1 ring-amber-400/50';
+    } else if (r === 2) {
+      rankBadgeText = '🥈 Hạng 2';
+      rankBadgeClass = 'bg-slate-200 text-slate-950 font-bold border border-slate-100 shadow-sm';
+    } else if (r === 3) {
+      rankBadgeText = '🥉 Hạng 3';
+      rankBadgeClass = 'bg-amber-700/85 text-amber-100 font-bold border border-amber-600/70 shadow-sm';
+    } else if (r !== null && r >= 4) {
+      rankBadgeText = `Hạng ${r}`;
+      rankBadgeClass = 'bg-slate-800 text-slate-300 border border-white/15 font-semibold';
+    }
+
+    return {
+      ...a,
+      isWinner,
+      isComplete,
+      rank: r,
+      winsCount: wins,
+      lossesCount: losses,
+      tiesCount: ties,
+      totalCompared,
+      rankBadgeText,
+      rankBadgeClass
+    };
+  });
+
+  const sortedCompleteAnswers = answers
+    .filter((a) => a.rank !== null)
+    .sort((a, b) => (a.rank || 999) - (b.rank || 999));
+
+  const leaderboardText = sortedCompleteAnswers
+    .map((g) => {
+      const icon = g.rank === 1 ? '👑 ' : g.rank === 2 ? '🥈 ' : g.rank === 3 ? '🥉 ' : '';
+      return `${icon}${g.name} (Hạng ${g.rank} • ${g.label})`;
+    })
+    .join('  >  ');
+
+  return {
+    answers,
+    winnerGroupNum,
+    leaderboardText,
+    completeGroupsCount,
+    sortedComplete: sortedCompleteAnswers
+  };
 }
 
 export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
@@ -628,6 +741,26 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
   const targetGroupAll = groupedItems[nextGroupIndex] || [];
   const maxInitialCards = gameMode === '3cards' ? 3 : 2;
+
+  // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM
+  const comparisonResult = useMemo(() => {
+    return computeAllGroupAnswers(
+      entries,
+      numGroups,
+      gameMode,
+      groupNames,
+      danGroups
+    );
+  }, [entries, numGroups, gameMode, groupNames, danGroups]);
+
+  const { answers: allGroupAnswers, completeGroupsCount, sortedComplete, leaderboardText } = comparisonResult;
+  const answerByGroupNum = useMemo(() => {
+    const map: { [groupNum: number]: GroupAnswerItem } = {};
+    allGroupAnswers.forEach((a) => {
+      map[a.groupNum] = a;
+    });
+    return map;
+  }, [allGroupAnswers]);
 
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -1100,6 +1233,51 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         })}
       </div>
 
+      {/* BANNER BẢNG ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM */}
+      {completeGroupsCount > 1 && (
+        <div className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-indigo-950/80 border border-indigo-500/40 shadow-lg shadow-indigo-950/40 flex flex-col md:flex-row md:items-center justify-between gap-2.5 animate-fadeIn">
+          <div className="flex items-center space-x-2 flex-shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 font-bold text-base shadow-inner">
+              👑
+            </div>
+            <div>
+              <div className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center space-x-1.5">
+                <span>BẢNG ĐỐI CHIẾU XẾP HẠNG ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})</span>
+              </div>
+              <p className="text-[10px] text-slate-400">Đã đối chiếu chéo tất cả {completeGroupsCount}/{numGroups} nhóm theo thực lực</p>
+            </div>
+          </div>
+
+          {/* Dây chuyền đối chiếu thứ hạng từ cao xuống thấp */}
+          <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar py-1 text-xs font-mono font-bold">
+            {sortedComplete.map((item, sIdx) => {
+              const r = item.rank;
+              return (
+                <React.Fragment key={item.groupNum}>
+                  {sIdx > 0 && <span className="text-slate-500 px-0.5 font-sans font-black select-none">&gt;</span>}
+                  <div
+                    className={`px-2 py-1 rounded-xl border flex items-center space-x-1.5 flex-shrink-0 cursor-default transition-all ${
+                      r === 1
+                        ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20 font-black'
+                        : r === 2
+                        ? 'bg-slate-200 text-slate-900 border-slate-100 font-bold'
+                        : r === 3
+                        ? 'bg-amber-700/85 text-amber-100 border-amber-600/70 font-bold'
+                        : 'bg-slate-800/90 text-slate-300 border-white/10'
+                    }`}
+                    title={`Thắng ${item.winsCount}/${item.totalCompared} nhóm khác`}
+                  >
+                    <span>{r === 1 ? '👑' : r === 2 ? '🥈' : r === 3 ? '🥉' : `#${r}`}</span>
+                    <span>{item.name}:</span>
+                    <span className="opacity-90">{item.label}</span>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 5. Grouped Columns Display - Thiết kế cân đối, không bao giờ bị tràn hay lệch */}
       <div
         className={`grid ${
@@ -1118,6 +1296,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           const customName = groupNames[groupNum] || `Nhóm ${groupNum}`;
           const isNextTarget = groupNum === nextGroupIndex;
           const isStoodPat = danGroups[groupNum] || false;
+          const ansItem = answerByGroupNum[groupNum];
 
           // Mobile filter check
           if (mobileActiveFilter !== 'all' && mobileActiveFilter !== groupNum) {
@@ -1138,7 +1317,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <div
               key={groupNum}
               className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden ${
-                isStoodPat
+                ansItem?.isWinner
+                  ? 'bg-amber-500/10 border-amber-400/80 ring-2 ring-amber-400/40 shadow-amber-500/10'
+                  : isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
                   ? 'bg-indigo-950/45 border-indigo-500 shadow-indigo-500/20 ring-2 ring-indigo-500/60'
@@ -1146,12 +1327,16 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               }`}
             >
               <div>
-                {/* Group Header: [Number] [Name / Inline Edit] [Count] */}
+                {/* Group Header: [Number] [Name / Inline Edit] [Rank Badge] [Count] */}
                 <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-2">
                   <div className="flex items-center space-x-1.5 min-w-0 flex-1 mr-1">
                     <span
                       className={`w-5 h-5 rounded-lg flex items-center justify-center font-bold text-[11px] flex-shrink-0 ${
-                        isNextTarget ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40' : 'bg-slate-800 text-slate-300'
+                        ansItem?.isWinner
+                          ? 'bg-amber-400 text-slate-950 font-black shadow-sm'
+                          : isNextTarget
+                          ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40'
+                          : 'bg-slate-800 text-slate-300'
                       }`}
                     >
                       {groupNum}
@@ -1193,6 +1378,13 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                         </h3>
                         <Edit2 className="w-2.5 h-2.5 text-slate-500 group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
                       </div>
+                    )}
+
+                    {/* Huy hiệu thứ hạng đối chiếu */}
+                    {ansItem && ansItem.rank && (
+                      <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-mono whitespace-nowrap flex items-center space-x-0.5 flex-shrink-0 ${ansItem.rankBadgeClass}`}>
+                        <span>{ansItem.rankBadgeText}</span>
+                      </span>
                     )}
                   </div>
 
@@ -1330,11 +1522,21 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   </button>
                 </div>
 
-                {/* Hàng 3: Kết quả nhóm (Hiển thị luật Xì Lát VN hoặc 3 Lá Liêng/Sáp) */}
-                <div
-                  className={`w-full py-1.5 px-2 rounded-xl text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
-                >
-                  {evalResult.label}
+                {/* Hàng 3: Kết quả nhóm + Đối chiếu thắng thua */}
+                <div className="space-y-1">
+                  <div
+                    className={`w-full py-1.5 px-2 rounded-xl text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
+                  >
+                    {evalResult.label}
+                  </div>
+                  {ansItem && ansItem.rank && completeGroupsCount > 1 && (
+                    <div className="text-[10px] font-mono text-center text-slate-400 flex items-center justify-center space-x-1.5 py-0.5">
+                      <span>Đối chiếu:</span>
+                      <span className="text-emerald-400 font-bold">Thắng {ansItem.winsCount}</span>
+                      {ansItem.lossesCount > 0 && <span className="text-rose-400 font-bold">• Thua {ansItem.lossesCount}</span>}
+                      {ansItem.tiesCount > 0 && <span className="text-amber-400 font-bold">• Hòa {ansItem.tiesCount}</span>}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
