@@ -1,5 +1,7 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import path from 'path';
+import fs from 'fs';
 import { db, User } from '../db';
 import { adminMiddleware, AuthRequest } from './auth';
 
@@ -151,4 +153,89 @@ adminRouter.post('/users/:id/reset-password', (req: AuthRequest, res: Response) 
 adminRouter.get('/gps-logs', (req: AuthRequest, res: Response) => {
   const latestGps = db.getLatestGpsLog();
   res.json({ gps: latestGps });
+});
+
+// Helper xác định thư mục app
+const getAppDir = () => {
+  const dir1 = path.resolve(__dirname, '../../../app');
+  const dir2 = path.resolve(process.cwd(), 'app');
+  return fs.existsSync(dir1) ? dir1 : dir2;
+};
+
+// GET /api/admin/app-files - Danh sách file IPA và chứng chỉ trong thư mục app
+adminRouter.get('/app-files', (req: AuthRequest, res: Response) => {
+  const appDir = getAppDir();
+  if (!fs.existsSync(appDir)) {
+    fs.mkdirSync(appDir, { recursive: true });
+  }
+
+  const files = fs.readdirSync(appDir).map(filename => {
+    const filePath = path.join(appDir, filename);
+    const stats = fs.statSync(filePath);
+    const lower = filename.toLowerCase();
+    return {
+      name: filename,
+      size: stats.size,
+      sizeFormatted: (stats.size / 1024 / 1024).toFixed(2) + ' MB',
+      updatedAt: stats.mtime.toISOString(),
+      isIpa: lower.endsWith('.ipa'),
+      isCert: lower.endsWith('.mobileprovision') || lower.endsWith('.p12') || lower.endsWith('.cer')
+    };
+  });
+
+  res.json({ files });
+});
+
+// POST /api/admin/upload-app-file - Upload file .ipa hoặc chứng chỉ (.mobileprovision, .p12, .cer)
+adminRouter.post('/upload-app-file', (req: AuthRequest, res: Response) => {
+  const filename = (req.query.filename as string) || 'SloMoLive.ipa';
+  const safeFilename = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  const allowedExts = ['.ipa', '.mobileprovision', '.p12', '.cer', '.plist'];
+  const hasValidExt = allowedExts.some(ext => safeFilename.toLowerCase().endsWith(ext));
+  if (!hasValidExt) {
+    return res.status(400).json({ error: 'Chỉ chấp nhận file định dạng .ipa, .mobileprovision, .p12, .cer' });
+  }
+
+  const appDir = getAppDir();
+  if (!fs.existsSync(appDir)) {
+    fs.mkdirSync(appDir, { recursive: true });
+  }
+
+  const targetPath = path.join(appDir, safeFilename);
+  const writeStream = fs.createWriteStream(targetPath);
+
+  req.pipe(writeStream);
+
+  writeStream.on('finish', () => {
+    const stats = fs.statSync(targetPath);
+    res.json({
+      message: `Tải lên file "${safeFilename}" thành công (${(stats.size / 1024 / 1024).toFixed(2)} MB).`,
+      filename: safeFilename,
+      size: stats.size,
+      updatedAt: stats.mtime.toISOString()
+    });
+  });
+
+  writeStream.on('error', (err) => {
+    res.status(500).json({ error: 'Lỗi ghi file: ' + err.message });
+  });
+});
+
+// DELETE /api/admin/app-files/:filename - Xóa file trong app folder
+adminRouter.delete('/app-files/:filename', (req: AuthRequest, res: Response) => {
+  const safeFilename = path.basename(req.params.filename);
+  const appDir = getAppDir();
+  const targetPath = path.join(appDir, safeFilename);
+
+  if (!fs.existsSync(targetPath)) {
+    return res.status(404).json({ error: 'File không tồn tại.' });
+  }
+
+  try {
+    fs.unlinkSync(targetPath);
+    res.json({ message: `Đã xóa file "${safeFilename}" thành công.` });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Lỗi khi xóa file: ' + err.message });
+  }
 });

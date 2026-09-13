@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, GpsLog, StreamSession } from '../types';
 import {
   Users,
@@ -14,7 +14,10 @@ import {
   Clock,
   CheckCircle,
   AlertCircle,
-  Key
+  Key,
+  Upload,
+  Download,
+  FileText
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -41,6 +44,77 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [renewDays, setRenewDays] = useState<{ [userId: string]: number }>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Quản lý file IPA & Chứng chỉ
+  interface AppFile {
+    name: string;
+    size: number;
+    sizeFormatted: string;
+    updatedAt: string;
+    isIpa: boolean;
+    isCert: boolean;
+  }
+  const [appFiles, setAppFiles] = useState<AppFile[]>([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const fetchAppFiles = async () => {
+    try {
+      const res = await fetch('/api/admin/app-files', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.files) setAppFiles(data.files);
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchAppFiles();
+  }, [token]);
+
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingFile(true);
+    try {
+      const res = await fetch(`/api/admin/upload-app-file?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/octet-stream'
+        },
+        body: file
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      showMsg(data.message, 'success');
+      fetchAppFiles();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    } finally {
+      setUploadingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteAppFile = async (filename: string) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa file "${filename}" khỏi server không?`)) return;
+    try {
+      const res = await fetch(`/api/admin/app-files/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      showMsg(data.message, 'success');
+      fetchAppFiles();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    }
+  };
 
   // Reset mật khẩu modal
   const [resetPwModal, setResetPwModal] = useState<{ userId: string; username: string } | null>(null);
@@ -245,6 +319,102 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="p-3 rounded-2xl bg-amber-600/20 text-amber-400 border border-amber-500/30">
             <MapPin className="w-6 h-6" />
           </div>
+        </div>
+      </div>
+
+      {/* Quản lý File App iOS (.IPA) & Chứng chỉ */}
+      <div className="glass-panel rounded-2xl p-5 border border-indigo-500/20 space-y-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 pb-3">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2.5 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
+              <Smartphone className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                Quản Lý File Cài Đặt App iOS & Chứng Chỉ
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono font-bold border border-indigo-500/30">
+                  OTA itms-services
+                </span>
+              </h2>
+              <p className="text-[11px] text-slate-400">
+                Tải lên file <strong className="text-slate-300">.IPA</strong> (đã ký chứng chỉ) hoặc file chứng chỉ <strong className="text-slate-300">.mobileprovision / .p12 / .cer</strong> để người dùng cài trực tiếp từ web.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ipa,.mobileprovision,.p12,.cer,.plist"
+              onChange={handleUploadFile}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingFile}
+              className="px-3.5 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs flex items-center space-x-1.5 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>{uploadingFile ? 'Đang tải lên...' : 'Upload File .IPA / Chứng chỉ'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Danh sách file trong folder app */}
+        <div className="space-y-2">
+          {appFiles.length === 0 ? (
+            <div className="p-4 rounded-xl bg-slate-900/60 border border-white/5 text-center text-xs text-slate-500 italic">
+              Chưa có file nào trong thư mục app. Bấm nút "Upload File .IPA / Chứng chỉ" ở trên để tải file lên.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {appFiles.map((file) => (
+                <div
+                  key={file.name}
+                  className="bg-slate-900/90 p-3 rounded-xl border border-white/10 flex items-center justify-between space-x-2 text-xs hover:border-indigo-500/40 transition-all"
+                >
+                  <div className="flex items-center space-x-2.5 min-w-0">
+                    <div className={`p-2 rounded-lg flex-shrink-0 ${
+                      file.isIpa
+                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        : file.isCert
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-400 border border-white/10'
+                    }`}>
+                      {file.isIpa ? <Smartphone className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-mono font-bold text-white truncate text-xs" title={file.name}>
+                        {file.name}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        {file.sizeFormatted} • {new Date(file.updatedAt).toLocaleDateString('vi-VN')}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-1 flex-shrink-0">
+                    <a
+                      href={`/ios/${encodeURIComponent(file.name)}`}
+                      download={file.name}
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
+                      title="Tải về máy kiểm tra"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </a>
+                    <button
+                      onClick={() => handleDeleteAppFile(file.name)}
+                      className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/40 text-red-300 transition-all"
+                      title="Xóa file này"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
