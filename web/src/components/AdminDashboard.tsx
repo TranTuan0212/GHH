@@ -418,36 +418,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Create User Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 z-50 overflow-y-auto">
-          <div className="glass-panel max-w-md w-full p-4 sm:p-6 rounded-2xl border border-indigo-500/30 space-y-3.5 max-h-[92vh] overflow-y-auto overscroll-contain my-auto shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Tạo Tài Khoản Mới</h3>
-            <form onSubmit={handleCreateUser} className="space-y-4">
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="glass-panel max-w-sm sm:max-w-md w-full p-4 sm:p-5 rounded-2xl border border-indigo-500/30 space-y-3 shadow-2xl">
+            <h3 className="text-base sm:text-lg font-bold text-white">Tạo Tài Khoản Mới</h3>
+            <form onSubmit={handleCreateUser} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Tên Tài Khoản</label>
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-300 mb-1">Tên Tài Khoản</label>
                 <input
                   type="text"
                   required
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-indigo-500 outline-none"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-indigo-500 outline-none"
                   placeholder="nhap_user_name"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Mật Khẩu</label>
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-300 mb-1">Mật Khẩu</label>
                 <input
                   type="password"
                   required
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-indigo-500 outline-none"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-indigo-500 outline-none"
                   placeholder="******"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-300 mb-1">
                   Hạn Sử Dụng Ban Đầu (Số Ngày)
                 </label>
                 <input
@@ -456,22 +456,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   min={1}
                   value={newDays}
                   onChange={(e) => setNewDays(parseInt(e.target.value))}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-indigo-500 outline-none"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-indigo-500 outline-none"
                 />
               </div>
 
-              <div className="flex items-center justify-end space-x-3 pt-2">
+              <div className="flex items-center justify-end space-x-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold"
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs sm:text-sm font-semibold transition-all"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
                   disabled={loading}
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30"
+                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-indigo-600/30 transition-all"
                 >
                   {loading ? 'Đang tạo...' : 'Tạo Tài Khoản'}
                 </button>
@@ -483,13 +483,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Reset Password Modal */}
       {resetPwModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 z-50 overflow-y-auto">
-          <div className="glass-panel max-w-sm w-full p-4 sm:p-6 rounded-2xl border border-sky-500/30 space-y-3.5 max-h-[92vh] overflow-y-auto overscroll-contain my-auto shadow-2xl">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <Key className="w-5 h-5 text-sky-400" />
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="glass-panel max-w-sm w-full p-4 sm:p-5 rounded-2xl border border-sky-500/30 space-y-3 shadow-2xl">
+            <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <Key className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400" />
               Reset Mật Khẩu
             </h3>
-            <p className="text-sm text-slate-400">
+            <p className="text-xs sm:text-sm text-slate-400">
               Đặt mật khẩu mới cho tài khoản <strong className="text-white font-mono">{resetPwModal.username}</strong>
             </p>
             <input
@@ -498,19 +498,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               value={resetPwValue}
               onChange={(e) => setResetPwValue(e.target.value)}
               placeholder="Mật khẩu mới (ít nhất 6 ký tự)"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-sky-500 outline-none"
+              className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-sky-500 outline-none"
             />
-            <div className="flex items-center justify-end space-x-3 pt-1">
+            <div className="flex items-center justify-end space-x-2.5 pt-1">
               <button
                 onClick={() => { setResetPwModal(null); setResetPwValue(''); }}
-                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold"
+                className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs sm:text-sm font-semibold transition-all"
               >
                 Hủy
               </button>
               <button
                 onClick={handleResetPassword}
                 disabled={resetPwLoading || resetPwValue.length < 6}
-                className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-sky-600/30"
+                className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-sky-600/30 transition-all"
               >
                 {resetPwLoading ? 'Đang lưu...' : 'Xác nhận Reset'}
               </button>

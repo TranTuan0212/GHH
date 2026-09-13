@@ -157,19 +157,19 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
 
       {/* Modal Đổi Mật Khẩu */}
       {showChangePw && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 z-50 overflow-y-auto">
-          <div className="glass-panel max-w-sm w-full p-4 sm:p-6 rounded-2xl border border-sky-500/30 space-y-3.5 max-h-[92vh] overflow-y-auto overscroll-contain my-auto shadow-2xl">
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="glass-panel max-w-sm w-full p-4 sm:p-5 rounded-2xl border border-sky-500/30 space-y-3 shadow-2xl">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Key className="w-5 h-5 text-sky-400" />
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <Key className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400" />
                 Đổi Mật Khẩu
               </h3>
-              <button onClick={() => setShowChangePw(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
+              <button onClick={() => setShowChangePw(false)} className="text-slate-400 hover:text-white p-1">
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleChangePw} className="space-y-3">
+            <form onSubmit={handleChangePw} className="space-y-2.5">
               <input
                 type="password"
                 required
@@ -177,7 +177,7 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                 value={currentPw}
                 onChange={(e) => setCurrentPw(e.target.value)}
                 placeholder="Mật khẩu hiện tại"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-sky-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-sky-500 outline-none"
               />
               <input
                 type="password"
@@ -185,7 +185,7 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                 value={newPw}
                 onChange={(e) => setNewPw(e.target.value)}
                 placeholder="Mật khẩu mới (ít nhất 6 ký tự)"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-sky-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-sky-500 outline-none"
               />
               <input
                 type="password"
@@ -193,27 +193,27 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                 value={confirmPw}
                 onChange={(e) => setConfirmPw(e.target.value)}
                 placeholder="Xác nhận mật khẩu mới"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-sky-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-sky-500 outline-none"
               />
 
               {pwMsg && (
-                <p className={`text-xs font-medium px-3 py-2 rounded-lg ${pwMsg.ok ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
+                <p className={`text-[11px] sm:text-xs font-medium px-2.5 py-1.5 rounded-lg ${pwMsg.ok ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
                   {pwMsg.text}
                 </p>
               )}
 
-              <div className="flex items-center justify-end space-x-3 pt-1">
+              <div className="flex items-center justify-end space-x-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setShowChangePw(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold"
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs sm:text-sm font-semibold transition-all"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
                   disabled={pwLoading}
-                  className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-sky-600/30"
+                  className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-sky-600/30 transition-all"
                 >
                   {pwLoading ? 'Đang lưu...' : 'Xác nhận'}
                 </button>

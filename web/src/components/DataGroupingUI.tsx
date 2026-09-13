@@ -1666,12 +1666,12 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 6. Modal Popup Sửa hoặc Xóa Lá Bài */}
       {selectedCardForEdit && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 max-w-sm w-full space-y-3 shadow-2xl max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 max-w-sm w-full space-y-2.5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <div className="flex items-center space-x-2">
                 <Edit2 className="w-4 h-4 text-amber-400" />
-                <h3 className="font-bold text-sm text-white">Sửa / Xóa Mục Dữ Liệu</h3>
+                <h3 className="font-bold text-xs sm:text-sm text-white">Sửa / Xóa Mục Dữ Liệu</h3>
               </div>
               <button
                 type="button"
@@ -1682,13 +1682,13 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               </button>
             </div>
 
-            <div className="space-y-2">
-              <p className="text-xs text-slate-300">
-                Mục hiện tại: <strong className="text-amber-300 font-mono text-sm">{selectedCardForEdit.cardValue}</strong> (Nhóm {selectedCardForEdit.groupIndex}, Lượt #{selectedCardForEdit.sequenceOrder})
+            <div className="space-y-1.5">
+              <p className="text-[11px] sm:text-xs text-slate-300">
+                Mục hiện tại: <strong className="text-amber-300 font-mono text-xs sm:text-sm">{selectedCardForEdit.cardValue}</strong> (Nhóm {selectedCardForEdit.groupIndex}, Lượt #{selectedCardForEdit.sequenceOrder})
               </p>
 
               <div>
-                <label className="text-[11px] text-slate-400 font-semibold mb-1 block">
+                <label className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mb-0.5 block">
                   Nhập giá trị mới:
                 </label>
                 <input
@@ -1699,19 +1699,19 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     if (e.key === 'Enter') handleSaveEditCard();
                   }}
                   autoFocus
-                  className="w-full bg-slate-950 text-white font-mono text-sm px-3 py-2 rounded-xl border border-white/20 focus:outline-none focus:border-amber-400"
+                  className="w-full bg-slate-950 text-white font-mono text-xs sm:text-sm px-3 py-1.5 rounded-xl border border-white/20 focus:outline-none focus:border-amber-400"
                   placeholder="1, 2, 3, 10, 11, 12, 13, 0..."
                 />
               </div>
 
               {/* Quick Select Buttons */}
-              <div className="flex flex-wrap gap-1 pt-1">
+              <div className="flex flex-wrap gap-1 pt-0.5">
                 {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '0'].map((c) => (
                   <button
                     key={c}
                     type="button"
                     onClick={() => setEditCardValue(c)}
-                    className={`px-2 py-1 rounded-md text-xs font-mono font-bold transition-all ${
+                    className={`px-2 py-0.5 sm:py-1 rounded-md text-[11px] sm:text-xs font-mono font-bold transition-all ${
                       editCardValue.trim().toUpperCase() === c
                         ? 'bg-amber-400 text-slate-950 font-black'
                         : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
@@ -1727,7 +1727,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               <button
                 type="button"
                 onClick={handleDeleteCurrentCard}
-                className="px-3 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 text-xs font-bold flex items-center space-x-1 transition-all"
+                className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 text-[11px] sm:text-xs font-bold flex items-center space-x-1 transition-all"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Xóa Mục Này</span>
@@ -1737,14 +1737,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedCardForEdit(null)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] sm:text-xs font-medium"
                 >
                   Hủy
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveEditCard}
-                  className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center space-x-1 shadow-md shadow-amber-500/20"
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[11px] sm:text-xs flex items-center space-x-1 shadow-md shadow-amber-500/20"
                 >
                   <Check className="w-3.5 h-3.5 stroke-[3]" />
                   <span>Lưu Sửa</span>
@@ -1757,37 +1757,37 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 7. Custom App Confirmation Modal (Thay thế window.confirm local) */}
       {confirmModal && confirmModal.isOpen && (
-        <div className="fixed inset-0 z-[1000005] bg-black/80 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
-          <div className="bg-slate-900 border border-white/20 rounded-2xl p-4 sm:p-5 max-w-sm w-full space-y-3.5 shadow-2xl text-center max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
+        <div className="fixed inset-0 z-[1000005] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-white/20 rounded-2xl p-4 sm:p-5 max-w-sm w-full space-y-3 shadow-2xl text-center">
             <div
-              className={`w-12 h-12 rounded-full mx-auto flex items-center justify-center ${
+              className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full mx-auto flex items-center justify-center ${
                 confirmModal.confirmColor === 'red'
                   ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                   : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
               }`}
             >
               {confirmModal.confirmColor === 'red' ? (
-                <Trash2 className="w-6 h-6" />
+                <Trash2 className="w-5 h-5 sm:w-6 sm:h-6" />
               ) : (
-                <CheckCircle2 className="w-6 h-6" />
+                <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" />
               )}
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">{confirmModal.title}</h3>
-              <p className="text-xs text-slate-400 mt-1">{confirmModal.message}</p>
+              <h3 className="text-sm sm:text-base font-bold text-white">{confirmModal.title}</h3>
+              <p className="text-[11px] sm:text-xs text-slate-400 mt-1">{confirmModal.message}</p>
             </div>
-            <div className="flex items-center justify-center space-x-2 pt-2">
+            <div className="flex items-center justify-center space-x-2 pt-1">
               <button
                 type="button"
                 onClick={() => setConfirmModal(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all flex-1"
+                className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all flex-1"
               >
                 Hủy bỏ
               </button>
               <button
                 type="button"
                 onClick={confirmModal.onConfirm}
-                className={`px-4 py-2 rounded-xl text-white text-xs font-bold transition-all shadow-md flex-1 ${
+                className={`px-3.5 py-1.5 rounded-xl text-white text-xs font-bold transition-all shadow-md flex-1 ${
                   confirmModal.confirmColor === 'red'
                     ? 'bg-red-600 hover:bg-red-500 shadow-red-600/30'
                     : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'
@@ -1802,41 +1802,38 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 8. Validation Popup Modal (Cảnh báo khi nhập sai lá bài) */}
       {validationError && (
-        <div className="fixed inset-0 z-[95] bg-black/75 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
-          <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-4 sm:p-5 max-w-sm w-full space-y-3.5 shadow-2xl text-center max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
-            <div className="w-14 h-14 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center mx-auto shadow-lg shadow-red-500/10 animate-bounce">
-              <AlertTriangle className="w-7 h-7" />
+        <div className="fixed inset-0 z-[95] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-4 sm:p-5 max-w-sm w-full space-y-3 shadow-2xl text-center">
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center mx-auto shadow-lg shadow-red-500/10 animate-bounce">
+              <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white tracking-wide">Dữ Liệu Không Hợp Lệ</h3>
-              <p className="text-xs text-red-300 mt-1.5 font-medium leading-relaxed bg-red-950/40 border border-red-500/20 p-2.5 rounded-xl">
+              <h3 className="text-sm sm:text-base font-bold text-white tracking-wide">Dữ Liệu Không Hợp Lệ</h3>
+              <p className="text-[11px] sm:text-xs text-red-300 mt-1 font-medium leading-relaxed bg-red-950/40 border border-red-500/20 p-2 rounded-xl">
                 {validationError}
               </p>
             </div>
-            <div className="bg-slate-950/90 p-3 rounded-xl border border-white/10 text-xs text-slate-300 space-y-2 text-left">
-              <p className="font-bold text-amber-300 flex items-center space-x-1">
+            <div className="bg-slate-950/90 p-2.5 rounded-xl border border-white/10 text-xs text-slate-300 space-y-1.5 text-left">
+              <p className="font-bold text-[11px] text-amber-300 flex items-center space-x-1">
                 <span>💡</span>
-                <span>Các số hợp lệ bao gồm (1 ➔ 13 | 0: Không thấy):</span>
+                <span>Các số hợp lệ: 1 ➔ 13 | 0 (Không thấy)</span>
               </p>
-              <div className="flex flex-wrap gap-1.5 font-mono font-black text-xs">
+              <div className="flex flex-wrap gap-1 font-mono font-black text-xs">
                 {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '0'].map((c) => (
                   <span
                     key={c}
-                    className="px-2 py-0.5 bg-slate-800 rounded-md border border-amber-400/30 text-amber-300 shadow-sm"
+                    className="px-1.5 py-0.2 bg-slate-800 rounded border border-amber-400/30 text-amber-300 text-[11px]"
                   >
                     {c === '0' ? '0 (Không thấy)' : c}
                   </span>
                 ))}
               </div>
-              <p className="text-[10px] text-slate-400 italic">
-                * Nhập các số từ 1..13 hoặc số 0 (Không thấy)
-              </p>
             </div>
             <button
               type="button"
               onClick={() => setValidationError(null)}
               autoFocus
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all active:scale-95"
+              className="w-full py-2 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all active:scale-95"
             >
               Đã Hiểu & Nhập Lại
             </button>
