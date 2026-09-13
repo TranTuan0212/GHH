@@ -157,8 +157,8 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
 
       {/* Modal Đổi Mật Khẩu */}
       {showChangePw && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
-          <div className="glass-panel max-w-sm w-full p-6 rounded-2xl border border-sky-500/30 space-y-4">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 z-50 overflow-y-auto">
+          <div className="glass-panel max-w-sm w-full p-4 sm:p-6 rounded-2xl border border-sky-500/30 space-y-3.5 max-h-[92vh] overflow-y-auto overscroll-contain my-auto shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <Key className="w-5 h-5 text-sky-400" />

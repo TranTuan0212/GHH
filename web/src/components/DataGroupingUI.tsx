@@ -1666,8 +1666,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 6. Modal Popup Sửa hoặc Xóa Lá Bài */}
       {selectedCardForEdit && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 max-w-sm w-full space-y-3 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 max-w-sm w-full space-y-3 shadow-2xl max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <div className="flex items-center space-x-2">
                 <Edit2 className="w-4 h-4 text-amber-400" />
@@ -1757,8 +1757,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 7. Custom App Confirmation Modal (Thay thế window.confirm local) */}
       {confirmModal && confirmModal.isOpen && (
-        <div className="fixed inset-0 z-[1000005] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-white/20 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 z-[1000005] bg-black/80 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
+          <div className="bg-slate-900 border border-white/20 rounded-2xl p-4 sm:p-5 max-w-sm w-full space-y-3.5 shadow-2xl text-center max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
             <div
               className={`w-12 h-12 rounded-full mx-auto flex items-center justify-center ${
                 confirmModal.confirmColor === 'red'
@@ -1802,8 +1802,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* 8. Validation Popup Modal (Cảnh báo khi nhập sai lá bài) */}
       {validationError && (
-        <div className="fixed inset-0 z-[95] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 z-[95] bg-black/75 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
+          <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-4 sm:p-5 max-w-sm w-full space-y-3.5 shadow-2xl text-center max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
             <div className="w-14 h-14 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center mx-auto shadow-lg shadow-red-500/10 animate-bounce">
               <AlertTriangle className="w-7 h-7" />
             </div>

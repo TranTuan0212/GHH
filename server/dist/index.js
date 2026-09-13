@@ -33,7 +33,10 @@ const io = new socket_io_1.Server(server, {
 });
 (0, stream_1.setSocketServer)(io);
 (0, mediaServer_1.setStreamEndedHandler)((streamKey) => {
-    const ended = db_1.db.endStreamSessionByStreamKey(streamKey);
+    let ended = db_1.db.endStreamSessionByStreamKey(streamKey);
+    if (!ended) {
+        ended = db_1.db.getStreams().find(s => s.streamKey === streamKey);
+    }
     if (!ended)
         return;
     io.to(`room_${ended.userId}`).emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });

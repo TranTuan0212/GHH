@@ -78,7 +78,16 @@ export const App: React.FC = () => {
     });
 
     newSocket.on('stream_status_changed', (data) => {
-      setActiveStream(data?.session || null);
+      if (data?.session) {
+        setActiveStream(data.session);
+      } else if (data?.status === 'ENDED') {
+        // Nếu sự kiện ENDED không kèm session mới, giữ lại stream hiện tại và cập nhật status sang ENDED
+        // để người dùng vẫn xem lại được toàn bộ video replay/slow-mo mà không bị mất trắng.
+        setActiveStream((prev) => (prev ? { ...prev, status: 'ENDED' } : prev));
+      } else if (data?.status === 'IDLE') {
+        // Chỉ xóa hoàn toàn khi Admin bấm "Xong phiên" (IDLE)
+        setActiveStream(null);
+      }
     });
 
     newSocket.on('viewer_limit_reached', () => {
@@ -232,10 +241,10 @@ export const App: React.FC = () => {
 
   if (isExpired) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-dark-400">
-        <div className="glass-panel max-w-md w-full p-8 rounded-3xl border border-red-500/30 text-center space-y-4">
-          <AlertTriangle className="w-12 h-12 text-red-400 mx-auto animate-bounce" />
-          <h2 className="text-xl font-bold text-white">Tài khoản đã hết hạn sử dụng</h2>
+      <div className="min-h-screen flex items-center justify-center p-2.5 sm:p-4 bg-dark-400 overflow-y-auto">
+        <div className="glass-panel max-w-md w-full p-5 sm:p-8 rounded-3xl border border-red-500/30 text-center space-y-3.5 max-h-[92vh] overflow-y-auto overscroll-contain my-auto shadow-2xl">
+          <AlertTriangle className="w-10 h-10 sm:w-12 sm:h-12 text-red-400 mx-auto animate-bounce" />
+          <h2 className="text-lg sm:text-xl font-bold text-white">Tài khoản đã hết hạn sử dụng</h2>
           <p className="text-xs text-slate-400">
             Tài khoản <strong className="text-white font-mono">{user.username}</strong> của bạn đã hết hạn vào ngày{' '}
             {new Date(user.expiresAt).toLocaleDateString('vi-VN')}. Vui lòng liên hệ Admin để gia hạn thêm thời gian sử dụng.
@@ -258,11 +267,11 @@ export const App: React.FC = () => {
   // Màn hình chặn khi phòng đã đủ 2 viewer
   if (viewerBlocked) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-dark-400">
-        <div className="glass-panel max-w-sm w-full p-8 rounded-3xl border border-amber-500/30 text-center space-y-4">
-          <div className="text-5xl">🚫</div>
-          <h2 className="text-xl font-bold text-white">Phòng đã đủ người xem</h2>
-          <p className="text-sm text-slate-400">
+      <div className="min-h-screen flex items-center justify-center p-2.5 sm:p-4 bg-dark-400 overflow-y-auto">
+        <div className="glass-panel max-w-sm w-full p-5 sm:p-8 rounded-3xl border border-amber-500/30 text-center space-y-3.5 max-h-[92vh] overflow-y-auto overscroll-contain my-auto shadow-2xl">
+          <div className="text-4xl sm:text-5xl">🚫</div>
+          <h2 className="text-lg sm:text-xl font-bold text-white">Phòng đã đủ người xem</h2>
+          <p className="text-xs sm:text-sm text-slate-400">
             Phòng này đang có tối đa <strong className="text-amber-400">2 người xem</strong>.<br />
             Vui lòng thử lại sau khi có người rời phòng.
           </p>

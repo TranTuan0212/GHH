@@ -1733,12 +1733,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             }}
             aria-live="assertive"
           >
-            <div className={`min-w-[320px] sm:min-w-[500px] max-w-[90vw] text-center px-6 py-6 sm:px-10 sm:py-8 rounded-3xl font-mono border-4 shadow-2xl backdrop-blur-xl transition-all animate-scaleIn ${
+            <div className={`w-auto min-w-[260px] sm:min-w-[460px] max-w-[92vw] text-center px-4 py-4 sm:px-10 sm:py-8 rounded-3xl font-mono border-4 shadow-2xl backdrop-blur-xl transition-all animate-scaleIn ${
               modeNotice === 'slow'
                 ? 'bg-amber-500/95 text-slate-950 border-amber-100 shadow-amber-500/50'
                 : 'bg-red-600/95 text-white border-red-100 shadow-red-500/50'
             }`}>
-              <div className="font-black text-2xl sm:text-4xl tracking-wide">
+              <div className="font-black text-xl sm:text-4xl tracking-wide">
                 {modeNoticeTitle}
               </div>
               {modeNoticeSub && (
@@ -2059,8 +2059,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       {/* Modal Popup Chèn Chữ Lên Video */}
       {isTextOverlayOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 animate-fadeIn">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-4 space-y-3.5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn overflow-y-auto">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-3.5 sm:p-4 space-y-3 shadow-2xl max-h-[92vh] overflow-y-auto overscroll-contain my-auto">
             <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
               <div className="flex items-center space-x-2">
                 <Type className="w-5 h-5 text-amber-400" />

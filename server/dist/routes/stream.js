@@ -75,16 +75,21 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
 // POST /api/stream/end — stop ffmpeg nhưng GIỮ LẠI file replay để người xem có thể tua
 exports.streamRouter.post('/end', auth_1.authMiddleware, (req, res) => {
     const roomId = req.user?.id || req.body.streamId;
-    const session = db_1.db.getActiveStream(roomId);
+    let session = db_1.db.getActiveStream(roomId);
+    if (!session) {
+        // Nếu RTMP ngắt trước đó vài mili giây, getActiveStream sẽ trả về undefined.
+        // Dùng getLatestStream để tìm lại chính phiên vừa kết thúc, tuyệt đối không để null.
+        session = db_1.db.getLatestStream(roomId);
+    }
     const streamKey = session?.streamKey;
-    const ended = db_1.db.endStreamSession(roomId);
+    const ended = db_1.db.endStreamSession(session?.id || roomId) || session;
     // CHỈ dừng ffmpeg process, KHÔNG xóa file .ts/.m3u8
     // Mục đích DVR: người xem vẫn tua lại được sau khi live kết thúc.
     // File cũ sẽ được cron tự xóa sau CRON_MAX_AGE_SECONDS (mặc định 24h).
     if (streamKey) {
         (0, mediaServer_1.stopFfmpegOnly)(streamKey);
     }
-    if (globalIo) {
+    if (globalIo && ended) {
         globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'ENDED', session: ended });
         globalIo.to('room_admin').emit('stream_status_changed', { roomId, status: 'ENDED', session: ended });
     }
