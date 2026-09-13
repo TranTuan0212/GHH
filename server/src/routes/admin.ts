@@ -131,6 +131,22 @@ adminRouter.delete('/users/:id', (req: AuthRequest, res: Response) => {
   res.json({ message: 'Đã xóa tài khoản thành công.' });
 });
 
+// POST /api/admin/users/:id/reset-password - Admin reset mật khẩu user
+adminRouter.post('/users/:id/reset-password', (req: AuthRequest, res: Response) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+  }
+
+  const user = db.getUserById(req.params.id);
+  if (!user) {
+    return res.status(404).json({ error: 'Tài khoản không tồn tại.' });
+  }
+
+  db.updateUser(user.id, { passwordHash: bcrypt.hashSync(newPassword, 10) });
+  res.json({ message: `Đã reset mật khẩu tài khoản "${user.username}" thành công.` });
+});
+
 // GET /api/admin/gps-logs - Get latest GPS positions
 adminRouter.get('/gps-logs', (req: AuthRequest, res: Response) => {
   const latestGps = db.getLatestGpsLog();

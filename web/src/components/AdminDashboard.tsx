@@ -42,6 +42,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  // Reset mật khẩu modal
+  const [resetPwModal, setResetPwModal] = useState<{ userId: string; username: string } | null>(null);
+  const [resetPwValue, setResetPwValue] = useState('');
+  const [resetPwLoading, setResetPwLoading] = useState(false);
+
   const showMsg = (text: string, type: 'success' | 'error') => {
     setMessage({ text, type });
     setTimeout(() => setMessage(null), 4000);
@@ -154,6 +159,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onRefreshUsers();
     } catch (err: any) {
       showMsg(err.message, 'error');
+    }
+  };
+
+  // Reset Password
+  const handleResetPassword = async () => {
+    if (!resetPwModal || !resetPwValue || resetPwValue.length < 6) return;
+    setResetPwLoading(true);
+    try {
+      const res = await fetch(`/api/admin/users/${resetPwModal.userId}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ newPassword: resetPwValue })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showMsg(data.message, 'success');
+      setResetPwModal(null);
+      setResetPwValue('');
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    } finally {
+      setResetPwLoading(false);
     }
   };
 
@@ -360,6 +387,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {u.isBlocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
                         </button>
 
+                        {/* Reset Password */}
+                        <button
+                          onClick={() => { setResetPwModal({ userId: u.id, username: u.username }); setResetPwValue(''); }}
+                          className="p-1.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition-all"
+                          title="Reset mật khẩu"
+                        >
+                          <Key className="w-3.5 h-3.5" />
+                        </button>
+
                         {/* Delete User */}
                         {u.role !== 'ADMIN' && (
                           <button
@@ -441,6 +477,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Modal */}
+      {resetPwModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="glass-panel max-w-sm w-full p-6 rounded-2xl border border-sky-500/30 space-y-4">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Key className="w-5 h-5 text-sky-400" />
+              Reset Mật Khẩu
+            </h3>
+            <p className="text-sm text-slate-400">
+              Đặt mật khẩu mới cho tài khoản <strong className="text-white font-mono">{resetPwModal.username}</strong>
+            </p>
+            <input
+              type="password"
+              autoFocus
+              value={resetPwValue}
+              onChange={(e) => setResetPwValue(e.target.value)}
+              placeholder="Mật khẩu mới (ít nhất 6 ký tự)"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-sm focus:border-sky-500 outline-none"
+            />
+            <div className="flex items-center justify-end space-x-3 pt-1">
+              <button
+                onClick={() => { setResetPwModal(null); setResetPwValue(''); }}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleResetPassword}
+                disabled={resetPwLoading || resetPwValue.length < 6}
+                className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-sky-600/30"
+              >
+                {resetPwLoading ? 'Đang lưu...' : 'Xác nhận Reset'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -165,3 +165,27 @@ authRouter.get('/me', authMiddleware, (req: AuthRequest, res: Response) => {
 
 // GET /api/server-info đã được định nghĩa trong index.ts (chi tiết hơn, có connectionType, hints).
 // KHÔNG thêm duplicate ở đây.
+
+// POST /api/auth/change-password — user tự đổi mật khẩu của chính mình
+authRouter.post('/change-password', authMiddleware, (req: AuthRequest, res: Response) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Vui lòng nhập đầy đủ mật khẩu cũ và mới.' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+  }
+
+  const user = db.getUserById(req.user!.id);
+  if (!user) {
+    return res.status(404).json({ error: 'Tài khoản không tồn tại.' });
+  }
+
+  if (!bcrypt.compareSync(currentPassword, user.passwordHash)) {
+    return res.status(400).json({ error: 'Mật khẩu hiện tại không chính xác.' });
+  }
+
+  db.updateUser(user.id, { passwordHash: bcrypt.hashSync(newPassword, 10) });
+  res.json({ message: 'Đổi mật khẩu thành công! Vui lòng đăng nhập lại.' });
+});

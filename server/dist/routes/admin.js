@@ -114,6 +114,19 @@ exports.adminRouter.delete('/users/:id', (req, res) => {
     db_1.db.deleteUser(user.id);
     res.json({ message: 'Đã xóa tài khoản thành công.' });
 });
+// POST /api/admin/users/:id/reset-password - Admin reset mật khẩu user
+exports.adminRouter.post('/users/:id/reset-password', (req, res) => {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+    }
+    const user = db_1.db.getUserById(req.params.id);
+    if (!user) {
+        return res.status(404).json({ error: 'Tài khoản không tồn tại.' });
+    }
+    db_1.db.updateUser(user.id, { passwordHash: bcryptjs_1.default.hashSync(newPassword, 10) });
+    res.json({ message: `Đã reset mật khẩu tài khoản "${user.username}" thành công.` });
+});
 // GET /api/admin/gps-logs - Get latest GPS positions
 exports.adminRouter.get('/gps-logs', (req, res) => {
     const latestGps = db_1.db.getLatestGpsLog();
