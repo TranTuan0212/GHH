@@ -81,6 +81,7 @@ interface LivePlayerProps {
   roomId?: string;
   roomName?: string;
   onFinishRound?: () => void;
+  finishRoundTrigger?: number;
 }
 
 export const LivePlayer: React.FC<LivePlayerProps> = ({
@@ -89,6 +90,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   roomId,
   roomName,
   onFinishRound,
+  finishRoundTrigger,
 }) => {
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const replayVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -96,6 +98,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const [webrtcReconnectCount, setWebrtcReconnectCount] = useState<number>(0);
+  const handleRoundFinishedRef = useRef<() => void>(() => {});
   const loadedStreamKeyRef = useRef<string | null>(null);
   const pendingReplayTimeRef = useRef<number | null>(null);
   const pendingReplayRatioRef = useRef<number | null>(null);
@@ -365,46 +369,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (data && data.replayHlsBaseUrl) setReplayHlsBaseUrl(data.replayHlsBaseUrl);
     };
 
-    const handleRoundFinished = () => {
-      // 1. Chuyển ngay về Live mode và xóa sạch các mốc tua cũ
-      setIsLive(true);
-      isLiveRef.current = true;
-      updateFrozenTimeline(null);
-      setPlaybackRate(1.0);
-      setDragRatio(null);
-      dragRatioRef.current = null;
-      setCurrentTime(0);
-      setDuration(0);
-      setHlsWindowStart(0);
-      setHlsLiveEdge(0);
-      setLiveElapsedSeconds(0);
-      setTextOverlays([]);
-      try {
-        localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
-      } catch {}
-
-      // 2. Tự động chuyển ngay về luồng Live trực tiếp!
-      jumpToLive();
-
-      // 3. Nếu HLS DVR đang chạy: nạp lại buffer cho phiên mới sau khi server reset
-      if (hlsRef.current) {
-        try {
-          hlsRef.current.stopLoad();
-          setTimeout(() => {
-            if (hlsRef.current) {
-              hlsRef.current.startLoad();
-            }
-          }, 800);
-        } catch {}
-      }
+    const onRoundFinished = () => {
+      handleRoundFinishedRef.current();
     };
 
     socket.on('initial_state', handleInitialState);
-    socket.on('round_finished', handleRoundFinished);
+    socket.on('round_finished', onRoundFinished);
 
     return () => {
       socket.off('initial_state', handleInitialState);
-      socket.off('round_finished', handleRoundFinished);
+      socket.off('round_finished', onRoundFinished);
     };
   }, [socket, roomId, stream?.streamKey, stream?.status]);
 
@@ -529,6 +503,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             video.play().catch((err) => {
               console.warn('[LivePlayer] Autoplay WebRTC ban đầu:', err);
             });
+            const track = streams[0].getVideoTracks()[0];
+            if (track) {
+              track.onended = () => {
+                console.log('[LivePlayer] WebRTC video track ended');
+                setHasLiveFrame(false);
+                if (!cancelled) {
+                  setTimeout(() => {
+                    if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
+                  }, 1000);
+                }
+              };
+            }
           };
           const offer = await peer.createOffer();
           await peer.setLocalDescription(offer);
@@ -544,6 +530,29 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           await peer.setRemoteDescription({ type: 'answer', sdp: await response.text() });
           await waitForVideoTrack(peer, () => receivedVideoTrack);
           console.log('[LivePlayer] WebRTC live connected:', whepUrl);
+
+          peer.onconnectionstatechange = () => {
+            console.log('[LivePlayer] WebRTC connectionState:', peer?.connectionState);
+            if (peer?.connectionState === 'failed' || peer?.connectionState === 'disconnected') {
+              setHasLiveFrame(false);
+              if (!cancelled) {
+                setTimeout(() => {
+                  if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
+                }, 1000);
+              }
+            }
+          };
+          peer.oniceconnectionstatechange = () => {
+            console.log('[LivePlayer] WebRTC iceConnectionState:', peer?.iceConnectionState);
+            if (peer?.iceConnectionState === 'failed' || peer?.iceConnectionState === 'disconnected') {
+              setHasLiveFrame(false);
+              if (!cancelled) {
+                setTimeout(() => {
+                  if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
+                }, 1000);
+              }
+            }
+          };
           return;
         } catch (error) {
           if (sessionUrl) fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
@@ -587,7 +596,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       video.srcObject = null;
       if (sessionUrl) fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
     };
-  }, [whepUrl]);
+  }, [whepUrl, webrtcReconnectCount]);
 
   // Điều khiển play/pause của liveVideo khi chuyển chế độ Live <-> Replay
   useEffect(() => {
@@ -1098,13 +1107,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       liveVid.muted = isMuted;
       liveVid.play().catch(() => {});
 
-      // Sức khỏe WebRTC: nếu video live bị khựng hoặc readyState thấp
-      if (liveVid.readyState < 2 || liveVid.paused) {
+      // Sức khỏe WebRTC: nếu video live bị khựng hoặc readyState thấp hoặc mất kết nối
+      if (liveVid.readyState < 2 || liveVid.paused || !peerConnectionRef.current || peerConnectionRef.current.connectionState !== 'connected') {
         if (liveVid.srcObject) {
           console.log('[LivePlayer] Đánh thức WebRTC live stream...');
           const stream = liveVid.srcObject as MediaStream;
           liveVid.srcObject = stream;
           liveVid.play().catch(() => {});
+        }
+        if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'failed' || peerConnectionRef.current.connectionState === 'disconnected') {
+          setWebrtcReconnectCount((c) => c + 1);
         }
       }
     }
@@ -1129,6 +1141,66 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       'Bấm [Enter] hoặc chọn tốc độ để tua chậm'
     );
   };
+
+  const handleRoundFinished = () => {
+    console.log('[LivePlayer] handleRoundFinished -> Resetting all states, wiping overlays and jumping to live...');
+    // 1. Chuyển ngay về Live mode và xóa sạch các mốc tua cũ
+    isLiveRef.current = true;
+    setIsLive(true);
+    setIsPlaying(true);
+    setPlaybackRate(1.0);
+    updateFrozenTimeline(null);
+    setDragRatio(null);
+    dragRatioRef.current = null;
+    pendingReplayTimeRef.current = null;
+    pendingReplayRatioRef.current = null;
+    setCurrentTime(0);
+    setDuration(0);
+    setHlsWindowStart(0);
+    setHlsLiveEdge(0);
+    setLiveElapsedSeconds(0);
+
+    // Xóa sạch toàn bộ chữ chèn trên màn hình và trong localStorage
+    setTextOverlays([]);
+    try {
+      localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
+    } catch {}
+
+    // 2. Tạm dừng video replay và reset vị trí
+    if (replayVideoRef.current) {
+      replayVideoRef.current.pause();
+      replayVideoRef.current.playbackRate = 1.0;
+      replayVideoRef.current.currentTime = 0;
+    }
+
+    // 3. Kích hoạt kết nối lại WebRTC ngay lập tức nếu chưa kết nối hoặc bị ngắt
+    if (!peerConnectionRef.current || peerConnectionRef.current.connectionState !== 'connected') {
+      setWebrtcReconnectCount((c) => c + 1);
+    }
+
+    // 4. Tự động chuyển ngay về luồng Live trực tiếp!
+    jumpToLive();
+
+    // 5. Nếu HLS DVR đang chạy: nạp lại buffer cho phiên mới sau khi server reset
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.stopLoad();
+        setTimeout(() => {
+          if (hlsRef.current) {
+            hlsRef.current.startLoad();
+          }
+        }, 500);
+      } catch {}
+    }
+  };
+  handleRoundFinishedRef.current = handleRoundFinished;
+
+  // Lắng nghe trigger từ bên ngoài (App / nút Xong Phiên)
+  useEffect(() => {
+    if (finishRoundTrigger && finishRoundTrigger > 0) {
+      handleRoundFinished();
+    }
+  }, [finishRoundTrigger]);
 
   const switchToSlow = (speed: number, keepCurrentPosition = false) => {
     isLiveRef.current = false;
@@ -2028,7 +2100,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
             {onFinishRound && (
               <button
-                onClick={onFinishRound}
+                type="button"
+                onClick={() => {
+                  handleRoundFinished();
+                  onFinishRound();
+                }}
                 className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-600/30 flex items-center space-x-1 transition-all active:scale-95 ml-auto sm:ml-1"
                 title="Làm mới bộ nhớ và bắt đầu phiên mới"
               >

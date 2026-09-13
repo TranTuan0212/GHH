@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { User, StreamSession, GpsLog, CardEntry } from './types';
 import { Navbar } from './components/Navbar';
@@ -21,6 +21,9 @@ export const App: React.FC = () => {
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [currentRoomId, setCurrentRoomId] = useState<string>('');
+  const currentRoomIdRef = useRef<string>(currentRoomId);
+  currentRoomIdRef.current = currentRoomId;
+  const [finishRoundTrigger, setFinishRoundTrigger] = useState<number>(0);
   const [viewerBlocked, setViewerBlocked] = useState<boolean>(false);
 
   // Set initial currentRoomId when user logs in
@@ -72,14 +75,16 @@ export const App: React.FC = () => {
       setCardEntries([]);
     });
 
-    newSocket.on('round_finished', () => {
+    newSocket.on('round_finished', (data) => {
       setCardEntries([]);
+      setFinishRoundTrigger((prev) => prev + 1);
+      const targetRoom = data?.roomId || currentRoomIdRef.current;
       // Tự động kiểm tra luồng live hiện tại thay vì ép về null
-      fetch(`/api/stream/active?roomId=${encodeURIComponent(currentRoomId || '')}`)
+      fetch(`/api/stream/active?roomId=${encodeURIComponent(targetRoom || '')}`)
         .then((res) => res.json())
-        .then((data) => {
-          if (data && data.stream && data.stream.status === 'LIVE') {
-            setActiveStream(data.stream);
+        .then((resp) => {
+          if (resp && resp.stream && resp.stream.status === 'LIVE') {
+            setActiveStream(resp.stream);
           }
         })
         .catch(() => {});
@@ -225,12 +230,14 @@ export const App: React.FC = () => {
 
   // Finish round callback (resets cards & DVR frame buffer for this room)
   const handleFinishRound = () => {
+    const targetRoom = currentRoomIdRef.current || currentRoomId;
     if (socket) {
-      socket.emit('finish_round', { roomId: currentRoomId });
+      socket.emit('finish_round', { roomId: targetRoom });
     }
     setCardEntries([]);
+    setFinishRoundTrigger((prev) => prev + 1);
     // Kiểm tra ngay luồng Live từ server
-    fetch(`/api/stream/active?roomId=${encodeURIComponent(currentRoomId)}`)
+    fetch(`/api/stream/active?roomId=${encodeURIComponent(targetRoom)}`)
       .then((res) => res.json())
       .then((data) => {
         if (data && data.stream && data.stream.status === 'LIVE') {
@@ -377,6 +384,7 @@ export const App: React.FC = () => {
                   roomId={currentRoomId}
                   roomName={activeRoomName}
                   onFinishRound={handleFinishRound}
+                  finishRoundTrigger={finishRoundTrigger}
                 />
               </div>
 

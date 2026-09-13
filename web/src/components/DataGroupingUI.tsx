@@ -746,10 +746,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   onDeleteCard,
   onSetGroupNames
 }) => {
-  // Game Mode: 3 Lá (Liêng / Sáp) vs 2 Lá (Xì Lát / Xì Dách)
-  const [gameMode, setGameMode] = useState<GameMode>('2cards');
-  // Số nhóm: hỗ trợ từ 2 đến 8 nhóm
-  const [numGroups, setNumGroups] = useState<number>(5);
+  // Game Mode: 3 Mục ('3cards') vs 2 Mục ('2cards') - Mặc định: 3 mục ('3cards')
+  const [gameMode, setGameMode] = useState<GameMode>(() => {
+    const saved = localStorage.getItem('app_game_mode');
+    return (saved === '2cards' || saved === '3cards') ? saved : '3cards';
+  });
+  // Số nhóm: hỗ trợ từ 2 đến 8 nhóm - Mặc định: 4 nhóm
+  const [numGroups, setNumGroups] = useState<number>(() => {
+    const saved = localStorage.getItem('app_num_groups');
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (parsed >= 2 && parsed <= 8) return parsed;
+    }
+    return 4;
+  });
   // Ô nhập nhanh chia vòng ở thanh trên cùng
   const [manualInput, setManualInput] = useState<string>('');
   // Filter tab trên điện thoại màn hình nhỏ
@@ -845,6 +855,27 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     mode: 'add',
     groupNum: 1
   });
+
+  const handleSelectGameMode = (mode: GameMode) => {
+    setGameMode(mode);
+    try {
+      localStorage.setItem('app_game_mode', mode);
+    } catch {}
+  };
+
+  const handleSelectNumGroups = (count: number) => {
+    setNumGroups(count);
+    try {
+      localStorage.setItem('app_num_groups', count.toString());
+    } catch {}
+    if (cardPickerTarget.groupNum > count) {
+      setCardPickerTarget((prev) => ({ ...prev, groupNum: 1 }));
+      setSelectedGroupTarget(1);
+    }
+    if (mobileActiveFilter !== 'all' && mobileActiveFilter > count) {
+      setMobileActiveFilter('all');
+    }
+  };
 
   // Tự động đồng bộ nhóm mục tiêu khi đang ở chế độ chia vòng (chỉ khi KHÔNG chọn đích danh nhóm nào)
   React.useEffect(() => {
@@ -1156,11 +1187,11 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <button
               type="button"
               onClick={handleRequestFinishRound}
-              className="px-2 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold transition-all flex items-center space-x-1 active:scale-95"
-              title="Lưu trữ và bắt đầu chu kỳ dữ liệu mới"
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black border border-emerald-400 text-xs shadow-md shadow-emerald-600/30 transition-all flex items-center space-x-1 active:scale-95"
+              title="Xong phiên: Xóa sạch toàn bộ để bắt đầu phiên mới, không lưu lại gì"
             >
-              <CheckCircle2 className="w-3 h-3" />
-              <span>Lưu Chu Kỳ</span>
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Xong Phiên</span>
             </button>
           )}
         </div>
@@ -1172,7 +1203,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         <div className="grid grid-cols-2 gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-white/10 flex-1 sm:flex-initial">
           <button
             type="button"
-            onClick={() => setGameMode('3cards')}
+            onClick={() => handleSelectGameMode('3cards')}
             className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
               gameMode === '3cards'
                 ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40 border border-indigo-400'
@@ -1184,7 +1215,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setGameMode('2cards')}
+            onClick={() => handleSelectGameMode('2cards')}
             className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
               gameMode === '2cards'
                 ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/40 border border-amber-400 font-black'
@@ -1206,12 +1237,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             <button
               key={count}
               type="button"
-              onClick={() => {
-                setNumGroups(count);
-                if (mobileActiveFilter !== 'all' && mobileActiveFilter > count) {
-                  setMobileActiveFilter('all');
-                }
-              }}
+              onClick={() => handleSelectNumGroups(count)}
               className={`w-6 h-6 sm:w-6 sm:h-6 rounded text-[11px] font-bold transition-all flex items-center justify-center flex-shrink-0 ${
                 numGroups === count
                   ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400'
@@ -1864,17 +1890,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           }
           setCardPickerTarget(t);
         }}
-        onChangeGameMode={setGameMode}
-        onChangeNumGroups={(cnt) => {
-          setNumGroups(cnt);
-          if (cardPickerTarget.groupNum > cnt) {
-            setCardPickerTarget((prev) => ({ ...prev, groupNum: 1 }));
-            setSelectedGroupTarget(1);
-          }
-          if (mobileActiveFilter !== 'all' && mobileActiveFilter > cnt) {
-            setMobileActiveFilter('all');
-          }
-        }}
+        onChangeGameMode={handleSelectGameMode}
+        onChangeNumGroups={handleSelectNumGroups}
         onClearCards={() => {
           onClearCards();
           setDanGroups({});
