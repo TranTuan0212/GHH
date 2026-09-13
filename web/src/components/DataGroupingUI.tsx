@@ -565,7 +565,7 @@ export function computeAllGroupAnswers(
   }
 
   // 1. Lọc các nhóm đã hoàn thành bài để đối chiếu
-  const completeList = tempAnswers.filter((a) => a.isComplete && a.score > 0);
+  const completeList = tempAnswers.filter((a) => a.isComplete && a.score >= 0);
   const completeGroupsCount = completeList.length;
 
   // 2. Đối chiếu trực tiếp từng cặp nhóm (Head-to-head Cross-Check)
@@ -606,7 +606,7 @@ export function computeAllGroupAnswers(
   const winnerGroupNum: number | null = sortedComplete.length > 0 ? sortedComplete[0].groupNum : null;
 
   const answers: GroupAnswerItem[] = tempAnswers.map((a) => {
-    const isComplete = a.isComplete && a.score > 0;
+    const isComplete = a.isComplete && a.score >= 0;
     const r = isComplete ? ranksMap[a.groupNum] : null;
     const isWinner = r === 1;
     const wins = headToHead[a.groupNum]?.wins || 0;
