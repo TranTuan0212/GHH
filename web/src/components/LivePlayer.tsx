@@ -2027,28 +2027,32 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               </div>
             )}
 
-            <div
-              className="flex items-center space-x-0.5 px-1 text-indigo-400 text-[10px] sm:text-[11px] font-semibold flex-shrink-0"
-              title="Chọn tốc độ phát xem lại (Replay)"
-            >
-              <Gauge className="w-3 h-3" />
-              <span>Tốc độ:</span>
-            </div>
-
-            {speedOptions.map((rate) => (
-              <button
-                key={rate}
-                onClick={() => handleSpeedChange(rate)}
-                className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold font-mono transition-all flex-shrink-0 ${
-                  !isLive && playbackRate === rate
-                    ? 'bg-indigo-600 text-white shadow shadow-indigo-600/40 border border-indigo-400 scale-105'
-                    : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-                }`}
-                title={`Phát xem lại ở tốc độ ${rate}x`}
+            {/* Dropdown chọn tốc độ slow */}
+            <div className="flex items-center space-x-1 flex-shrink-0">
+              <Gauge className="w-3 h-3 text-indigo-400" />
+              <select
+                value={isLive ? 1.0 : playbackRate}
+                onChange={(e) => handleSpeedChange(Number(e.target.value))}
+                className="bg-slate-800 text-indigo-300 font-bold font-mono text-[11px] rounded-lg border border-indigo-500/40 px-2 py-0.5 cursor-pointer hover:bg-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
+                title="Chọn tốc độ phát xem lại (Replay)"
               >
-                {rate === 0.0625 ? '1/16' : rate}x
-              </button>
-            ))}
+                {speedOptions.map((rate) => (
+                  <option key={rate} value={rate}>
+                    {rate === 0.0625 ? '1/16x — Siêu chậm' :
+                     rate === 0.1   ? '0.1x — Cực chậm'   :
+                     rate === 0.125 ? '1/8x — Rất chậm'   :
+                     rate === 0.25  ? '0.25x — Chậm'       :
+                     rate === 0.5   ? '0.5x — Nửa tốc'    :
+                     rate === 0.75  ? '0.75x — Hơi chậm'  :
+                                     '1.0x — Bình thường'}
+                  </option>
+                ))}
+              </select>
+              {/* Badge tốc độ đang chọn */}
+              <span className="text-[10px] font-black font-mono text-indigo-300 bg-indigo-600/20 border border-indigo-500/30 rounded px-1.5 py-0.5">
+                {isLive ? '1.0x' : (playbackRate === 0.0625 ? '1/16x' : `${playbackRate}x`)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
