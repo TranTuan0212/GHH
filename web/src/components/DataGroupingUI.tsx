@@ -213,19 +213,20 @@ export function evaluate3Cards(cards: DataEntry[]): {
   highlightClass: string;
 } {
   if (cards.length === 0) {
-    return { type: 'empty', label: 'Chờ nhập (0 mục)', score: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
+    return { type: 'empty', label: 'Chờ nhập (0 lá)', score: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
   }
   if (cards.length < 3) {
     const sum = cards.reduce((acc, c) => acc + parseCard(c.cardValue).value, 0);
+    const mod10 = sum % 10;
     return {
       type: 'partial',
-      label: `Chờ nhập (${cards.length}/3 mục)`,
-      score: sum % 10,
-      highlightClass: 'text-slate-400 bg-slate-900/80 border-slate-700/60'
+      label: `${mod10} Điểm (${cards.length}/3 lá)`,
+      score: mod10,
+      highlightClass: 'text-amber-300 bg-amber-950/40 border-amber-500/40 font-bold'
     };
   }
 
-  // Xét 3 mục gần nhất
+  // Xét 3 mục gần nhất (hoặc tất cả các mục)
   const last3 = cards.slice(-3);
   const parsed = last3.map((c) => parseCard(c.cardValue));
   const ranks = parsed.map((p) => p.rank);
@@ -338,15 +339,15 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   highlightClass: string;
 } {
   if (cards.length === 0) {
-    return { status: 'empty', label: 'Chờ nhập (0 mục)', total: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
+    return { status: 'empty', label: 'Chờ nhập (0 lá)', total: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
   }
   if (cards.length === 1) {
     const p = parseCard(cards[0].cardValue);
     return {
       status: 'partial',
-      label: `Chờ nhập (1/2 mục)`,
+      label: `${p.value} Điểm (1/2 lá)`,
       total: p.value,
-      highlightClass: 'text-slate-400 bg-slate-900/80 border-slate-700/60'
+      highlightClass: 'text-amber-300 bg-amber-950/40 border-amber-500/40 font-bold'
     };
   }
 
@@ -354,7 +355,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   const count = cards.length;
   const danSuffix = isDan ? ' • Đã Khóa' : '';
 
-  // TRƯỜNG HỢP 1: Đúng 2 mục ban đầu
+  // TRƯỜNG HỢP 1: Đúng 2 lá ban đầu
   if (count === 2) {
     const aceCount = parsed.filter((p) => p.rank === '1' || p.rank === 'A').length;
 
@@ -422,12 +423,21 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
     }
   }
 
-  // TRƯỜNG HỢP 2: TỪ 3 MỤC TRỞ LÊN (3, 4, hoặc 5 mục)
-  // Mục 1 chỉ tính là 1 điểm
-  const total = parsed.reduce((acc, p) => {
-    if (p.rank === '1' || p.rank === 'A') return acc + 1;
-    return acc + p.value;
-  }, 0);
+  // TRƯỜNG HỢP 2: TỪ 3 MỤC TRỞ LÊN (3, 4, 5+ lá)
+  // Tính tổng điểm linh hoạt có xét Át (11, 10 hoặc 1)
+  const aceCount = parsed.filter((p) => p.rank === '1' || p.rank === 'A').length;
+  const nonAceSum = parsed
+    .filter((p) => p.rank !== '1' && p.rank !== 'A')
+    .reduce((acc, p) => acc + p.value, 0);
+
+  let total = nonAceSum + aceCount; // Tối thiểu mỗi Át = 1
+  if (aceCount > 0) {
+    if (nonAceSum + 11 + (aceCount - 1) <= 21) {
+      total = nonAceSum + 11 + (aceCount - 1);
+    } else if (nonAceSum + 10 + (aceCount - 1) <= 21) {
+      total = nonAceSum + 10 + (aceCount - 1);
+    }
+  }
 
   // Chu kỳ 5 mục mà tổng <= 21
   if (count === 5 && total <= 21) {
@@ -516,8 +526,9 @@ export function computeAllGroupAnswers(
     grouped[i] = [];
   }
   entries.forEach((e) => {
-    if (grouped[e.groupIndex]) {
-      grouped[e.groupIndex].push(e);
+    const idx = Number(e.groupIndex);
+    if (grouped[idx]) {
+      grouped[idx].push(e);
     }
   });
 
@@ -544,22 +555,23 @@ export function computeAllGroupAnswers(
       const res = evaluate3Cards(items);
       label = res.label;
       highlightClass = res.highlightClass;
-      if (items.length >= 3) {
+      if (items.length > 0) {
         scoreForRank = res.score;
-        isComplete = true;
+        isComplete = items.length >= 3;
       }
     } else {
       const res = evaluate2Cards(items, isStoodPat);
       label = res.label;
       highlightClass = res.highlightClass;
-      if (items.length >= 2) {
-        isComplete = true;
+      if (items.length > 0) {
+        isComplete = items.length >= 2;
         if (res.status === 'xibang') scoreForRank = 5000 + 21;
         else if (res.status === 'xilat') scoreForRank = 4000;
         else if (res.status === 'ngulinh') scoreForRank = 3000 + (21 - res.total);
         else if (res.status === 'points') scoreForRank = 2000 + res.total;
         else if (res.status === 'non') scoreForRank = 1000 + res.total;
         else if (res.status === 'quac') scoreForRank = Math.max(0, 35 - res.total);
+        else if (res.status === 'partial') scoreForRank = res.total;
       }
     }
 
@@ -575,8 +587,8 @@ export function computeAllGroupAnswers(
     });
   }
 
-  // 1. Lọc các nhóm đã hoàn thành bài để đối chiếu
-  const completeList = tempAnswers.filter((a) => a.isComplete && a.score >= 0);
+  // 1. Lọc các nhóm đã có mục dữ liệu (lá bài) để đối chiếu
+  const completeList = tempAnswers.filter((a) => a.items.length > 0 && a.score >= 0);
   const completeGroupsCount = completeList.length;
 
   // 2. Đối chiếu trực tiếp từng cặp nhóm (Head-to-head Cross-Check chi tiết)
@@ -619,7 +631,13 @@ export function computeAllGroupAnswers(
   }
 
   // 3. Xếp hạng đối chiếu toàn cục từ cao xuống thấp (Hạng 1, 2, 3...)
-  const sortedComplete = [...completeList].sort((a, b) => b.score - a.score);
+  // Nhóm đã đủ bài (isComplete) ưu tiên xếp trên nhóm đang nhập dở
+  const sortedComplete = [...completeList].sort((a, b) => {
+    if (a.isComplete !== b.isComplete) {
+      return a.isComplete ? -1 : 1;
+    }
+    return b.score - a.score;
+  });
   const ranksMap: { [groupNum: number]: number } = {};
   let currentRank = 1;
   for (let i = 0; i < sortedComplete.length; i++) {
@@ -629,15 +647,15 @@ export function computeAllGroupAnswers(
     ranksMap[sortedComplete[i].groupNum] = currentRank;
   }
 
-  const winnerGroupNum: number | null = sortedComplete.length > 0 ? sortedComplete[0].groupNum : null;
+  const winnerGroupNum: number | null = sortedComplete.length > 0 && sortedComplete[0].isComplete ? sortedComplete[0].groupNum : null;
 
   // Lấy kết quả của Nhóm 1 nếu có chế độ so với Nhà Cái
   const group1Item = completeList.find((g) => g.groupNum === 1);
 
   const answers: GroupAnswerItem[] = tempAnswers.map((a) => {
-    const isComplete = a.isComplete && a.score >= 0;
-    const r = isComplete ? ranksMap[a.groupNum] : null;
-    const isWinner = r === 1;
+    const hasCards = a.items.length > 0 && a.score >= 0;
+    const r = hasCards ? ranksMap[a.groupNum] : null;
+    const isWinner = r === 1 && a.isComplete;
     const wins = headToHead[a.groupNum]?.wins || 0;
     const losses = headToHead[a.groupNum]?.losses || 0;
     const ties = headToHead[a.groupNum]?.ties || 0;
@@ -649,23 +667,28 @@ export function computeAllGroupAnswers(
     let rankBadgeText = '';
     let rankBadgeClass = '';
 
-    if (r === 1) {
-      rankBadgeText = '👑 Hạng 1 (Thắng)';
-      rankBadgeClass = 'bg-amber-400 text-slate-950 font-black shadow-md shadow-amber-400/30 border border-amber-300 ring-1 ring-amber-400/50';
-    } else if (r === 2) {
-      rankBadgeText = '🥈 Hạng 2';
-      rankBadgeClass = 'bg-slate-200 text-slate-950 font-bold border border-slate-100 shadow-sm';
-    } else if (r === 3) {
-      rankBadgeText = '🥉 Hạng 3';
-      rankBadgeClass = 'bg-amber-700/85 text-amber-100 font-bold border border-amber-600/70 shadow-sm';
-    } else if (r !== null && r >= 4) {
-      rankBadgeText = `Hạng ${r}`;
-      rankBadgeClass = 'bg-slate-800 text-slate-300 border border-white/15 font-semibold';
+    if (r !== null) {
+      if (!a.isComplete) {
+        rankBadgeText = `Hạng ${r} (Tạm)`;
+        rankBadgeClass = 'bg-slate-800 text-amber-300 border border-amber-500/40 text-[9px] font-bold';
+      } else if (r === 1) {
+        rankBadgeText = '👑 Hạng 1 (Thắng)';
+        rankBadgeClass = 'bg-amber-400 text-slate-950 font-black shadow-md shadow-amber-400/30 border border-amber-300 ring-1 ring-amber-400/50';
+      } else if (r === 2) {
+        rankBadgeText = '🥈 Hạng 2';
+        rankBadgeClass = 'bg-slate-200 text-slate-950 font-bold border border-slate-100 shadow-sm';
+      } else if (r === 3) {
+        rankBadgeText = '🥉 Hạng 3';
+        rankBadgeClass = 'bg-amber-700/85 text-amber-100 font-bold border border-amber-600/70 shadow-sm';
+      } else {
+        rankBadgeText = `Hạng ${r}`;
+        rankBadgeClass = 'bg-slate-800 text-slate-300 border border-white/15 font-semibold';
+      }
     }
 
     // So riêng với Nhà Cái (Nhóm 1)
     let vsDealerResult: 'win' | 'loss' | 'tie' | null = null;
-    if (a.groupNum !== 1 && group1Item && isComplete) {
+    if (a.groupNum !== 1 && group1Item && a.isComplete) {
       const diff = a.score - group1Item.score;
       if (Math.abs(diff) < 0.0001) vsDealerResult = 'tie';
       else if (diff > 0) vsDealerResult = 'win';
@@ -675,7 +698,7 @@ export function computeAllGroupAnswers(
     return {
       ...a,
       isWinner,
-      isComplete,
+      isComplete: a.isComplete,
       rank: r,
       winsCount: wins,
       lossesCount: losses,
@@ -776,7 +799,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   }
 
   entries.forEach((entry) => {
-    const idx = entry.groupIndex;
+    const idx = Number(entry.groupIndex);
     if (!groupedItems[idx]) {
       groupedItems[idx] = [];
     }
@@ -812,6 +835,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   // Validation Popup Modal khi nhập sai
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // Nhóm đích mà người dùng CHỦ ĐỘNG CHỌN để điền tiếp vào (cả ngoài UI và trong Popup)
+  // null = chế độ chia vòng tuần tự tự động
+  const [selectedGroupTarget, setSelectedGroupTarget] = useState<number | null>(null);
+
   // Floating Draggable Card Picker Popup (Popup nổi kéo thả 52 lá bài - mặc định luôn mở sẵn)
   const [isCardPickerOpen, setIsCardPickerOpen] = useState(true);
   const [cardPickerTarget, setCardPickerTarget] = useState<CardPickerTarget>({
@@ -819,25 +846,25 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     groupNum: 1
   });
 
-  // Tự động đồng bộ nhóm mục tiêu khi đang ở chế độ chia vòng
+  // Tự động đồng bộ nhóm mục tiêu khi đang ở chế độ chia vòng (chỉ khi KHÔNG chọn đích danh nhóm nào)
   React.useEffect(() => {
-    if (cardPickerTarget.mode === 'add') {
+    if (selectedGroupTarget === null && cardPickerTarget.mode === 'add') {
       setCardPickerTarget((prev) => ({
         ...prev,
         groupNum: nextGroupIndex
       }));
     }
-  }, [nextGroupIndex]);
+  }, [nextGroupIndex, selectedGroupTarget]);
 
   // Xử lý chọn lá bài từ CardPickerPopup
   const handleSelectCardFromPicker = (cardValue: string, targetGroup: number, editCardId?: string) => {
     if (cardPickerTarget.mode === 'edit' && editCardId && onEditCard) {
       onEditCard(editCardId, cardValue);
       showToast(`🃏 Đã đổi thành "${cardValue}"`);
-      // Sau khi sửa xong, chuyển lại mode 'add' để chia tiếp theo vòng
+      // Sau khi sửa xong, giữ nguyên nhóm đang chọn hoặc quay lại vòng
       setCardPickerTarget({
         mode: 'add',
-        groupNum: nextGroupIndex
+        groupNum: selectedGroupTarget !== null ? selectedGroupTarget : nextGroupIndex
       });
     } else {
       // Mode add
@@ -845,12 +872,21 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       const gName = groupNames[targetGroup] || `Nhóm ${targetGroup}`;
       showToast(`✨ Đã gán "${cardValue}" vào ${gName}`);
 
-      // Tự động chuyển nhóm mục tiêu sang nhóm tiếp theo theo vòng tuần tự
-      const nextG = (targetGroup % numGroups) + 1;
-      setCardPickerTarget({
-        mode: 'add',
-        groupNum: nextG
-      });
+      // Nếu người dùng đang CHỌN ĐÍCH DANH nhóm này để điền tiếp vào:
+      // GIỮ NGUYÊN nhóm này để tiếp tục điền các lá tiếp theo!
+      if (selectedGroupTarget !== null) {
+        setCardPickerTarget({
+          mode: 'add',
+          groupNum: selectedGroupTarget
+        });
+      } else {
+        // Tự động chuyển nhóm mục tiêu sang nhóm tiếp theo theo vòng tuần tự
+        const nextG = (targetGroup % numGroups) + 1;
+        setCardPickerTarget({
+          mode: 'add',
+          groupNum: nextG
+        });
+      }
     }
   };
 
@@ -869,6 +905,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   // Mở popup để thêm lá bài cho ô trống
   const handleOpenAddCardPicker = (groupNum: number, slotIdx: number) => {
+    setSelectedGroupTarget(groupNum);
     setCardPickerTarget({
       mode: 'add',
       groupNum,
@@ -878,20 +915,22 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     setIsCardPickerOpen(true);
   };
 
-  // Chia bài từ thanh input trên cùng (CHIA VÒNG TUẦN TỰ THEO THỨ TỰ NHƯ CŨ, KHÔNG DỒN VÀO 1 NHÓM)
+  // Chia bài từ thanh input trên cùng
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const rawManual = manualInput.trim();
 
     if (rawManual) {
-      // 1. Chia vòng tuần tự chuẩn như cũ: KHÔNG truyền targetGroup để các lá bài được chia đều vào từng nhóm 1, 2, 3...
       const check = isValidCardValue(rawManual);
       if (!check.isValid) {
         setValidationError(check.error || 'Giá trị không hợp lệ!');
         return;
       }
-      onAddCard(check.normalizedRank, numGroups);
-      showToast(`✨ Đã ghi nhận mã "${check.normalizedRank}"`);
+      // Nếu người dùng đã chọn đích danh nhóm (cả trong popup và ngoài) -> ghi nhận vào nhóm đó
+      const targetG = selectedGroupTarget || undefined;
+      onAddCard(check.normalizedRank, numGroups, targetG);
+      const gName = targetG ? (groupNames[targetG] || `Nhóm ${targetG}`) : `vòng tuần tự`;
+      showToast(`✨ Đã ghi nhận mã "${check.normalizedRank}" (${gName})`);
       setManualInput('');
       return;
     }
@@ -1226,15 +1265,35 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           <span className="xs:hidden">Ghi</span>
         </button>
 
-        {/* Next Target Badge */}
+        {/* Target Badge */}
         <div className="flex items-center space-x-1 pl-1.5 pr-0.5 border-l border-white/10 text-[11px] flex-shrink-0 font-mono">
-          <span className="text-slate-400 text-[10px] hidden sm:inline">Kế tiếp:</span>
-          <span className="px-1.5 py-0.5 rounded font-bold border text-[10px] sm:text-[11px] flex items-center space-x-1 bg-indigo-600/40 text-indigo-200 border-indigo-500/40">
-            <span>N{nextGroupIndex}</span>
-            <span className="text-[9px] font-normal opacity-90">
-              (Mục {targetGroupAll.length + 1}/{maxInitialCards})
+          {selectedGroupTarget !== null ? (
+            <div className="flex items-center space-x-1">
+              <span className="px-2 py-0.5 rounded-lg font-black border text-xs flex items-center space-x-1 bg-amber-500 text-slate-950 border-amber-300 shadow-sm animate-pulse">
+                <span>🎯 Điền N{selectedGroupTarget}</span>
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedGroupTarget(null);
+                  setCardPickerTarget({ mode: 'add', groupNum: nextGroupIndex });
+                }}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-white/10 cursor-pointer"
+                title="Bỏ chọn nhóm, quay về chia đều vòng tuần tự"
+              >
+                Chia vòng
+              </button>
+            </div>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded font-bold border text-[10px] sm:text-[11px] flex items-center space-x-1 bg-indigo-600/40 text-indigo-200 border-indigo-500/40">
+              <span className="text-slate-400 text-[10px] hidden sm:inline">Vòng kế:</span>
+              <span>N{nextGroupIndex}</span>
+              <span className="text-[9px] font-normal opacity-90">
+                (Mục {targetGroupAll.length + 1}/{maxInitialCards})
+              </span>
             </span>
-          </span>
+          )}
         </div>
       </form>
 
@@ -1357,19 +1416,33 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           // Xác định số slot thẻ cần hiển thị (Ít nhất 2 lá cho Xì Lát, 3 lá cho 3 Lá)
           const minSlots = gameMode === '3cards' ? 3 : 2;
           const slotCount = Math.max(minSlots, allItemsInGroup.length);
+          const isThisGroupSelected = selectedGroupTarget === groupNum;
 
           return (
             <div
               key={groupNum}
-              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden ${
-                ansItem?.isWinner
+              onClick={() => {
+                if (selectedGroupTarget === groupNum) {
+                  setSelectedGroupTarget(null);
+                  setCardPickerTarget({ mode: 'add', groupNum: nextGroupIndex });
+                } else {
+                  setSelectedGroupTarget(groupNum);
+                  setCardPickerTarget({ mode: 'add', groupNum });
+                  showToast(`🎯 Đã chọn ${customName} để điền tiếp`);
+                }
+              }}
+              className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden cursor-pointer ${
+                isThisGroupSelected
+                  ? 'bg-amber-950/40 border-amber-400 ring-2 ring-amber-400 shadow-lg shadow-amber-500/20'
+                  : ansItem?.isWinner
                   ? 'bg-amber-500/10 border-amber-400/80 ring-2 ring-amber-400/40 shadow-amber-500/10'
                   : isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
                   ? 'bg-indigo-950/45 border-indigo-500 shadow-indigo-500/20 ring-2 ring-indigo-500/60'
-                  : 'bg-slate-900/70 border-white/5 hover:border-white/15'
+                  : 'bg-slate-900/70 border-white/5 hover:border-white/20'
               }`}
+              title={`Bấm vào để chọn ${customName} điền tiếp số`}
             >
               <div>
                 {/* Group Header: [Number] [Name / Inline Edit] [Rank Badge] [Count] */}
@@ -1377,7 +1450,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   <div className="flex items-center space-x-1.5 min-w-0 flex-1 mr-1">
                     <span
                       className={`w-5 h-5 rounded-lg flex items-center justify-center font-bold text-[11px] flex-shrink-0 ${
-                        ansItem?.isWinner
+                        isThisGroupSelected
+                          ? 'bg-amber-400 text-slate-950 font-black shadow-sm'
+                          : ansItem?.isWinner
                           ? 'bg-amber-400 text-slate-950 font-black shadow-sm'
                           : isNextTarget
                           ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40'
@@ -1386,6 +1461,12 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     >
                       {groupNum}
                     </span>
+
+                    {isThisGroupSelected && (
+                      <span className="px-1.5 py-0.2 rounded bg-amber-400 text-slate-950 font-black text-[9px] flex items-center gap-0.5 shadow-sm whitespace-nowrap animate-pulse">
+                        🎯 Đang điền
+                      </span>
+                    )}
 
                     {/* Inline Edit Group Name */}
                     {editingGroupId === groupNum ? (
@@ -1775,14 +1856,23 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         danGroups={danGroups}
         onSelectCard={handleSelectCardFromPicker}
         onDeleteCard={onDeleteCard}
-        onChangeTargetGroup={(gNum) => setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum, mode: 'add', cardId: undefined, currentValue: undefined }))}
+        onChangeTargetGroup={(gNum) => {
+          setSelectedGroupTarget(gNum);
+          setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum, mode: 'add', cardId: undefined, currentValue: undefined }));
+        }}
         onFinishRound={handleRequestFinishRound}
-        onSetTarget={setCardPickerTarget}
+        onSetTarget={(t) => {
+          if (t.mode === 'add') {
+            setSelectedGroupTarget(t.groupNum);
+          }
+          setCardPickerTarget(t);
+        }}
         onChangeGameMode={setGameMode}
         onChangeNumGroups={(cnt) => {
           setNumGroups(cnt);
           if (cardPickerTarget.groupNum > cnt) {
             setCardPickerTarget((prev) => ({ ...prev, groupNum: 1 }));
+            setSelectedGroupTarget(1);
           }
           if (mobileActiveFilter !== 'all' && mobileActiveFilter > cnt) {
             setMobileActiveFilter('all');
@@ -1793,6 +1883,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           setDanGroups({});
           setGroupBotInputs({});
           setManualInput('');
+          setSelectedGroupTarget(null);
           setCardPickerTarget({ mode: 'add', groupNum: 1 });
           showToast('🗑️ Đã xóa sạch toàn bộ số, sẵn sàng điền lại!');
         }}

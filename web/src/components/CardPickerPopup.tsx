@@ -463,19 +463,26 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                       }
                     }}
                     className={`p-1.5 rounded-xl border flex flex-col justify-between cursor-pointer transition-all ${
-                      ans.isWinner
-                        ? 'bg-amber-500/20 border-amber-400 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
-                        : isSelectedGroup
-                        ? 'bg-indigo-950/70 border-indigo-400 ring-1 ring-indigo-400 shadow-sm'
+                      isSelectedGroup
+                        ? 'bg-amber-950/60 border-amber-400 ring-2 ring-amber-400 shadow-lg shadow-amber-500/30'
+                        : ans.isWinner
+                        ? 'bg-amber-500/20 border-amber-400 shadow-md shadow-amber-500/20'
                         : 'bg-slate-900/90 border-white/10 hover:border-white/25'
                     }`}
                     title={`Bấm vào nhóm để gán thêm số cho ${ans.name}`}
                   >
-                    {/* Header nhóm: Tên & Huy hiệu Thắng/Khóa */}
+                    {/* Header nhóm: Tên & Huy hiệu Thắng/Khóa/Đang điền */}
                     <div className="flex items-center justify-between gap-1 mb-1">
-                      <span className="text-[10px] sm:text-[11px] font-bold text-slate-200 truncate">
-                        {ans.name}
-                      </span>
+                      <div className="flex items-center space-x-1 min-w-0">
+                        <span className="text-[10px] sm:text-[11px] font-bold text-slate-200 truncate">
+                          {ans.name}
+                        </span>
+                        {isSelectedGroup && (
+                          <span className="px-1 py-0.2 rounded bg-amber-400 text-slate-950 font-black text-[8px] flex items-center shadow-sm animate-pulse">
+                            🎯 Điền
+                          </span>
+                        )}
+                      </div>
                       {ans.rankBadgeText ? (
                         <span className={`px-1 py-0.2 rounded font-black text-[9px] flex items-center gap-0.5 shadow-sm whitespace-nowrap ${ans.rankBadgeClass}`}>
                           {ans.rankBadgeText}
