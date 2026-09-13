@@ -17,7 +17,13 @@ import {
   Key,
   Upload,
   Download,
-  FileText
+  FileText,
+  Eye,
+  EyeOff,
+  Archive,
+  Terminal,
+  HelpCircle,
+  Sparkles
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -52,10 +58,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     sizeFormatted: string;
     updatedAt: string;
     isIpa: boolean;
+    isZip?: boolean;
+    isP12?: boolean;
+    isProvision?: boolean;
     isCert: boolean;
   }
   const [appFiles, setAppFiles] = useState<AppFile[]>([]);
+  const [zsignReady, setZsignReady] = useState(false);
+  const [certSummary, setCertSummary] = useState<{
+    hasP12: boolean;
+    p12Files: string[];
+    hasProvision: boolean;
+    provFiles: string[];
+    hasIpa: boolean;
+    ipaFiles: string[];
+  }>({ hasP12: false, p12Files: [], hasProvision: false, provFiles: [], hasIpa: false, ipaFiles: [] });
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [p12Password, setP12Password] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [signing, setSigning] = useState(false);
+  const [signOutput, setSignOutput] = useState<string | null>(null);
+  const [showZsignInstructions, setShowZsignInstructions] = useState(false);
+  const [extractingZip, setExtractingZip] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchAppFiles = async () => {
@@ -65,6 +89,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
       const data = await res.json();
       if (data.files) setAppFiles(data.files);
+      if (typeof data.zsignReady === 'boolean') setZsignReady(data.zsignReady);
+      if (data.certSummary) setCertSummary(data.certSummary);
     } catch {}
   };
 
@@ -96,6 +122,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } finally {
       setUploadingFile(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleExtractZip = async (zipFilename: string) => {
+    setExtractingZip(true);
+    try {
+      const res = await fetch(`/api/admin/extract-zip/${encodeURIComponent(zipFilename)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      showMsg(data.message, 'success');
+      fetchAppFiles();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    } finally {
+      setExtractingZip(false);
+    }
+  };
+
+  const handleSignIpa = async () => {
+    if (!p12Password.trim()) {
+      showMsg('Vui lòng nhập mật khẩu của file chứng chỉ .p12', 'error');
+      return;
+    }
+    setSigning(true);
+    setSignOutput(null);
+    try {
+      const res = await fetch('/api/admin/sign-ipa', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ p12Password: p12Password.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.details) setSignOutput(data.details);
+        if (data.needsZsignInstall) setShowZsignInstructions(true);
+        throw new Error(data.error || 'Ký app thất bại.');
+      }
+
+      showMsg(data.message, 'success');
+      if (data.output) setSignOutput(data.output);
+      fetchAppFiles();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    } finally {
+      setSigning(false);
     }
   };
 
@@ -322,8 +400,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Quản lý File App iOS (.IPA) & Chứng chỉ */}
-      <div className="glass-panel rounded-2xl p-5 border border-indigo-500/20 space-y-3.5">
+      {/* Quản lý File App iOS (.IPA) & Chứng chỉ Doanh Nghiệp */}
+      <div className="glass-panel rounded-2xl p-5 border border-indigo-500/20 space-y-4">
+        {/* Header section */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 pb-3">
           <div className="flex items-center space-x-2.5">
             <div className="p-2.5 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
@@ -331,13 +410,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                Quản Lý File Cài Đặt App iOS & Chứng Chỉ
+                Quản Lý File Cài Đặt App iOS & Ký Chứng Chỉ Doanh Nghiệp
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono font-bold border border-indigo-500/30">
                   OTA itms-services
                 </span>
               </h2>
               <p className="text-[11px] text-slate-400">
-                Tải lên file <strong className="text-slate-300">.IPA</strong> (đã ký chứng chỉ) hoặc file chứng chỉ <strong className="text-slate-300">.mobileprovision / .p12 / .cer</strong> để người dùng cài trực tiếp từ web.
+                Tải lên file <strong className="text-slate-300">.IPA</strong>, file <strong className="text-slate-300">.ZIP chứng chỉ</strong> (hoặc .p12 & .mobileprovision), sau đó nhập mật khẩu để Server tự động ký app.
               </p>
             </div>
           </div>
@@ -346,7 +425,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".ipa,.mobileprovision,.p12,.cer,.plist"
+              accept=".ipa,.zip,.mobileprovision,.p12,.cer,.plist"
               onChange={handleUploadFile}
               className="hidden"
             />
@@ -356,16 +435,181 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               className="px-3.5 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs flex items-center space-x-1.5 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
             >
               <Upload className="w-4 h-4" />
-              <span>{uploadingFile ? 'Đang tải lên...' : 'Upload File .IPA / Chứng chỉ'}</span>
+              <span>{uploadingFile ? 'Đang tải lên...' : 'Tải lên File (.IPA / .ZIP / Cert)'}</span>
             </button>
           </div>
         </div>
 
+        {/* Khung Tự Động Ký App Doanh Nghiệp (Auto-Sign với zsign) */}
+        <div className="p-4 rounded-xl bg-gradient-to-br from-slate-900/90 to-indigo-950/40 border border-indigo-500/30 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center space-x-2">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span className="text-xs font-bold text-white uppercase tracking-wider">
+                Tự Động Ký Chứng Chỉ Doanh Nghiệp (Auto-Sign)
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              {zsignReady ? (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3" /> zsign: Sẵn sàng
+                </span>
+              ) : (
+                <button
+                  onClick={() => setShowZsignInstructions(!showZsignInstructions)}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 hover:bg-amber-500/30 transition-all cursor-pointer"
+                  title="Bấm để xem hướng dẫn cài đặt zsign trên VPS"
+                >
+                  <AlertCircle className="w-3 h-3" /> zsign: Chưa cài trên VPS (Bấm xem lệnh)
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Hướng dẫn cài đặt zsign trên VPS nếu chưa có */}
+          {(!zsignReady || showZsignInstructions) && (
+            <div className="p-3 rounded-lg bg-black/60 border border-amber-500/30 space-y-2 text-[11px]">
+              <div className="flex items-center justify-between text-amber-300 font-semibold">
+                <span className="flex items-center gap-1.5">
+                  <Terminal className="w-3.5 h-3.5" /> Lệnh 1-dòng cài đặt zsign trên VPS Ubuntu/Debian:
+                </span>
+                <button
+                  onClick={() => setShowZsignInstructions(false)}
+                  className="text-slate-400 hover:text-white text-[10px]"
+                >
+                  Đóng
+                </button>
+              </div>
+              <div className="bg-slate-950 p-2.5 rounded font-mono text-[10px] text-slate-300 overflow-x-auto select-all border border-white/5">
+                apt-get update && apt-get install -y unzip zip clang g++ libssl-dev zlib1g-dev && git clone https://github.com/zhlynn/zsign.git /tmp/zsign && cd /tmp/zsign && g++ *.cpp -lcrypto -lz -O3 -o /usr/local/bin/zsign && rm -rf /tmp/zsign
+              </div>
+              <p className="text-[10px] text-slate-400 italic">
+                * Copy câu lệnh trên dán vào terminal SSH VPS một lần duy nhất, sau đó tải lại trang này zsign sẽ chuyển sang màu xanh "Sẵn sàng".
+              </p>
+            </div>
+          )}
+
+          {/* Trạng thái các thành phần đã phát hiện */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+            {/* File IPA */}
+            <div className={`p-2.5 rounded-lg border flex items-center justify-between ${
+              certSummary.hasIpa ? 'bg-indigo-950/30 border-indigo-500/30 text-indigo-300' : 'bg-slate-900/50 border-white/5 text-slate-400'
+            }`}>
+              <div className="truncate">
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">1. File IPA Gốc</p>
+                <p className="font-mono font-bold truncate text-[11px] text-white">
+                  {certSummary.hasIpa ? certSummary.ipaFiles[0] : 'Chưa có file .ipa'}
+                </p>
+              </div>
+              {certSummary.hasIpa ? <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 text-slate-500 flex-shrink-0" />}
+            </div>
+
+            {/* File P12 */}
+            <div className={`p-2.5 rounded-lg border flex items-center justify-between ${
+              certSummary.hasP12 ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300' : 'bg-slate-900/50 border-white/5 text-slate-400'
+            }`}>
+              <div className="truncate">
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">2. Chứng chỉ (.P12)</p>
+                <p className="font-mono font-bold truncate text-[11px] text-white">
+                  {certSummary.hasP12 ? certSummary.p12Files[0] : (appFiles.some(f => f.isZip) ? 'Có trong file Zip' : 'Chưa có file .p12')}
+                </p>
+              </div>
+              {certSummary.hasP12 || appFiles.some(f => f.isZip) ? (
+                <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-slate-500 flex-shrink-0" />
+              )}
+            </div>
+
+            {/* File Provision */}
+            <div className={`p-2.5 rounded-lg border flex items-center justify-between ${
+              certSummary.hasProvision ? 'bg-blue-950/30 border-blue-500/30 text-blue-300' : 'bg-slate-900/50 border-white/5 text-slate-400'
+            }`}>
+              <div className="truncate">
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">3. Hồ sơ (.mobileprovision)</p>
+                <p className="font-mono font-bold truncate text-[11px] text-white">
+                  {certSummary.hasProvision ? certSummary.provFiles[0] : (appFiles.some(f => f.isZip) ? 'Có trong file Zip' : 'Chưa có profile')}
+                </p>
+              </div>
+              {certSummary.hasProvision || appFiles.some(f => f.isZip) ? (
+                <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-slate-500 flex-shrink-0" />
+              )}
+            </div>
+          </div>
+
+          {/* Ô nhập mật khẩu P12 và nút Ký App */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1">
+            <div className="relative flex-1">
+              <Key className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Nhập Mật khẩu file chứng chỉ .p12 (ví dụ: 123456 hoặc 1)..."
+                value={p12Password}
+                onChange={(e) => setP12Password(e.target.value)}
+                className="w-full pl-9 pr-10 py-2 rounded-xl bg-slate-950/80 border border-white/10 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-indigo-500 transition-all font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              >
+                {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            <button
+              onClick={handleSignIpa}
+              disabled={signing || !p12Password.trim() || !certSummary.hasIpa}
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/30 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex-shrink-0"
+            >
+              {signing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Đang Ký App (zsign)...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  <span>🚀 Ký & Đóng Gói App Ngay</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Log kết quả ký */}
+          {signOutput && (
+            <div className="p-3 rounded-lg bg-black/70 border border-white/10 space-y-1 text-xs">
+              <div className="flex items-center justify-between text-slate-400 text-[10px]">
+                <span className="flex items-center gap-1 font-semibold text-slate-300">
+                  <Terminal className="w-3 h-3" /> Chi tiết quá trình ký (zsign log):
+                </span>
+                <button
+                  onClick={() => setSignOutput(null)}
+                  className="hover:text-white"
+                >
+                  Ẩn
+                </button>
+              </div>
+              <pre className="p-2 rounded bg-slate-950 font-mono text-[10px] text-slate-300 max-h-36 overflow-y-auto whitespace-pre-wrap">
+                {signOutput}
+              </pre>
+            </div>
+          )}
+        </div>
+
         {/* Danh sách file trong folder app */}
         <div className="space-y-2">
+          <p className="text-xs font-bold text-slate-300 flex items-center justify-between">
+            <span>Danh Sách File Trong Thư Mục Cài Đặt (app/):</span>
+            <span className="text-[10px] text-slate-400 font-normal">{appFiles.length} file</span>
+          </p>
+
           {appFiles.length === 0 ? (
             <div className="p-4 rounded-xl bg-slate-900/60 border border-white/5 text-center text-xs text-slate-500 italic">
-              Chưa có file nào trong thư mục app. Bấm nút "Upload File .IPA / Chứng chỉ" ở trên để tải file lên.
+              Chưa có file nào trong thư mục app. Bấm nút "Tải lên File (.IPA / .ZIP / Cert)" ở trên để tải file lên.
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
@@ -378,16 +622,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className={`p-2 rounded-lg flex-shrink-0 ${
                       file.isIpa
                         ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                        : file.isCert
+                        : file.isZip
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        : file.isP12
                         ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : file.isProvision
+                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                         : 'bg-slate-800 text-slate-400 border border-white/10'
                     }`}>
-                      {file.isIpa ? <Smartphone className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+                      {file.isIpa ? (
+                        <Smartphone className="w-4 h-4" />
+                      ) : file.isZip ? (
+                        <Archive className="w-4 h-4" />
+                      ) : (
+                        <FileText className="w-4 h-4" />
+                      )}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-mono font-bold text-white truncate text-xs" title={file.name}>
-                        {file.name}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-mono font-bold text-white truncate text-xs" title={file.name}>
+                          {file.name}
+                        </p>
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase ${
+                          file.isIpa
+                            ? 'bg-purple-500/20 text-purple-300'
+                            : file.isZip
+                            ? 'bg-amber-500/20 text-amber-300'
+                            : file.isP12
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : file.isProvision
+                            ? 'bg-blue-500/20 text-blue-300'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}>
+                          {file.isIpa ? 'IPA' : file.isZip ? 'ZIP' : file.isP12 ? 'P12' : file.isProvision ? 'PROFILE' : 'FILE'}
+                        </span>
+                      </div>
                       <p className="text-[10px] text-slate-400">
                         {file.sizeFormatted} • {new Date(file.updatedAt).toLocaleDateString('vi-VN')}
                       </p>
@@ -395,17 +664,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   <div className="flex items-center space-x-1 flex-shrink-0">
+                    {file.isZip && (
+                      <button
+                        onClick={() => handleExtractZip(file.name)}
+                        disabled={extractingZip}
+                        className="p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-all cursor-pointer"
+                        title="Giải nén file zip này"
+                      >
+                        <Archive className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <a
                       href={`/ios/${encodeURIComponent(file.name)}`}
                       download={file.name}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
-                      title="Tải về máy kiểm tra"
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+                      title="Tải về máy"
                     >
                       <Download className="w-3.5 h-3.5" />
                     </a>
                     <button
                       onClick={() => handleDeleteAppFile(file.name)}
-                      className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/40 text-red-300 transition-all"
+                      className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/40 text-red-300 transition-all cursor-pointer"
                       title="Xóa file này"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
