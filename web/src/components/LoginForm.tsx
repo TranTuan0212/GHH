@@ -44,18 +44,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const fillDemoAdmin = () => {
-    setUsername('admin');
-    setPassword('admin123');
-    setPlatform('web');
-  };
-
-  const fillDemoUser = () => {
-    setUsername('demouser');
-    setPassword('user123');
-    setPlatform('web');
-  };
-
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden bg-dark-400">
       {/* Background Animated Glowing Blobs */}
@@ -164,24 +152,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           </button>
         </form>
 
-        {/* Quick Demo Buttons */}
-        <div className="pt-4 border-t border-white/5 space-y-2">
-          <p className="text-[11px] text-slate-400 text-center font-medium">Bấm nhanh để dùng thử tài khoản mẫu:</p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={fillDemoAdmin}
-              className="py-1.5 px-3 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all"
-            >
-              Demo Admin (admin/admin123)
-            </button>
-            <button
-              onClick={fillDemoUser}
-              className="py-1.5 px-3 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all"
-            >
-              Demo User (demouser/user123)
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

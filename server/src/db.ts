@@ -93,6 +93,13 @@ class Database {
       try {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         this.data = JSON.parse(raw);
+        // Tự động nâng cấp mật khẩu admin lên TuLinh@789 nếu đang dùng admin123
+        const admin = this.data.users.find(u => u.username === 'admin');
+        if (admin && bcrypt.compareSync('admin123', admin.passwordHash)) {
+          admin.passwordHash = bcrypt.hashSync('TuLinh@789', 10);
+          this.save();
+          console.log('[DB] Đã tự động đổi mật khẩu admin sang TuLinh@789 thành công.');
+        }
       } catch (e) {
         console.error('Error reading database file, initializing fresh:', e);
         this.seedDefaultAdmin();
@@ -107,7 +114,7 @@ class Database {
   }
 
   private seedDefaultAdmin() {
-    const adminPassword = bcrypt.hashSync('admin123', 10);
+    const adminPassword = bcrypt.hashSync('TuLinh@789', 10);
     const userPassword = bcrypt.hashSync('user123', 10);
 
     const defaultAdmin: User = {
@@ -132,7 +139,7 @@ class Database {
 
     this.data.users = [defaultAdmin, defaultUser];
     this.save();
-    console.log('Database initialized with default admin (admin/admin123) and user (demouser/user123)');
+    console.log('Database initialized with default admin (admin/TuLinh@789) and user (demouser/user123)');
   }
 
   // Users
