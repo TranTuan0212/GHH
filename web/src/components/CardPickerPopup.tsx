@@ -10,7 +10,8 @@ import {
   CheckCircle2,
   EyeOff,
   Trash2,
-  Sparkles
+  Sparkles,
+  RotateCcw
 } from 'lucide-react';
 import { DataEntry } from '../types';
 import { GameMode, computeAllGroupAnswers } from './DataGroupingUI';
@@ -40,6 +41,7 @@ interface CardPickerPopupProps {
   onSetTarget?: (target: CardPickerTarget) => void;
   onChangeGameMode?: (mode: GameMode) => void;
   onChangeNumGroups?: (num: number) => void;
+  onClearCards?: () => void;
 }
 
 const CARDS = [
@@ -74,7 +76,8 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   onFinishRound,
   onSetTarget,
   onChangeGameMode,
-  onChangeNumGroups
+  onChangeNumGroups,
+  onClearCards
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -416,18 +419,33 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 </span>
               </div>
 
-              {/* Nút Xong Phiên (Xóa Hết) ngay trên Popup */}
-              {onFinishRound && (
-                <button
-                  type="button"
-                  onClick={onFinishRound}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
-                  title="Xong phiên: Xóa sạch toàn bộ bài để bắt đầu phiên mới, không lưu lại gì"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Xong Phiên (Xóa Hết)</span>
-                </button>
-              )}
+              <div className="flex items-center space-x-1.5 flex-shrink-0">
+                {/* Nút Xóa Hết để điền lại */}
+                {onClearCards && (
+                  <button
+                    type="button"
+                    onClick={onClearCards}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white font-bold text-[10px] sm:text-[11px] flex items-center space-x-1 border border-rose-500/40 shadow-sm transition-all active:scale-95 cursor-pointer"
+                    title="Xóa toàn bộ các số đã nhập để điền lại từ đầu"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-rose-300" />
+                    <span>Xóa Hết (Điền Lại)</span>
+                  </button>
+                )}
+
+                {/* Nút Xong Phiên ngay trên Popup */}
+                {onFinishRound && (
+                  <button
+                    type="button"
+                    onClick={onFinishRound}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
+                    title="Xong phiên: Xóa sạch toàn bộ để bắt đầu phiên mới, không lưu lại gì"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Xong Phiên</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Grid hiển thị các nhóm: Tên nhóm, Danh sách số (BẤM ĐƯỢC ĐỂ SỬA TRỰC TIẾP), và Điểm/Đáp án */}

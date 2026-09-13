@@ -1788,6 +1788,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             setMobileActiveFilter('all');
           }
         }}
+        onClearCards={() => {
+          onClearCards();
+          setDanGroups({});
+          setGroupBotInputs({});
+          setManualInput('');
+          setCardPickerTarget({ mode: 'add', groupNum: 1 });
+          showToast('🗑️ Đã xóa sạch toàn bộ số, sẵn sàng điền lại!');
+        }}
       />
 
       {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng số bất cứ khi nào */}
