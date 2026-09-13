@@ -45,18 +45,18 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden bg-dark-400">
+    <div className="min-h-screen flex items-center justify-center p-3 sm:p-4 py-6 relative overflow-y-auto bg-dark-400">
       {/* Background Animated Glowing Blobs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl animate-pulse-slow" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl animate-pulse-slow" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl animate-pulse-slow pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl animate-pulse-slow pointer-events-none" />
 
-      <div className="max-w-md w-full glass-panel p-5 sm:p-8 rounded-3xl border border-indigo-500/30 shadow-2xl relative z-10 space-y-5 sm:space-y-6">
+      <div className="max-w-md w-full glass-panel p-5 sm:p-7 rounded-2xl sm:rounded-3xl border border-indigo-500/30 shadow-2xl relative z-10 space-y-4 sm:space-y-5 my-auto">
         {/* Header Logo */}
-        <div className="text-center space-y-2">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 mx-auto flex items-center justify-center text-white shadow-xl shadow-indigo-600/40 animate-glow">
-            <Radio className="w-8 h-8" />
+        <div className="text-center space-y-1.5">
+          <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 mx-auto flex items-center justify-center text-white shadow-xl shadow-indigo-600/40 animate-glow">
+            <Radio className="w-6 h-6 sm:w-8 sm:h-8" />
           </div>
-          <h2 className="text-2xl font-extrabold text-white tracking-tight">SloMo Live 240FPS</h2>
+          <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">SloMo Live 240FPS</h2>
           <p className="text-xs text-slate-400">Hệ thống Phát trực tiếp & Tự động Phân loại Dữ liệu theo Nhóm</p>
         </div>
 
