@@ -305,10 +305,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const endpoint = new URL(detectedServerUrl);
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
-            if (typeof window !== 'undefined' && window.location.host) {
-              endpoint.host = window.location.host;
+            if (typeof window !== 'undefined' && window.location.hostname) {
+              endpoint.hostname = window.location.hostname; // chỉ lấy hostname, không lấy port
             }
-            endpoint.port = '';
+            endpoint.port = '8889'; // Nginx SSL :8889 → MediaMTX :8888
             endpoint.pathname = `/${stream.streamKey}/whep`;
           } else {
             endpoint.port = '8889';
