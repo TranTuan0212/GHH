@@ -495,7 +495,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const waitForIceGathering = (connection: RTCPeerConnection) => new Promise<void>((resolve) => {
       if (connection.iceGatheringState === 'complete') return resolve();
-      const timeout = window.setTimeout(resolve, 1500);
+      const timeout = window.setTimeout(resolve, 250);
       connection.addEventListener('icegatheringstatechange', () => {
         if (connection.iceGatheringState === 'complete') {
           window.clearTimeout(timeout);
@@ -546,7 +546,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             if (cancelled || !streams[0]) return;
             receivedVideoTrack = true;
             video.srcObject = streams[0];
-            video.muted = true;
+            video.muted = isLiveRef.current ? isMuted : true;
             setHasLiveFrame(true);
             setHasFrame(true);
             video.play().catch((err) => {
@@ -575,7 +575,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peer = null;
           peerConnectionRef.current = null;
           console.log(`[LivePlayer] WHEP chưa sẵn sàng (lần ${attempt}, sẽ thử lại):`, error);
-          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          await new Promise((resolve) => window.setTimeout(resolve, 350));
         }
       }
     };
@@ -633,7 +633,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.play().catch(() => {});
       }
     } else {
-      liveVideoRef.current?.pause();
+      // QUAN TRỌNG: TUYỆT ĐỐI KHÔNG pause liveVideoRef!
+      // WebRTC là luồng realtime liên tục. Nếu gọi pause(), clock nội bộ của thẻ video
+      // sẽ bị lệch hàng chục giây so với gói tin RTP đang đến, dẫn đến video bị đơ cứng
+      // hoặc màn hình đen khi bấm 'Về Live' lại.
+      // Chúng ta chỉ cần tắt tiếng (muted = true), CSS sẽ ẩn video đi, luồng WebRTC vẫn tiếp tục
+      // giải mã đúng mili-giây hiện tại. Khi bấm 'Về Live', video hiện ngay lập tức 0ms!
+      if (liveVideoRef.current) {
+        liveVideoRef.current.muted = true;
+      }
       if (replayVideoRef.current) {
         replayVideoRef.current.play().catch(() => {});
       }
@@ -939,34 +947,61 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Đồng bộ <video> currentTime + duration lên UI để vẽ seekbar DVR window.
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const replayVid = replayVideoRef.current;
+    const liveVid = liveVideoRef.current;
+
     const onTime = () => {
-      setCurrentTime(video.currentTime);
-      if (Number.isFinite(video.duration)) {
-        setDuration(video.duration);
+      if (replayVid) {
+        setCurrentTime(replayVid.currentTime);
+        if (Number.isFinite(replayVid.duration)) {
+          setDuration(replayVid.duration);
+        }
       }
     };
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
+    const onReplayPlay = () => {
+      if (!isLiveRef.current) setIsPlaying(true);
+    };
+    const onReplayPause = () => {
+      if (!isLiveRef.current) setIsPlaying(false);
+    };
+    const onLivePlay = () => {
+      if (isLiveRef.current) setIsPlaying(true);
+    };
+    const onLivePause = () => {
+      if (isLiveRef.current) setIsPlaying(false);
+    };
     const onLoaded = () => {
-      if (Number.isFinite(video.duration)) setDuration(video.duration);
+      if (replayVid && Number.isFinite(replayVid.duration)) setDuration(replayVid.duration);
       setHasFrame(true);
       setIsTransitioning(false); // HLS đã có frame, ẩn spinner chuyển đổi
     };
-    video.addEventListener('timeupdate', onTime);
-    video.addEventListener('durationchange', onLoaded);
-    video.addEventListener('loadeddata', onLoaded);
-    video.addEventListener('canplay', onLoaded);
-    video.addEventListener('play', onPlay);
-    video.addEventListener('pause', onPause);
+
+    if (replayVid) {
+      replayVid.addEventListener('timeupdate', onTime);
+      replayVid.addEventListener('durationchange', onLoaded);
+      replayVid.addEventListener('loadeddata', onLoaded);
+      replayVid.addEventListener('canplay', onLoaded);
+      replayVid.addEventListener('play', onReplayPlay);
+      replayVid.addEventListener('pause', onReplayPause);
+    }
+    if (liveVid) {
+      liveVid.addEventListener('play', onLivePlay);
+      liveVid.addEventListener('pause', onLivePause);
+    }
+
     return () => {
-      video.removeEventListener('timeupdate', onTime);
-      video.removeEventListener('durationchange', onLoaded);
-      video.removeEventListener('loadeddata', onLoaded);
-      video.removeEventListener('canplay', onLoaded);
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('pause', onPause);
+      if (replayVid) {
+        replayVid.removeEventListener('timeupdate', onTime);
+        replayVid.removeEventListener('durationchange', onLoaded);
+        replayVid.removeEventListener('loadeddata', onLoaded);
+        replayVid.removeEventListener('canplay', onLoaded);
+        replayVid.removeEventListener('play', onReplayPlay);
+        replayVid.removeEventListener('pause', onReplayPause);
+      }
+      if (liveVid) {
+        liveVid.removeEventListener('play', onLivePlay);
+        liveVid.removeEventListener('pause', onLivePause);
+      }
     };
   }, []);
 
@@ -1077,25 +1112,37 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
 
-    if (hasLiveFrameRef.current) {
-      replayVideoRef.current?.pause();
-      if (liveVideoRef.current) {
-        liveVideoRef.current.muted = true;
-        liveVideoRef.current.play().catch(() => {});
-      }
-    } else {
-      // Khi chưa có WebRTC live frame, HLS chính là luồng xem Live!
-      if (replayVideoRef.current) {
-        const video = replayVideoRef.current;
-        video.playbackRate = 1.0;
-        video.muted = isMuted;
-        if (video.seekable.length > 0) {
-          video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
-        } else if (hlsLiveEdge > 0) {
-          video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
+    // 1. Tạm dừng video xem lại (Replay)
+    replayVideoRef.current?.pause();
+
+    // 2. Kích hoạt và bật tiếng (nếu không mute) cho luồng trực tiếp Live WebRTC
+    const liveVid = liveVideoRef.current;
+    if (liveVid) {
+      liveVid.muted = isMuted;
+      liveVid.play().catch(() => {});
+
+      // Sức khỏe WebRTC: nếu video live bị khựng hoặc readyState thấp
+      if (liveVid.readyState < 2 || liveVid.paused) {
+        if (liveVid.srcObject) {
+          console.log('[LivePlayer] Đánh thức WebRTC live stream...');
+          const stream = liveVid.srcObject as MediaStream;
+          liveVid.srcObject = stream;
+          liveVid.play().catch(() => {});
         }
-        video.play().catch(() => {});
       }
+    }
+
+    // 3. Nếu chưa có WebRTC live frame, HLS chính là luồng xem Live đồng bộ mép trực tiếp!
+    if (!hasLiveFrameRef.current && replayVideoRef.current) {
+      const video = replayVideoRef.current;
+      video.playbackRate = 1.0;
+      video.muted = isMuted;
+      if (video.seekable.length > 0) {
+        video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
+      } else if (hlsLiveEdge > 0) {
+        video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
+      }
+      video.play().catch(() => {});
     }
 
     showModeNotice(
@@ -1112,7 +1159,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setPlaybackRate(speed);
     setIsPlaying(true);
 
-    liveVideoRef.current?.pause();
+    // Không pause liveVideoRef mà chỉ tắt tiếng, để WebRTC tiếp tục giải mã ngầm chính xác thời gian thực!
+    if (liveVideoRef.current) {
+      liveVideoRef.current.muted = true;
+    }
 
     const video = replayVideoRef.current;
     if (video) {
@@ -1210,7 +1260,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      liveVideoRef.current?.pause();
+      if (liveVideoRef.current) liveVideoRef.current.muted = true;
       const start = hlsWindowStart;
       const end = hlsLiveEdge;
       const target = Math.max(start, end - 4);
@@ -1247,7 +1297,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      liveVideoRef.current?.pause();
+      if (liveVideoRef.current) liveVideoRef.current.muted = true;
       updateFrozenTimeline({ start, end });
       performScrub(start + ratio * span, true);
       return;
@@ -1264,7 +1314,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      liveVideoRef.current?.pause();
+      if (liveVideoRef.current) liveVideoRef.current.muted = true;
       const v = replayVideoRef.current;
       if (v) {
         v.muted = true;
@@ -1691,31 +1741,35 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           muted={isMuted}
         />
 
-        {!hasFrame && (
-          <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500">
+        {!hasFrame && !hasLiveFrame && (
+          <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500 z-20">
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center text-indigo-400 animate-pulse">
               <Camera className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
-            <p className="text-xs sm:text-sm font-medium text-slate-300">Đang chờ điện thoại phát trực tiếp...</p>
-            <div className="flex flex-col items-center space-y-1 max-w-sm">
-              <p className="text-[11px] text-slate-400">
-                Mở app iOS trên iPhone, nhập Server IP:
-              </p>
-              <div className="inline-flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-amber-500/40 shadow-inner">
-                <code className="text-amber-300 font-mono text-xs font-bold select-all">
-                  {detectedServerUrl}
-                </code>
-                <button
-                  type="button"
-                  onClick={handleCopyServerUrl}
-                  className="p-0.5 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-[10px] font-semibold flex items-center space-x-1 transition-all active:scale-95"
-                  title="Sao chép Server IP"
-                >
-                  {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-300" />}
-                  <span>{copied ? 'Đã chép' : 'Chép'}</span>
-                </button>
+            <p className="text-xs sm:text-sm font-medium text-slate-300">
+              {stream ? 'Đang kết nối tín hiệu trực tiếp (120/240fps)...' : 'Đang chờ điện thoại phát trực tiếp...'}
+            </p>
+            {!stream && (
+              <div className="flex flex-col items-center space-y-1 max-w-sm">
+                <p className="text-[11px] text-slate-400">
+                  Mở app iOS trên iPhone, nhập Server IP:
+                </p>
+                <div className="inline-flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-amber-500/40 shadow-inner">
+                  <code className="text-amber-300 font-mono text-xs font-bold select-all">
+                    {detectedServerUrl}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={handleCopyServerUrl}
+                    className="p-0.5 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-[10px] font-semibold flex items-center space-x-1 transition-all active:scale-95"
+                    title="Sao chép Server IP"
+                  >
+                    {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-300" />}
+                    <span>{copied ? 'Đã chép' : 'Chép'}</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 
