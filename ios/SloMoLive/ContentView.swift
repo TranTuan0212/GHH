@@ -93,31 +93,9 @@ struct ContentView: View {
                                 .cornerRadius(12)
                         }
 
-                        if let hint = serverInfoHint {
-                            Text(hint)
-                                .font(.caption2)
-                                .foregroundColor(.green)
-                                .multilineTextAlignment(.center)
-                                .padding(8)
-                                .background(Color.green.opacity(0.1))
-                                .cornerRadius(8)
-                        }
+
 
                         VStack(alignment: .leading, spacing: 16) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Server IP / VPS Host URL:")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.indigo)
-                                TextField("http://YOUR_VPS_IP:4000", text: $networkManager.serverURL)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .autocapitalization(.none)
-                                    .disableAutocorrection(true)
-                                Text("Cùng Wi-Fi: http://192.145.X.X:4000 | Cloudflare: https://xxxx.trycloudflare.com (Không thêm :4000)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.yellow)
-                            }
-
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Tài khoản User:")
                                     .font(.caption)
@@ -136,32 +114,6 @@ struct ContentView: View {
                                 SecureField("Password", text: $passwordInput)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                             }
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("RTMP Host Override (chỉ dùng khi 5G/Tunnel):")
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.gray)
-                                TextField("vd: tunnel-xyz.trycloudflare.com", text: $networkManager.customRtmpHost)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .autocapitalization(.none)
-                                    .disableAutocorrection(true)
-                                HStack {
-                                    Text("Port: ")
-                                        .font(.caption2)
-                                        .foregroundColor(.gray)
-                                    TextField("1935", text: $networkManager.customRtmpPort)
-                                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                                        .keyboardType(.numberPad)
-                                        .frame(maxWidth: 100)
-                                }
-                                Text("Để trống nếu dùng Wi-Fi LAN. Nếu server đã trả URL đúng qua Host header thì cũng để trống.")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.yellow)
-                            }
-                            .padding(8)
-                            .background(Color.white.opacity(0.05))
-                            .cornerRadius(8)
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Hardware Device UUID (Keychain Locked):")

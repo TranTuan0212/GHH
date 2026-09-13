@@ -5,7 +5,12 @@ import Foundation
 public class NetworkManager: ObservableObject {
     public static let shared = NetworkManager()
 
-    @Published public var serverURL: String = "http://192.168.1.35:4000" {
+    // Cấu hình máy chủ gán cứng cố định (Ẩn hoàn toàn khỏi giao diện người dùng)
+    public static let defaultServerURL = "http://157.66.100.10:4000"
+    public static let defaultRtmpHost = "157.66.100.10"
+    public static let defaultRtmpPort = "1935"
+
+    @Published public var serverURL: String = defaultServerURL {
         didSet {
             UserDefaults.standard.set(serverURL, forKey: "saved_server_url")
         }
@@ -20,30 +25,22 @@ public class NetworkManager: ObservableObject {
     @Published public var hlsPlaylistUrl: String? = nil
     @Published public var errorMessage: String? = nil
 
-    /// Override host:port RTMP khi server trả về IP LAN nhưng user đang 5G/tunnel
-    /// (vd: Pinggy TCP tunnel cho port 1935). Được gửi lên server qua header
-    /// X-RTMP-Host / X-RTMP-Port trong startStream() để server trả đúng rtmpIngestUrl.
-    @Published public var customRtmpHost: String = "" {
+    /// Host & Port RTMP gán cứng vào VPS 157.66.100.10:1935
+    @Published public var customRtmpHost: String = defaultRtmpHost {
         didSet {
             UserDefaults.standard.set(customRtmpHost, forKey: "custom_rtmp_host")
         }
     }
-    @Published public var customRtmpPort: String = "" {
+    @Published public var customRtmpPort: String = defaultRtmpPort {
         didSet {
             UserDefaults.standard.set(customRtmpPort, forKey: "custom_rtmp_port")
         }
     }
 
     private init() {
-        if let saved = UserDefaults.standard.string(forKey: "saved_server_url"), !saved.isEmpty {
-            self.serverURL = saved
-        }
-        if let savedHost = UserDefaults.standard.string(forKey: "custom_rtmp_host") {
-            self.customRtmpHost = savedHost
-        }
-        if let savedPort = UserDefaults.standard.string(forKey: "custom_rtmp_port") {
-            self.customRtmpPort = savedPort
-        }
+        self.serverURL = NetworkManager.defaultServerURL
+        self.customRtmpHost = NetworkManager.defaultRtmpHost
+        self.customRtmpPort = NetworkManager.defaultRtmpPort
     }
 
     public static func normalizeServerURL(_ raw: String) -> String {
