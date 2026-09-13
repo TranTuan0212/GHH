@@ -12,7 +12,8 @@ import {
   EyeOff,
   Crosshair,
   Award,
-  CheckCircle2
+  CheckCircle2,
+  Swords
 } from 'lucide-react';
 import { DataEntry } from '../types';
 import { GameMode, computeAllGroupAnswers } from './DataGroupingUI';
@@ -73,6 +74,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   onFinishRound
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
+  const [showCrossCheckDetail, setShowCrossCheckDetail] = useState(false);
   
   // Tính toán toạ độ an toàn trong viewport
   const getDefaultPosition = () => {
@@ -353,7 +355,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
         <div className="p-2.5 sm:p-3 space-y-2.5 max-h-[82vh] overflow-y-auto no-scrollbar">
           {/* BẢNG ĐÁP ÁN TRỰC TIẾP TRONG POPUP */}
           <div className="bg-slate-950/90 p-2 sm:p-2.5 rounded-xl border border-amber-500/40 shadow-lg space-y-1.5 ring-1 ring-amber-500/20">
-            <div className="flex items-center justify-between pb-1.5 border-b border-white/10">
+            <div className="flex items-center justify-between pb-1.5 border-b border-white/10 gap-1.5 flex-wrap">
               <div className="flex items-center space-x-1.5 min-w-0">
                 <Award className="w-4 h-4 text-amber-400 flex-shrink-0" />
                 <span className="text-[11px] sm:text-xs font-black text-amber-300 uppercase tracking-wide">
@@ -361,18 +363,37 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 </span>
               </div>
 
-              {/* Nút Xong Phiên (Xóa Hết) ngay trên Popup */}
-              {onFinishRound && (
-                <button
-                  type="button"
-                  onClick={onFinishRound}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
-                  title="Xong phiên: Xóa sạch toàn bộ bài để bắt đầu phiên mới, không lưu lại gì"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Xong Phiên (Xóa Hết)</span>
-                </button>
-              )}
+              <div className="flex items-center space-x-1.5 flex-shrink-0">
+                {/* Nút bật/tắt bảng ma trận đối chiếu chi tiết */}
+                {completeGroupsCount > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCrossCheckDetail(!showCrossCheckDetail)}
+                    className={`px-2 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold flex items-center space-x-1 border transition-all ${
+                      showCrossCheckDetail
+                        ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm'
+                        : 'bg-slate-800/90 text-indigo-300 border-indigo-500/30 hover:bg-slate-750'
+                    }`}
+                    title="Xem chi tiết đối chiếu chéo từng nhóm"
+                  >
+                    <Swords className="w-3 h-3 text-amber-300" />
+                    <span>{showCrossCheckDetail ? 'Thu Gọn' : 'Bảng Đối Chiếu'}</span>
+                  </button>
+                )}
+
+                {/* Nút Xong Phiên (Xóa Hết) ngay trên Popup */}
+                {onFinishRound && (
+                  <button
+                    type="button"
+                    onClick={onFinishRound}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-[11px] flex items-center space-x-1 shadow-md shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400 cursor-pointer"
+                    title="Xong phiên: Xóa sạch toàn bộ bài để bắt đầu phiên mới, không lưu lại gì"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Xong Phiên (Xóa Hết)</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Grid hiển thị đáp án và các lá bài của từng nhóm */}
@@ -431,6 +452,27 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                     <div className={`mt-1 py-0.5 px-1 rounded text-[10px] sm:text-[11px] font-mono font-bold text-center truncate border ${ans.highlightClass}`}>
                       {ans.label}
                     </div>
+
+                    {/* Chi tiết đối chiếu thắng/thua cụ thể từng nhóm */}
+                    {ans.isComplete && completeGroupsCount > 1 && (
+                      <div className="mt-1 pt-1 border-t border-white/10 space-y-0.5 text-[8.5px] font-mono">
+                        <div className="flex items-center justify-between text-slate-400 font-bold">
+                          <span className="text-emerald-400">✓ Thắng {ans.winsCount}</span>
+                          <span className="text-rose-400">✗ Thua {ans.lossesCount}</span>
+                          {ans.tiesCount > 0 && <span className="text-amber-400">= {ans.tiesCount}</span>}
+                        </div>
+                        {ans.wonAgainst.length > 0 && (
+                          <div className="text-emerald-300 truncate font-semibold" title={`Ăn: ${ans.wonAgainst.map(w => w.name).join(', ')}`}>
+                            Ăn: {ans.wonAgainst.map(w => w.name).join(', ')}
+                          </div>
+                        )}
+                        {ans.lostAgainst.length > 0 && (
+                          <div className="text-rose-300 truncate font-semibold" title={`Thua: ${ans.lostAgainst.map(l => l.name).join(', ')}`}>
+                            Thua: {ans.lostAgainst.map(l => l.name).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -439,8 +481,62 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             {/* Dòng đối chiếu thứ hạng toàn bộ các nhóm */}
             {completeGroupsCount > 1 && leaderboardText && (
               <div className="mt-1.5 px-2 py-1 rounded-xl bg-indigo-950/70 border border-indigo-500/30 text-[10px] font-mono text-indigo-200 flex items-center space-x-1.5 overflow-x-auto no-scrollbar shadow-inner">
-                <span className="font-bold text-amber-300 whitespace-nowrap">Đối chiếu:</span>
+                <span className="font-bold text-amber-300 whitespace-nowrap">👑 Thứ tự:</span>
                 <span className="whitespace-nowrap">{leaderboardText}</span>
+              </div>
+            )}
+
+            {/* BẢNG MA TRẬN ĐỐI CHIẾU CHÉO EXPANDABLE BÊN TRONG POPUP */}
+            {showCrossCheckDetail && completeGroupsCount > 1 && (
+              <div className="mt-2 p-2 rounded-xl bg-slate-900/95 border border-indigo-500/40 space-y-1.5 animate-fadeIn">
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-300 border-b border-white/10 pb-1">
+                  <span className="font-bold text-amber-300 uppercase">MA TRẬN ĐỐI CHIẾU CHÉO (HÀNG VS CỘT):</span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-emerald-400 font-bold">🟢 Ăn</span>
+                    <span className="text-rose-400 font-bold">🔴 Thua</span>
+                    <span className="text-amber-400 font-bold">🟡 Hòa</span>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto no-scrollbar">
+                  <table className="w-full text-left text-[10px] font-mono border-collapse">
+                    <thead>
+                      <tr className="border-b border-white/10 text-slate-400">
+                        <th className="p-1 font-bold">Nhóm \ ĐT</th>
+                        {groupAnswers.map((col) => (
+                          <th key={col.groupNum} className="p-1 text-center border-l border-white/5 whitespace-nowrap">
+                            {col.name}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {groupAnswers.map((row) => (
+                        <tr key={row.groupNum} className="hover:bg-slate-800/40">
+                          <td className="p-1 font-bold text-white whitespace-nowrap">
+                            {row.rank === 1 && '👑 '}{row.name}
+                          </td>
+                          {groupAnswers.map((col) => {
+                            if (row.groupNum === col.groupNum) {
+                              return <td key={col.groupNum} className="p-1 text-center text-slate-600 border-l border-white/5">—</td>;
+                            }
+                            if (!row.isComplete || !col.isComplete) {
+                              return <td key={col.groupNum} className="p-1 text-center text-slate-600 border-l border-white/5">...</td>;
+                            }
+                            const diff = row.score - col.score;
+                            if (Math.abs(diff) < 0.0001) {
+                              return <td key={col.groupNum} className="p-1 text-center text-amber-300 bg-amber-500/10 border-l border-white/5">🟡</td>;
+                            } else if (diff > 0) {
+                              return <td key={col.groupNum} className="p-1 text-center text-emerald-300 bg-emerald-500/15 border-l border-white/5 font-bold">🟢 Ăn</td>;
+                            } else {
+                              return <td key={col.groupNum} className="p-1 text-center text-rose-300 bg-rose-500/15 border-l border-white/5 font-bold">🔴 Thua</td>;
+                            }
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>

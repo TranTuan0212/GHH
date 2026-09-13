@@ -18,7 +18,8 @@ import {
   Award,
   AlertTriangle,
   EyeOff,
-  LayoutGrid
+  LayoutGrid,
+  Swords
 } from 'lucide-react';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
@@ -467,6 +468,12 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   };
 }
 
+export interface VersusDetail {
+  groupNum: number;
+  name: string;
+  label: string;
+}
+
 export interface GroupAnswerItem {
   groupNum: number;
   name: string;
@@ -484,6 +491,10 @@ export interface GroupAnswerItem {
   totalCompared: number;
   rankBadgeText: string;
   rankBadgeClass: string;
+  wonAgainst: VersusDetail[];
+  lostAgainst: VersusDetail[];
+  tiedWith: VersusDetail[];
+  vsDealerResult?: 'win' | 'loss' | 'tie' | null;
 }
 
 // Hàm tính toán đáp án và ĐỐI CHIẾU TẤT CẢ CÁC NHÓM VỚI NHAU (Cross-Check & Leaderboard)
@@ -568,10 +579,19 @@ export function computeAllGroupAnswers(
   const completeList = tempAnswers.filter((a) => a.isComplete && a.score >= 0);
   const completeGroupsCount = completeList.length;
 
-  // 2. Đối chiếu trực tiếp từng cặp nhóm (Head-to-head Cross-Check)
-  const headToHead: { [groupNum: number]: { wins: number; losses: number; ties: number } } = {};
+  // 2. Đối chiếu trực tiếp từng cặp nhóm (Head-to-head Cross-Check chi tiết)
+  const headToHead: {
+    [groupNum: number]: {
+      wins: number;
+      losses: number;
+      ties: number;
+      wonAgainst: VersusDetail[];
+      lostAgainst: VersusDetail[];
+      tiedWith: VersusDetail[];
+    };
+  } = {};
   for (let g = 1; g <= numGroups; g++) {
-    headToHead[g] = { wins: 0, losses: 0, ties: 0 };
+    headToHead[g] = { wins: 0, losses: 0, ties: 0, wonAgainst: [], lostAgainst: [], tiedWith: [] };
   }
 
   for (let i = 0; i < completeList.length; i++) {
@@ -582,12 +602,18 @@ export function computeAllGroupAnswers(
       if (Math.abs(diff) < 0.0001) {
         headToHead[a.groupNum].ties++;
         headToHead[b.groupNum].ties++;
+        headToHead[a.groupNum].tiedWith.push({ groupNum: b.groupNum, name: b.name, label: b.label });
+        headToHead[b.groupNum].tiedWith.push({ groupNum: a.groupNum, name: a.name, label: a.label });
       } else if (diff > 0) {
         headToHead[a.groupNum].wins++;
         headToHead[b.groupNum].losses++;
+        headToHead[a.groupNum].wonAgainst.push({ groupNum: b.groupNum, name: b.name, label: b.label });
+        headToHead[b.groupNum].lostAgainst.push({ groupNum: a.groupNum, name: a.name, label: a.label });
       } else {
         headToHead[a.groupNum].losses++;
         headToHead[b.groupNum].wins++;
+        headToHead[a.groupNum].lostAgainst.push({ groupNum: b.groupNum, name: b.name, label: b.label });
+        headToHead[b.groupNum].wonAgainst.push({ groupNum: a.groupNum, name: a.name, label: a.label });
       }
     }
   }
@@ -605,6 +631,9 @@ export function computeAllGroupAnswers(
 
   const winnerGroupNum: number | null = sortedComplete.length > 0 ? sortedComplete[0].groupNum : null;
 
+  // Lấy kết quả của Nhóm 1 nếu có chế độ so với Nhà Cái
+  const group1Item = completeList.find((g) => g.groupNum === 1);
+
   const answers: GroupAnswerItem[] = tempAnswers.map((a) => {
     const isComplete = a.isComplete && a.score >= 0;
     const r = isComplete ? ranksMap[a.groupNum] : null;
@@ -612,6 +641,9 @@ export function computeAllGroupAnswers(
     const wins = headToHead[a.groupNum]?.wins || 0;
     const losses = headToHead[a.groupNum]?.losses || 0;
     const ties = headToHead[a.groupNum]?.ties || 0;
+    const wonAgainst = headToHead[a.groupNum]?.wonAgainst || [];
+    const lostAgainst = headToHead[a.groupNum]?.lostAgainst || [];
+    const tiedWith = headToHead[a.groupNum]?.tiedWith || [];
     const totalCompared = Math.max(0, completeGroupsCount - 1);
 
     let rankBadgeText = '';
@@ -631,6 +663,15 @@ export function computeAllGroupAnswers(
       rankBadgeClass = 'bg-slate-800 text-slate-300 border border-white/15 font-semibold';
     }
 
+    // So riêng với Nhà Cái (Nhóm 1)
+    let vsDealerResult: 'win' | 'loss' | 'tie' | null = null;
+    if (a.groupNum !== 1 && group1Item && isComplete) {
+      const diff = a.score - group1Item.score;
+      if (Math.abs(diff) < 0.0001) vsDealerResult = 'tie';
+      else if (diff > 0) vsDealerResult = 'win';
+      else vsDealerResult = 'loss';
+    }
+
     return {
       ...a,
       isWinner,
@@ -639,9 +680,13 @@ export function computeAllGroupAnswers(
       winsCount: wins,
       lossesCount: losses,
       tiesCount: ties,
+      wonAgainst,
+      lostAgainst,
+      tiedWith,
       totalCompared,
       rankBadgeText,
-      rankBadgeClass
+      rankBadgeClass,
+      vsDealerResult
     };
   });
 
@@ -709,6 +754,11 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     confirmColor: 'red' | 'emerald';
     onConfirm: () => void;
   } | null>(null);
+
+  // Modal Bảng Ma Trận Đối Chiếu Chi Tiết Toàn Bộ Các Nhóm
+  const [showMatrixModal, setShowMatrixModal] = useState(false);
+  // Chế độ đối chiếu: 'free' (Đối kháng tự do tất cả các nhóm) | 'dealer' (Nhóm 1 làm Nhà Cái / Chương)
+  const [comparisonMode, setComparisonMode] = useState<'free' | 'dealer'>('free');
 
   // In-App Toast Notification (Thay thế alert local)
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1235,45 +1285,71 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
       {/* BANNER BẢNG ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM */}
       {completeGroupsCount > 1 && (
-        <div className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-indigo-950/80 border border-indigo-500/40 shadow-lg shadow-indigo-950/40 flex flex-col md:flex-row md:items-center justify-between gap-2.5 animate-fadeIn">
-          <div className="flex items-center space-x-2 flex-shrink-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 font-bold text-base shadow-inner">
-              👑
-            </div>
-            <div>
-              <div className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center space-x-1.5">
-                <span>BẢNG ĐỐI CHIẾU XẾP HẠNG ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})</span>
+        <div className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-indigo-950/80 border border-indigo-500/40 shadow-lg shadow-indigo-950/40 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 animate-fadeIn">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center space-x-2 flex-shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 font-bold text-base shadow-inner">
+                👑
               </div>
-              <p className="text-[10px] text-slate-400">Đã đối chiếu chéo tất cả {completeGroupsCount}/{numGroups} nhóm theo thực lực</p>
+              <div>
+                <div className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center space-x-1.5">
+                  <span>BẢNG ĐỐI CHIẾU XẾP HẠNG ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Đã đối chiếu chéo tất cả {completeGroupsCount}/{numGroups} nhóm theo thực lực</p>
+              </div>
             </div>
+
+            {/* Nút Mở Bảng Ma Trận Chi Tiết (Hiển thị trên mobile) */}
+            <button
+              type="button"
+              onClick={() => setShowMatrixModal(true)}
+              className="lg:hidden px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center space-x-1.5 border border-indigo-400/50 shadow-md shadow-indigo-600/30 transition-all active:scale-95 flex-shrink-0"
+              title="Xem Bảng Ma Trận Đối Chiếu Chi Tiết 3 - 8 Nhóm"
+            >
+              <Swords className="w-3.5 h-3.5 text-amber-300" />
+              <span>Đối Chiếu Chi Tiết</span>
+            </button>
           </div>
 
-          {/* Dây chuyền đối chiếu thứ hạng từ cao xuống thấp */}
-          <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar py-1 text-xs font-mono font-bold">
-            {sortedComplete.map((item, sIdx) => {
-              const r = item.rank;
-              return (
-                <React.Fragment key={item.groupNum}>
-                  {sIdx > 0 && <span className="text-slate-500 px-0.5 font-sans font-black select-none">&gt;</span>}
-                  <div
-                    className={`px-2 py-1 rounded-xl border flex items-center space-x-1.5 flex-shrink-0 cursor-default transition-all ${
-                      r === 1
-                        ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20 font-black'
-                        : r === 2
-                        ? 'bg-slate-200 text-slate-900 border-slate-100 font-bold'
-                        : r === 3
-                        ? 'bg-amber-700/85 text-amber-100 border-amber-600/70 font-bold'
-                        : 'bg-slate-800/90 text-slate-300 border-white/10'
-                    }`}
-                    title={`Thắng ${item.winsCount}/${item.totalCompared} nhóm khác`}
-                  >
-                    <span>{r === 1 ? '👑' : r === 2 ? '🥈' : r === 3 ? '🥉' : `#${r}`}</span>
-                    <span>{item.name}:</span>
-                    <span className="opacity-90">{item.label}</span>
-                  </div>
-                </React.Fragment>
-              );
-            })}
+          <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar py-0.5">
+            {/* Nút Mở Bảng Ma Trận Chi Tiết (Hiển thị trên desktop) */}
+            <button
+              type="button"
+              onClick={() => setShowMatrixModal(true)}
+              className="hidden lg:flex px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs items-center space-x-1.5 border border-indigo-400/50 shadow-md shadow-indigo-600/30 transition-all active:scale-95 flex-shrink-0"
+              title="Xem Bảng Ma Trận Đối Chiếu Chi Tiết 3 - 8 Nhóm"
+            >
+              <Swords className="w-3.5 h-3.5 text-amber-300" />
+              <span>Đối Chiếu Chi Tiết</span>
+            </button>
+
+            {/* Dây chuyền đối chiếu thứ hạng từ cao xuống thấp */}
+            <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar text-xs font-mono font-bold">
+              {sortedComplete.map((item, sIdx) => {
+                const r = item.rank;
+                return (
+                  <React.Fragment key={item.groupNum}>
+                    {sIdx > 0 && <span className="text-slate-500 px-0.5 font-sans font-black select-none">&gt;</span>}
+                    <div
+                      className={`px-2 py-1 rounded-xl border flex items-center space-x-1.5 flex-shrink-0 cursor-default transition-all ${
+                        r === 1
+                          ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20 font-black'
+                          : r === 2
+                          ? 'bg-slate-200 text-slate-900 border-slate-100 font-bold'
+                          : r === 3
+                          ? 'bg-amber-700/85 text-amber-100 border-amber-600/70 font-bold'
+                          : 'bg-slate-800/90 text-slate-300 border-white/10'
+                      }`}
+                      title={`Thắng ${item.winsCount}/${item.totalCompared} nhóm khác`}
+                    >
+                      <span>{r === 1 ? '👑' : r === 2 ? '🥈' : r === 3 ? '🥉' : `#${r}`}</span>
+                      <span>{item.name}:</span>
+                      <span className="opacity-90">{item.label}</span>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -1522,19 +1598,114 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   </button>
                 </div>
 
-                {/* Hàng 3: Kết quả nhóm + Đối chiếu thắng thua */}
-                <div className="space-y-1">
+                {/* Hàng 3: Kết quả nhóm + Đối chiếu thắng thua chi tiết */}
+                <div className="space-y-1.5 pt-0.5">
                   <div
                     className={`w-full py-1.5 px-2 rounded-xl text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
                   >
                     {evalResult.label}
                   </div>
-                  {ansItem && ansItem.rank && completeGroupsCount > 1 && (
-                    <div className="text-[10px] font-mono text-center text-slate-400 flex items-center justify-center space-x-1.5 py-0.5">
-                      <span>Đối chiếu:</span>
-                      <span className="text-emerald-400 font-bold">Thắng {ansItem.winsCount}</span>
-                      {ansItem.lossesCount > 0 && <span className="text-rose-400 font-bold">• Thua {ansItem.lossesCount}</span>}
-                      {ansItem.tiesCount > 0 && <span className="text-amber-400 font-bold">• Hòa {ansItem.tiesCount}</span>}
+
+                  {ansItem && ansItem.isComplete && completeGroupsCount > 1 && (
+                    <div className="space-y-1 pt-1 text-[10px] font-mono">
+                      {/* Tóm tắt Thắng/Thua/Hòa & Nút mở ma trận */}
+                      <div
+                        onClick={() => setShowMatrixModal(true)}
+                        className="flex items-center justify-between px-1.5 py-1 rounded-lg bg-slate-950/60 border border-white/5 hover:border-indigo-400/40 cursor-pointer transition-all text-slate-400 hover:text-slate-200"
+                        title="Bấm để xem Bảng Ma Trận Đối Chiếu Chi Tiết"
+                      >
+                        <span className="font-semibold text-slate-400 flex items-center space-x-1">
+                          <Swords className="w-3 h-3 text-indigo-400" />
+                          <span>Đối chiếu ({ansItem.totalCompared} nhóm):</span>
+                        </span>
+                        <div className="flex items-center space-x-1 font-bold">
+                          <span className="text-emerald-400">{ansItem.winsCount} Thắng</span>
+                          <span className="text-slate-600">/</span>
+                          <span className="text-rose-400">{ansItem.lossesCount} Thua</span>
+                          {ansItem.tiesCount > 0 && (
+                            <>
+                              <span className="text-slate-600">/</span>
+                              <span className="text-amber-400">{ansItem.tiesCount} Hòa</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Hiển thị cụ thể ĂN những nhóm nào */}
+                      {ansItem.wonAgainst.length > 0 && (
+                        <div className="flex items-start space-x-1 bg-emerald-950/40 border border-emerald-500/25 px-1.5 py-1 rounded-lg text-emerald-300">
+                          <span className="font-bold whitespace-nowrap text-[9.5px] flex-shrink-0 text-emerald-400">✓ Ăn:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {ansItem.wonAgainst.map((w) => (
+                              <span
+                                key={w.groupNum}
+                                className="px-1 py-0.2 rounded bg-emerald-900/70 border border-emerald-500/40 text-[9px] font-bold text-emerald-200"
+                                title={`${w.name}: ${w.label}`}
+                              >
+                                {w.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Hiển thị cụ thể THUA những nhóm nào */}
+                      {ansItem.lostAgainst.length > 0 && (
+                        <div className="flex items-start space-x-1 bg-rose-950/40 border border-rose-500/25 px-1.5 py-1 rounded-lg text-rose-300">
+                          <span className="font-bold whitespace-nowrap text-[9.5px] flex-shrink-0 text-rose-400">✗ Thua:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {ansItem.lostAgainst.map((l) => (
+                              <span
+                                key={l.groupNum}
+                                className="px-1 py-0.2 rounded bg-rose-900/70 border border-rose-500/40 text-[9px] font-bold text-rose-200"
+                                title={`${l.name}: ${l.label}`}
+                              >
+                                {l.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Hiển thị cụ thể HÒA những nhóm nào */}
+                      {ansItem.tiedWith.length > 0 && (
+                        <div className="flex items-start space-x-1 bg-amber-950/40 border border-amber-500/25 px-1.5 py-1 rounded-lg text-amber-300">
+                          <span className="font-bold whitespace-nowrap text-[9.5px] flex-shrink-0 text-amber-400">= Hòa:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {ansItem.tiedWith.map((t) => (
+                              <span
+                                key={t.groupNum}
+                                className="px-1 py-0.2 rounded bg-amber-900/70 border border-amber-500/40 text-[9px] font-bold text-amber-200"
+                                title={`${t.name}: ${t.label}`}
+                              >
+                                {t.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Kết quả so với Nhà Cái (Nhóm 1) nếu có */}
+                      {comparisonMode === 'dealer' && groupNum !== 1 && (
+                        <div className="pt-0.5 flex items-center justify-between text-[9.5px] border-t border-white/5">
+                          <span className="text-slate-400">So với Nhà Cái:</span>
+                          {ansItem.vsDealerResult === 'win' ? (
+                            <span className="px-1.5 py-0.2 rounded bg-emerald-600/40 text-emerald-300 font-bold border border-emerald-500/40">
+                              Ăn Cái (Thắng)
+                            </span>
+                          ) : ansItem.vsDealerResult === 'loss' ? (
+                            <span className="px-1.5 py-0.2 rounded bg-rose-600/40 text-rose-300 font-bold border border-rose-500/40">
+                              Thua Cái
+                            </span>
+                          ) : ansItem.vsDealerResult === 'tie' ? (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-500/40 text-amber-300 font-bold border border-amber-500/40">
+                              Hòa Cái
+                            </span>
+                          ) : (
+                            <span className="text-slate-500 italic">Chờ bài</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1720,6 +1891,388 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             >
               Đã Hiểu & Nhập Lại
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 8b. BẢNG MA TRẬN ĐỐI CHIẾU CHÉO TẤT CẢ CÁC NHÓM (CROSS-CHECK MATRIX MODAL) */}
+      {showMatrixModal && (
+        <div className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-indigo-500/50 rounded-2xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden ring-1 ring-indigo-400/40">
+            {/* Header */}
+            <div className="px-4 py-3 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 border-b border-indigo-500/30 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center space-x-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 font-bold flex-shrink-0">
+                  <Swords className="w-4 h-4" />
+                </div>
+                <div className="truncate">
+                  <h3 className="font-black text-sm sm:text-base text-white flex items-center space-x-2 truncate">
+                    <span>MA TRẬN ĐỐI CHIẾU CHÉO TẤT CẢ CÁC NHÓM</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-600/40 text-indigo-200 border border-indigo-400/40 font-mono flex-shrink-0">
+                      {completeGroupsCount}/{numGroups} Nhóm
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {gameMode === '3cards'
+                      ? '3 Lá: Sáp (1-1-1 cao nhất) > Liêng (12-13-1 cao nhất) > Ba Tây > Điểm thường'
+                      : '2 Lá: Xì Bàng > Xì Lát > Ngũ Linh > Điểm thường'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 flex-shrink-0">
+                {/* Switch Mode: Đối Kháng Tất Cả vs Nhóm 1 Làm Cái */}
+                <div className="hidden sm:flex items-center bg-slate-950 p-0.5 rounded-lg border border-white/10 text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setComparisonMode('free')}
+                    className={`px-2 py-1 rounded transition-all ${
+                      comparisonMode === 'free'
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Đối Kháng Tất Cả
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setComparisonMode('dealer')}
+                    className={`px-2 py-1 rounded transition-all ${
+                      comparisonMode === 'dealer'
+                        ? 'bg-amber-500 text-slate-950 font-black shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Nhóm 1 Làm Cái
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMatrixModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                  title="Đóng bảng ma trận"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Mobile Mode Switcher */}
+            <div className="sm:hidden px-3 py-1.5 bg-slate-950/80 border-b border-white/10 flex items-center justify-between text-xs">
+              <span className="text-slate-400 font-semibold">Chế độ xem:</span>
+              <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-white/10 text-[10px] font-bold">
+                <button
+                  type="button"
+                  onClick={() => setComparisonMode('free')}
+                  className={`px-2 py-1 rounded ${comparisonMode === 'free' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}
+                >
+                  Đối Kháng Tất Cả
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setComparisonMode('dealer')}
+                  className={`px-2 py-1 rounded ${comparisonMode === 'dealer' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400'}`}
+                >
+                  Nhóm 1 Làm Cái
+                </button>
+              </div>
+            </div>
+
+            {/* Body scrollable */}
+            <div className="p-3 sm:p-4 space-y-4 overflow-y-auto no-scrollbar flex-1">
+              {/* Leaderboard Banner */}
+              {sortedComplete.length > 0 && (
+                <div className="p-2.5 sm:p-3 rounded-xl bg-slate-950/90 border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-2 text-xs font-mono shadow-inner">
+                  <div className="flex items-center space-x-1.5 flex-shrink-0">
+                    <span className="text-amber-400 font-bold">👑 THỨ BẬC TỔNG SẮP:</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar py-0.5">
+                    {sortedComplete.map((it, idx) => (
+                      <React.Fragment key={it.groupNum}>
+                        {idx > 0 && <span className="text-slate-600 font-sans font-black select-none">&gt;</span>}
+                        <span
+                          className={`px-2 py-0.5 rounded-lg font-bold border text-[11px] whitespace-nowrap ${
+                            it.rank === 1
+                              ? 'bg-amber-400 text-slate-950 border-amber-300 font-black shadow-sm'
+                              : it.rank === 2
+                              ? 'bg-slate-200 text-slate-950 border-slate-100'
+                              : it.rank === 3
+                              ? 'bg-amber-700/85 text-amber-100 border-amber-600'
+                              : 'bg-slate-800 text-slate-300 border-white/10'
+                          }`}
+                        >
+                          {it.rank === 1 ? '👑 ' : it.rank === 2 ? '🥈 ' : it.rank === 3 ? '🥉 ' : `#${it.rank} `}
+                          {it.name} ({it.label})
+                        </span>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* BẢNG MA TRẬN ĐỐI CHIẾU TRỰC TIẾP (NxN Table) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-amber-300 uppercase tracking-wide flex items-center space-x-1.5">
+                    <span>1. MA TRẬN ĐỐI ĐẦU TRỰC TIẾP (HÀNG VS CỘT)</span>
+                  </h4>
+                  <div className="flex items-center space-x-2 text-[10px] font-mono">
+                    <span className="text-emerald-400 font-bold">🟢 Ăn (Thắng)</span>
+                    <span className="text-rose-400 font-bold">🔴 Thua</span>
+                    <span className="text-amber-400 font-bold">🟡 Hòa</span>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-950/90 shadow-inner">
+                  <table className="w-full text-left text-xs font-mono border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900/90 border-b border-white/10 text-slate-300">
+                        <th className="p-2.5 font-bold sticky left-0 bg-slate-900/95 z-10 min-w-[130px]">
+                          Nhóm \ Đối thủ
+                        </th>
+                        {Array.from({ length: numGroups }).map((_, cIdx) => {
+                          const colG = cIdx + 1;
+                          const colName = groupNames[colG] || `Nhóm ${colG}`;
+                          const colAns = answerByGroupNum[colG];
+                          return (
+                            <th key={colG} className="p-2 text-center min-w-[110px] border-l border-white/5">
+                              <div className="font-bold text-slate-200 truncate">{colName}</div>
+                              <div className="text-[10px] text-slate-400 truncate font-normal">
+                                {colAns?.label || 'Chờ bài'}
+                              </div>
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {Array.from({ length: numGroups }).map((_, rIdx) => {
+                        const rowG = rIdx + 1;
+                        const rowName = groupNames[rowG] || `Nhóm ${rowG}`;
+                        const rowAns = answerByGroupNum[rowG];
+
+                        return (
+                          <tr key={rowG} className="hover:bg-slate-850/40 transition-colors">
+                            {/* Tiêu đề hàng */}
+                            <td className="p-2.5 font-bold sticky left-0 bg-slate-900/95 z-10 border-r border-white/10">
+                              <div className="flex items-center space-x-1.5">
+                                {rowAns?.rank === 1 && <span>👑</span>}
+                                <span className="text-white">{rowName}</span>
+                                {rowAns?.rank && (
+                                  <span className={`text-[9px] px-1 py-0.2 rounded font-black ${rowAns.rankBadgeClass}`}>
+                                    #{rowAns.rank}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-normal truncate">
+                                {rowAns?.label || 'Chờ bài'}
+                              </div>
+                            </td>
+
+                            {/* Các ô đối chiếu chéo (Row vs Col) */}
+                            {Array.from({ length: numGroups }).map((_, cIdx) => {
+                              const colG = cIdx + 1;
+                              const colAns = answerByGroupNum[colG];
+
+                              if (rowG === colG) {
+                                return (
+                                  <td key={colG} className="p-2 text-center text-slate-600 bg-slate-900/40 border-l border-white/5">
+                                    —
+                                  </td>
+                                );
+                              }
+
+                              if (!rowAns?.isComplete || !colAns?.isComplete) {
+                                return (
+                                  <td key={colG} className="p-2 text-center text-slate-500 text-[10px] border-l border-white/5">
+                                    Chờ bài
+                                  </td>
+                                );
+                              }
+
+                              const diff = rowAns.score - colAns.score;
+                              if (Math.abs(diff) < 0.0001) {
+                                return (
+                                  <td key={colG} className="p-2 text-center font-bold text-amber-300 bg-amber-500/10 border-l border-white/5 whitespace-nowrap">
+                                    🟡 Hòa
+                                  </td>
+                                );
+                              } else if (diff > 0) {
+                                return (
+                                  <td key={colG} className="p-2 text-center font-bold text-emerald-300 bg-emerald-500/15 border-l border-white/5 whitespace-nowrap">
+                                    🟢 Ăn
+                                  </td>
+                                );
+                              } else {
+                                return (
+                                  <td key={colG} className="p-2 text-center font-bold text-rose-300 bg-rose-500/15 border-l border-white/5 whitespace-nowrap">
+                                    🔴 Thua
+                                  </td>
+                                );
+                              }
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* BẢNG TỔNG KẾT CHI TIẾT TỪNG NHÓM (ĂN NHÓM NÀO, THUA NHÓM NÀO) */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-black text-amber-300 uppercase tracking-wide">
+                  2. CHI TIẾT THẮNG - THUA CỦA TỪNG NHÓM
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {allGroupAnswers.map((g) => {
+                    return (
+                      <div
+                        key={g.groupNum}
+                        className={`p-3 rounded-xl border flex flex-col justify-between space-y-2 transition-all ${
+                          g.isWinner
+                            ? 'bg-amber-500/10 border-amber-400/60 ring-1 ring-amber-400/30 shadow-md shadow-amber-500/10'
+                            : 'bg-slate-950/80 border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-sm text-white">{g.name}</span>
+                            {g.rank && (
+                              <span className={`text-[10px] px-1.5 py-0.2 rounded font-black ${g.rankBadgeClass}`}>
+                                {g.rankBadgeText}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-lg border ${g.highlightClass}`}>
+                            {g.label || 'Chưa xong'}
+                          </span>
+                        </div>
+
+                        {g.isComplete ? (
+                          <div className="space-y-1.5 text-xs font-mono">
+                            <div className="flex items-center justify-between text-slate-400 text-[11px] pb-1 border-b border-white/5">
+                              <span>Tỷ số đối kháng ({g.totalCompared} nhóm):</span>
+                              <div className="flex items-center space-x-1.5 font-bold">
+                                <span className="text-emerald-400">Thắng {g.winsCount}</span>
+                                <span className="text-slate-600">/</span>
+                                <span className="text-rose-400">Thua {g.lossesCount}</span>
+                                {g.tiesCount > 0 && (
+                                  <>
+                                    <span className="text-slate-600">/</span>
+                                    <span className="text-amber-400">Hòa {g.tiesCount}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Cụ thể ăn nhóm nào */}
+                            {g.wonAgainst.length > 0 ? (
+                              <div className="flex items-start space-x-1.5 bg-emerald-950/40 border border-emerald-500/30 p-1.5 rounded-lg">
+                                <span className="text-emerald-400 font-bold whitespace-nowrap text-[11px]">
+                                  ✓ Ăn ({g.wonAgainst.length}):
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {g.wonAgainst.map((w) => (
+                                    <span
+                                      key={w.groupNum}
+                                      className="px-1.5 py-0.5 rounded bg-emerald-900/80 text-emerald-200 border border-emerald-500/40 text-[10px] font-bold"
+                                    >
+                                      {w.name} ({w.label})
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-slate-500 italic pl-1">Không ăn được nhóm nào</div>
+                            )}
+
+                            {/* Cụ thể thua nhóm nào */}
+                            {g.lostAgainst.length > 0 ? (
+                              <div className="flex items-start space-x-1.5 bg-rose-950/40 border border-rose-500/30 p-1.5 rounded-lg">
+                                <span className="text-rose-400 font-bold whitespace-nowrap text-[11px]">
+                                  ✗ Thua ({g.lostAgainst.length}):
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {g.lostAgainst.map((l) => (
+                                    <span
+                                      key={l.groupNum}
+                                      className="px-1.5 py-0.5 rounded bg-rose-900/80 text-rose-200 border border-rose-500/40 text-[10px] font-bold"
+                                    >
+                                      {l.name} ({l.label})
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-emerald-400 font-bold pl-1">
+                                ✓ Thắng tuyệt đối (Bất bại trước mọi nhóm)
+                              </div>
+                            )}
+
+                            {/* Cụ thể hòa nhóm nào */}
+                            {g.tiedWith.length > 0 && (
+                              <div className="flex items-start space-x-1.5 bg-amber-950/40 border border-amber-500/30 p-1.5 rounded-lg">
+                                <span className="text-amber-400 font-bold whitespace-nowrap text-[11px]">
+                                  = Hòa ({g.tiedWith.length}):
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {g.tiedWith.map((t) => (
+                                    <span
+                                      key={t.groupNum}
+                                      className="px-1.5 py-0.5 rounded bg-amber-900/80 text-amber-200 border border-amber-500/40 text-[10px] font-bold"
+                                    >
+                                      {t.name} ({t.label})
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Chế độ Nhà Cái (Nhóm 1 làm Cái) */}
+                            {comparisonMode === 'dealer' && g.groupNum !== 1 && (
+                              <div className="pt-1 border-t border-white/10 flex items-center justify-between text-[11px]">
+                                <span className="text-slate-400">So với Nhà Cái (Nhóm 1):</span>
+                                {g.vsDealerResult === 'win' ? (
+                                  <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-bold">
+                                    Ăn Cái (Thắng)
+                                  </span>
+                                ) : g.vsDealerResult === 'loss' ? (
+                                  <span className="px-2 py-0.5 rounded bg-rose-600 text-white font-bold">
+                                    Thua Cái
+                                  </span>
+                                ) : g.vsDealerResult === 'tie' ? (
+                                  <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 font-bold">
+                                    Hòa Cái
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 italic">Chưa xác định</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-500 italic">Chưa đủ bài để đối chiếu</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-4 py-2.5 bg-slate-950 border-t border-white/10 flex items-center justify-between text-xs text-slate-400">
+              <span>Bảng đối chiếu cập nhật trực tiếp theo từng lá bài nhập vào</span>
+              <button
+                type="button"
+                onClick={() => setShowMatrixModal(false)}
+                className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold transition-all"
+              >
+                Đóng
+              </button>
+            </div>
           </div>
         </div>
       )}
