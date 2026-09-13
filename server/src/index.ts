@@ -343,10 +343,25 @@ io.on('connection', (socket) => {
     const targetRoomId = data?.roomId || data?.userId || 'default';
     db.clearCardEntries(targetRoomId);
 
-    // Làm mới hoàn toàn bộ đệm Replay video của phiên stream này
-    const session = db.getActiveStream(targetRoomId) || db.getLatestStream(targetRoomId);
-    if (session && session.streamKey) {
-      resetReplaySession(session.streamKey);
+    const liveSession = db.getActiveStream(targetRoomId);
+    const latestSession = db.getLatestStream(targetRoomId);
+
+    if (liveSession && liveSession.streamKey) {
+      // 1. Nếu stream đang LIVE: làm mới bộ đệm replay về 0s và cập nhật startedAt của round mới
+      resetReplaySession(liveSession.streamKey);
+      db.resetStreamStartTime(liveSession.streamKey);
+      const updated = db.getActiveStream(targetRoomId);
+      io.to(`room_${targetRoomId}`).emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session: updated });
+      io.to('room_admin').emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session: updated });
+    } else if (latestSession) {
+      // 2. Nếu stream đã kết thúc (không còn LIVE): người dùng bấm "Xong Phiên" hoàn tất xem lại
+      // Xóa toàn bộ file replay trên đĩa và xóa phiên kết thúc khỏi database
+      if (latestSession.streamKey) {
+        resetReplaySession(latestSession.streamKey);
+      }
+      db.removeEndedStreams(targetRoomId);
+      io.to(`room_${targetRoomId}`).emit('stream_status_changed', { roomId: targetRoomId, status: 'IDLE', session: null });
+      io.to('room_admin').emit('stream_status_changed', { roomId: targetRoomId, status: 'IDLE', session: null });
     }
 
     const ts = Date.now();

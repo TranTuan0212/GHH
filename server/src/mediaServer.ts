@@ -123,15 +123,16 @@ export function stopFfmpegOnly(streamKey: string): void {
  */
 export function resetReplaySession(streamKey: string): boolean {
   const session = hlsSessions.get(streamKey);
-  if (!session) return false;
 
-  // Dừng tiến trình ffmpeg replay cũ (process index 0)
-  const oldReplayFfmpeg = session.ffmpegProcesses[0];
-  if (oldReplayFfmpeg && !oldReplayFfmpeg.killed) {
-    try { oldReplayFfmpeg.kill('SIGTERM'); } catch {}
+  // 1. Dừng tiến trình ffmpeg replay cũ nếu stream đang chạy
+  if (session) {
+    const oldReplayFfmpeg = session.ffmpegProcesses[0];
+    if (oldReplayFfmpeg && !oldReplayFfmpeg.killed) {
+      try { oldReplayFfmpeg.kill('SIGTERM'); } catch {}
+    }
   }
 
-  // Xóa sạch file .ts và index.m3u8 cũ trong thư mục replay
+  // 2. Xóa sạch file .ts và index.m3u8 cũ trong thư mục replay
   const outputDir = getStreamDir('replay', streamKey);
   try {
     if (fs.existsSync(outputDir)) {
@@ -141,12 +142,31 @@ export function resetReplaySession(streamKey: string): boolean {
           try { fs.unlinkSync(path.join(outputDir, file)); } catch {}
         }
       }
+      if (!session) {
+        try { fs.rmdirSync(outputDir); } catch {}
+      }
     }
   } catch (err) {
     console.error(`[MediaServer] Lỗi dọn dẹp file replay cũ cho ${streamKey}:`, err);
   }
 
-  // Khởi động lại ffmpeg replay mới
+  // Nếu stream đã kết thúc (không còn trong hlsSessions), dọn dẹp cả thư mục live và replay
+  if (!session) {
+    const liveDir = getStreamDir('live', streamKey);
+    try {
+      if (fs.existsSync(liveDir)) {
+        const files = fs.readdirSync(liveDir);
+        for (const file of files) {
+          try { fs.unlinkSync(path.join(liveDir, file)); } catch {}
+        }
+        try { fs.rmdirSync(liveDir); } catch {}
+      }
+    } catch {}
+    console.log(`[MediaServer] Đã xóa sạch toàn bộ video replay và live cũ của stream ${streamKey} (phiên stream đã dừng)`);
+    return true;
+  }
+
+  // 3. Nếu stream vẫn đang LIVE: Khởi động lại ffmpeg replay mới để bắt đầu từ mốc 0s của phiên mới
   const bundledFfmpeg = path.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
   const ffmpegPath = process.env.FFMPEG_PATH || (fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
   const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));

@@ -73,14 +73,11 @@ export const App: React.FC = () => {
 
     newSocket.on('round_finished', () => {
       setCardEntries([]);
+      setActiveStream((curr) => (curr?.status === 'ENDED' ? null : curr));
     });
 
     newSocket.on('stream_status_changed', (data) => {
-      // Khi stream bắt đầu hoặc kết thúc, luôn giữ lại data.session để người xem có thể
-      // tiếp tục xem lại (Replay/DVR) toàn bộ các frame vừa qua thay vì bị mất trắng màn hình.
-      if (data.session) {
-        setActiveStream(data.session);
-      }
+      setActiveStream(data?.session || null);
     });
 
     return () => {
@@ -208,6 +205,9 @@ export const App: React.FC = () => {
       socket.emit('finish_round', { roomId: currentRoomId });
     }
     setCardEntries([]);
+    if (activeStream?.status === 'ENDED') {
+      setActiveStream(null);
+    }
   };
 
   // Undo last card callback

@@ -271,6 +271,29 @@ class Database {
     return session;
   }
 
+  removeEndedStreams(userId?: string): number {
+    const initialCount = this.data.streamSessions.length;
+    this.data.streamSessions = this.data.streamSessions.filter(s => {
+      if (s.status === 'LIVE') return true;
+      if (userId && s.userId !== userId) return true;
+      return false;
+    });
+    const removed = initialCount - this.data.streamSessions.length;
+    if (removed > 0) {
+      this.save();
+    }
+    return removed;
+  }
+
+  resetStreamStartTime(streamIdOrKey: string): StreamSession | undefined {
+    const session = this.data.streamSessions.find(s => s.id === streamIdOrKey || s.streamKey === streamIdOrKey);
+    if (session) {
+      session.startedAt = new Date().toISOString();
+      this.save();
+    }
+    return session;
+  }
+
   // GPS Logs
   addGpsLog(log: GpsLog) {
     this.data.gpsLogs.push(log);

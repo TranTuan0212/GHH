@@ -359,6 +359,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setDragRatio(null);
       dragRatioRef.current = null;
       setCurrentTime(0);
+      setDuration(0);
       setHlsWindowStart(0);
       setHlsLiveEdge(0);
       setLiveElapsedSeconds(0);
@@ -367,20 +368,42 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
       } catch {}
 
-      if (videoRef.current) {
-        videoRef.current.currentTime = 0;
-      }
-
-      // 2. Dừng nạp segment cũ và khởi động lại sau 1.2s khi server tạo xong segment đầu tiên của phiên mới
-      if (hlsRef.current) {
-        try {
-          hlsRef.current.stopLoad();
-          setTimeout(() => {
-            if (hlsRef.current) {
-              hlsRef.current.startLoad();
-            }
-          }, 1200);
-        } catch {}
+      // 2. Nếu stream đã kết thúc hoặc không còn stream: giải phóng hoàn toàn video & HLS player
+      if (!stream || stream.status === 'ENDED') {
+        if (replayVideoRef.current) {
+          replayVideoRef.current.removeAttribute('src');
+          replayVideoRef.current.load();
+        }
+        if (liveVideoRef.current) {
+          liveVideoRef.current.removeAttribute('src');
+          liveVideoRef.current.load();
+        }
+        if (hlsRef.current) {
+          try { hlsRef.current.destroy(); } catch {}
+          hlsRef.current = null;
+        }
+        if (peerConnectionRef.current) {
+          try { peerConnectionRef.current.close(); } catch {}
+          peerConnectionRef.current = null;
+        }
+        loadedStreamKeyRef.current = null;
+        setHasFrame(false);
+        setHasLiveFrame(false);
+      } else {
+        // 3. Nếu luồng vẫn đang LIVE: tua về mốc 0s của phiên mới và nạp lại HLS sau 1.2s
+        if (videoRef.current) {
+          videoRef.current.currentTime = 0;
+        }
+        if (hlsRef.current) {
+          try {
+            hlsRef.current.stopLoad();
+            setTimeout(() => {
+              if (hlsRef.current) {
+                hlsRef.current.startLoad();
+              }
+            }, 1200);
+          } catch {}
+        }
       }
     };
 
@@ -391,7 +414,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       socket.off('initial_state', handleInitialState);
       socket.off('round_finished', handleRoundFinished);
     };
-  }, [socket, roomId, stream?.streamKey]);
+  }, [socket, roomId, stream?.streamKey, stream?.status]);
 
   // Khi phiên stream kết thúc hoặc được mở ở trạng thái ENDED:
   // Tự động chuyển sang chế độ Replay để người dùng có thể xem lại toàn bộ video/DVR
@@ -401,6 +424,41 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setIsLive(false);
     }
   }, [stream?.status]);
+
+  // Khi không còn stream (hoặc stream đã bị xóa khi kết thúc phiên): dọn dẹp sạch toàn bộ video và mốc tua
+  useEffect(() => {
+    if (!stream) {
+      if (replayVideoRef.current) {
+        replayVideoRef.current.removeAttribute('src');
+        replayVideoRef.current.load();
+      }
+      if (liveVideoRef.current) {
+        liveVideoRef.current.removeAttribute('src');
+        liveVideoRef.current.load();
+      }
+      if (hlsRef.current) {
+        try { hlsRef.current.destroy(); } catch {}
+        hlsRef.current = null;
+      }
+      if (peerConnectionRef.current) {
+        try { peerConnectionRef.current.close(); } catch {}
+        peerConnectionRef.current = null;
+      }
+      loadedStreamKeyRef.current = null;
+      setHasFrame(false);
+      setHasLiveFrame(false);
+      setCurrentTime(0);
+      setDuration(0);
+      setHlsWindowStart(0);
+      setHlsLiveEdge(0);
+      setLiveElapsedSeconds(0);
+      setDragRatio(null);
+      dragRatioRef.current = null;
+      updateFrozenTimeline(null);
+      setIsLive(true);
+      isLiveRef.current = true;
+    }
+  }, [stream]);
 
   // WebRTC Live player (WHEP). Kết nối trực tiếp để xem trực tiếp siêu tốc độ (<0.2s)
   // Chỉ kết nối khi luồng đang LIVE thực sự (tránh báo lỗi 404 WHEP khi app iPhone tắt/dừng live)
@@ -1224,11 +1282,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Chrome/Safari tối thiểu hỗ trợ playbackRate = 0.0625 (1/16). 0.05 sẽ throw NotSupportedError.
   const speedOptions = [0.0625, 0.1, 0.125, 0.25, 0.5, 0.75, 1.0];
-  const activeDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
-  const timelineStart = frozenTimeline?.start ?? hlsWindowStart;
-  const currentLiveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (timelineStart + activeDuration);
+  const hasStreamData = !!stream && (hasFrame || hasLiveFrame || (hlsLiveEdge > hlsWindowStart) || duration > 0);
+  const activeDuration = !hasStreamData
+    ? 0
+    : Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
+  const timelineStart = !hasStreamData ? 0 : (frozenTimeline?.start ?? hlsWindowStart);
+  const currentLiveEdge = !hasStreamData ? 0 : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (timelineStart + activeDuration));
   // Khi đang xem Live: timelineEnd dài ra theo camera; Khi đang xem lại (Replay): timelineEnd được giữ cố định theo frozenTimeline để mốc tua không bị trôi giật
-  const timelineEnd = isLive ? currentLiveEdge : (frozenTimeline?.end ?? currentLiveEdge);
+  const timelineEnd = !hasStreamData ? 0 : (isLive ? currentLiveEdge : (frozenTimeline?.end ?? currentLiveEdge));
 
   // YouTube-style seekbar state
   const seekbarRef = useRef<HTMLDivElement | null>(null);
@@ -1267,7 +1328,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleSeekbarMouseMove = (e: React.MouseEvent) => {
     const bar = seekbarRef.current;
-    if (!bar) return;
+    if (!bar || !hasStreamData || activeDuration === 0) return;
     const rect = bar.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const span = Math.max(1, timelineEnd - timelineStart);
@@ -1290,7 +1351,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const handleSeekbarMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     const bar = seekbarRef.current;
-    if (!bar) return;
+    if (!bar || !hasStreamData || activeDuration === 0) return;
 
     const initialRatio = getSeekRatio(e.clientX);
     setIsDraggingSeek(true);
@@ -1363,7 +1424,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Touch support
   const handleSeekbarTouchStart = (e: React.TouchEvent) => {
-    if (!e.touches[0]) return;
+    if (!e.touches[0] || !hasStreamData || activeDuration === 0) return;
     const initialRatio = getSeekRatio(e.touches[0].clientX);
     setIsDraggingSeek(true);
     isDraggingSeekRef.current = true;
@@ -1431,18 +1492,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   };
 
   // Progress ratio cho fill bar: ưu tiên vị trí tay đang kéo mượt mà 60fps
-  const totalSpan = Math.max(1, timelineEnd - timelineStart);
-  const currentVideoRatio = isLive
-    ? 1.0
-    : (timelineEnd > timelineStart
-        ? Math.max(0, Math.min(1, (currentTime - timelineStart) / totalSpan))
-        : 0);
+  const totalSpan = !hasStreamData || activeDuration === 0 ? 0 : Math.max(1, timelineEnd - timelineStart);
+  const currentVideoRatio = (!hasStreamData || activeDuration === 0)
+    ? 0
+    : (isLive
+        ? 1.0
+        : (timelineEnd > timelineStart
+            ? Math.max(0, Math.min(1, (currentTime - timelineStart) / totalSpan))
+            : 0));
   const seekFillRatio = dragRatio !== null ? dragRatio : currentVideoRatio;
 
   // Thời gian hiển thị ở đầu bên trái: đi theo tay kéo mượt mà, khi Live luôn hiện mốc mới nhất
-  const displayCurrentTime = dragRatio !== null
-    ? dragRatio * totalSpan
-    : (isLive ? totalSpan : Math.max(0, currentTime - timelineStart));
+  const displayCurrentTime = (!hasStreamData || activeDuration === 0)
+    ? 0
+    : (dragRatio !== null
+        ? dragRatio * totalSpan
+        : (isLive ? totalSpan : Math.max(0, currentTime - timelineStart)));
 
   return (
     <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col">
