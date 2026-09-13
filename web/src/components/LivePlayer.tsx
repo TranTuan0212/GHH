@@ -109,6 +109,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const [hasFrame, setHasFrame] = useState(false);
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
+  const hasLiveFrameRef = useRef<boolean>(false);
+  hasLiveFrameRef.current = hasLiveFrame;
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
   const [isLive, setIsLive] = useState(true);
@@ -299,11 +301,24 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const whepUrl = stream?.streamKey
     ? (() => {
-        const endpoint = new URL(detectedServerUrl);
-        endpoint.port = '8889';
-        endpoint.pathname = `/${stream.streamKey}/whep`;
-        endpoint.search = '';
-        return endpoint.toString();
+        try {
+          const endpoint = new URL(detectedServerUrl);
+          if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
+            endpoint.protocol = 'https:';
+            if (typeof window !== 'undefined' && window.location.host) {
+              endpoint.host = window.location.host;
+            }
+            endpoint.port = '';
+            endpoint.pathname = `/${stream.streamKey}/whep`;
+          } else {
+            endpoint.port = '8889';
+            endpoint.pathname = `/${stream.streamKey}/whep`;
+          }
+          endpoint.search = '';
+          return endpoint.toString();
+        } catch {
+          return '';
+        }
       })()
     : '';
 
@@ -605,10 +620,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         liveVideoRef.current.play().catch(() => {});
         replayVideoRef.current?.pause();
       } else if (replayVideoRef.current) {
-        // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp!
-        replayVideoRef.current.muted = isMuted;
-        replayVideoRef.current.playbackRate = 1.0;
-        replayVideoRef.current.play().catch(() => {});
+        // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
+        const video = replayVideoRef.current;
+        video.muted = isMuted;
+        video.playbackRate = 1.0;
+        if (video.seekable.length > 0) {
+          const end = video.seekable.end(video.seekable.length - 1);
+          if (video.currentTime < end - 3 || video.currentTime === 0) {
+            video.currentTime = Math.max(0, end - 1.5);
+          }
+        }
+        video.play().catch(() => {});
       }
     } else {
       liveVideoRef.current?.pause();
@@ -765,6 +787,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const end = last.start + last.duration;
           setHlsWindowStart(start);
           setHlsLiveEdge(end);
+
+          // Cứu nguy nếu đang ở Live mode nhưng chưa có WebRTC live frame:
+          // Nếu video đang bị đứng ở currentTime=0 hoặc trước start PTS, nhảy ngay tới live edge!
+          if (isLiveRef.current && !hasLiveFrameRef.current) {
+            if (video.currentTime < start || (video.currentTime === 0 && end > 2)) {
+              console.log(`[LivePlayer] Nhảy HLS về live edge: ${end - 1.5}s (start=${start}, current=${video.currentTime})`);
+              video.currentTime = Math.max(start, end - 1.5);
+              video.play().catch(() => {});
+            }
+          }
         }
       });
       hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
@@ -791,9 +823,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           // Khi đang ở chế độ Live:
           // Nếu không có WebRTC (hasLiveFrame = false), HLS phát trực tiếp cho người xem
           video.muted = isMuted;
-          video.play().catch((err) => {
-            console.warn('[LivePlayer] Autoplay HLS live:', err);
-          });
+          window.setTimeout(() => {
+            if (video.seekable.length > 0) {
+              const end = video.seekable.end(video.seekable.length - 1);
+              video.currentTime = Math.max(0, end - 1.5);
+            }
+            video.play().catch((err) => {
+              console.warn('[LivePlayer] Autoplay HLS live:', err);
+            });
+          }, 100);
         }
       });
 
@@ -844,16 +882,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           setSourceIsPortrait(video.videoHeight > video.videoWidth);
         }
 
-        // Xử lý tự động cứu khi video bị khựng (stalled / waiting) trong chế độ xem lại
+        // Xử lý tự động cứu khi video bị khựng (stalled / waiting)
         if (ev.type === 'waiting' || ev.type === 'stalled') {
-          if (!isLiveRef.current && !video.paused) {
+          if (!video.paused) {
             if (stallTimer) window.clearTimeout(stallTimer);
             stallTimer = window.setTimeout(() => {
-              if (!isLiveRef.current && !video.paused && video.readyState < 3) {
-                console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 3500ms -> Nhích nhẹ để tiếp tục phát...');
-                video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.1);
+              if (!video.paused && video.readyState < 3) {
+                if (!isLiveRef.current) {
+                  console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 3500ms -> Nhích nhẹ để tiếp tục phát...');
+                  video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.1);
+                } else if (!hasLiveFrameRef.current) {
+                  console.log('[LivePlayer] Video live HLS bị khựng -> Nhảy về live edge...');
+                  const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0;
+                  if (end > 0) {
+                    video.currentTime = Math.max(0, end - 1.5);
+                    video.play().catch(() => {});
+                  }
+                }
               }
-            }, 3500);
+            }, 2500);
           }
         } else if (ev.type === 'playing' || ev.type === 'canplay') {
           if (stallTimer) {
@@ -1030,10 +1077,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
 
-    replayVideoRef.current?.pause();
-    if (liveVideoRef.current) {
-      liveVideoRef.current.muted = true;
-      liveVideoRef.current.play().catch(() => {});
+    if (hasLiveFrameRef.current) {
+      replayVideoRef.current?.pause();
+      if (liveVideoRef.current) {
+        liveVideoRef.current.muted = true;
+        liveVideoRef.current.play().catch(() => {});
+      }
+    } else {
+      // Khi chưa có WebRTC live frame, HLS chính là luồng xem Live!
+      if (replayVideoRef.current) {
+        const video = replayVideoRef.current;
+        video.playbackRate = 1.0;
+        video.muted = isMuted;
+        if (video.seekable.length > 0) {
+          video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
+        } else if (hlsLiveEdge > 0) {
+          video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
+        }
+        video.play().catch(() => {});
+      }
     }
 
     showModeNotice(
