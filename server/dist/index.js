@@ -191,17 +191,54 @@ function normalizeDataItem(rawStr) {
 // Socket.io chỉ lo: room join, card add/edit/delete, GPS, stream lifecycle.
 // Toàn bộ video đi qua NMS/RTMP -> HLS (.ts + .m3u8) và web player tự fetch playlist, không
 // broadcast frame qua socket nữa.
+/** Giới hạn tối đa số viewer (không tính ADMIN và chủ phòng) được vào mỗi phòng */
+const MAX_VIEWERS_PER_ROOM = 2;
+/** Map<roomId, Map<socketId, userId>> — chỉ chứa socket của viewer thường */
+const roomViewers = new Map();
 io.on('connection', (socket) => {
     console.log(`[Socket] Client connected: ${socket.id}`);
     socket.on('join_room', (data) => {
         const roomId = data?.roomId || 'default';
         const role = data?.role;
+        const userId = data?.userId || '';
+        // Rời tất cả phòng cũ trước khi vào phòng mới
         Array.from(socket.rooms).forEach((r) => {
             if (r !== socket.id)
                 socket.leave(r);
         });
+        // Dọn viewer tracking ở phòng cũ nếu có
+        const prevRoomId = socket._viewerRoomId;
+        if (prevRoomId && socket._isViewer) {
+            const prev = roomViewers.get(prevRoomId);
+            if (prev) {
+                prev.delete(socket.id);
+                if (prev.size === 0)
+                    roomViewers.delete(prevRoomId);
+            }
+        }
+        socket._viewerRoomId = undefined;
+        socket._isViewer = false;
+        const isAdmin = role === 'ADMIN';
+        const isOwner = !!(userId && userId === roomId); // chủ phòng: userId trùng roomId
+        const isViewer = !isAdmin && !isOwner;
+        // Kiểm tra giới hạn viewer
+        if (isViewer) {
+            if (!roomViewers.has(roomId))
+                roomViewers.set(roomId, new Map());
+            const viewers = roomViewers.get(roomId);
+            if (viewers.size >= MAX_VIEWERS_PER_ROOM) {
+                console.log(`[Socket] Viewer limit reached for room ${roomId} (${viewers.size}/${MAX_VIEWERS_PER_ROOM}). Rejecting ${socket.id}`);
+                socket.emit('viewer_limit_reached', { max: MAX_VIEWERS_PER_ROOM, current: viewers.size });
+                socket.disconnect(true);
+                return;
+            }
+            viewers.set(socket.id, userId);
+            socket._viewerRoomId = roomId;
+            socket._isViewer = true;
+            console.log(`[Socket] Viewer joined room ${roomId}: ${viewers.size}/${MAX_VIEWERS_PER_ROOM}`);
+        }
         socket.join(`room_${roomId}`);
-        if (role === 'ADMIN') {
+        if (isAdmin) {
             socket.join('room_admin');
         }
         const activeStream = db_1.db.getLatestStream(roomId);
@@ -350,6 +387,17 @@ io.on('connection', (socket) => {
     // client (web/iOS) nào emit 'toggle_stream' nên xoá an toàn. Nếu cần điều khiển live từ web,
     // hãy gọi qua REST API /api/stream/start và /api/stream/end.
     socket.on('disconnect', () => {
+        // Dọn viewer slot khi socket ngắt kết nối
+        const roomId = socket._viewerRoomId;
+        if (roomId && socket._isViewer) {
+            const viewers = roomViewers.get(roomId);
+            if (viewers) {
+                viewers.delete(socket.id);
+                if (viewers.size === 0)
+                    roomViewers.delete(roomId);
+                console.log(`[Socket] Viewer left room ${roomId}: ${viewers?.size ?? 0}/${MAX_VIEWERS_PER_ROOM}`);
+            }
+        }
         console.log(`[Socket] Client disconnected: ${socket.id}`);
     });
 });

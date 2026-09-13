@@ -21,6 +21,7 @@ export const App: React.FC = () => {
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [currentRoomId, setCurrentRoomId] = useState<string>('');
+  const [viewerBlocked, setViewerBlocked] = useState<boolean>(false);
 
   // Set initial currentRoomId when user logs in
   useEffect(() => {
@@ -80,6 +81,10 @@ export const App: React.FC = () => {
       setActiveStream(data?.session || null);
     });
 
+    newSocket.on('viewer_limit_reached', () => {
+      setViewerBlocked(true);
+    });
+
     return () => {
       newSocket.disconnect();
     };
@@ -88,12 +93,14 @@ export const App: React.FC = () => {
   // Join Room when socket or currentRoomId changes
   useEffect(() => {
     if (socket && currentRoomId) {
+      setViewerBlocked(false); // Reset khi đổi phòng
       socket.emit('join_room', {
         roomId: currentRoomId,
-        role: user?.role
+        role: user?.role,
+        userId: user?.id    // server dùng để xác định chủ phòng (miễn giới hạn)
       });
     }
-  }, [socket, currentRoomId, user?.role]);
+  }, [socket, currentRoomId, user?.role, user?.id]);
 
   // Fetch Current Auth User on Token change
   useEffect(() => {
@@ -247,6 +254,28 @@ export const App: React.FC = () => {
   // Determine active room display name
   const activeRoomUser = allUsers.find(u => u.id === currentRoomId);
   const activeRoomName = activeRoomUser ? activeRoomUser.username : user.username;
+
+  // Màn hình chặn khi phòng đã đủ 2 viewer
+  if (viewerBlocked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-dark-400">
+        <div className="glass-panel max-w-sm w-full p-8 rounded-3xl border border-amber-500/30 text-center space-y-4">
+          <div className="text-5xl">🚫</div>
+          <h2 className="text-xl font-bold text-white">Phòng đã đủ người xem</h2>
+          <p className="text-sm text-slate-400">
+            Phòng này đang có tối đa <strong className="text-amber-400">2 người xem</strong>.<br />
+            Vui lòng thử lại sau khi có người rời phòng.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm transition-all"
+          >
+            Thử lại
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-dark-400">
