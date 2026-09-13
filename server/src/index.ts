@@ -8,7 +8,7 @@ import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { db } from './db';
-import { startNativeMediaServer, setStreamEndedHandler } from './mediaServer';
+import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
 
 const app = express();
@@ -342,9 +342,17 @@ io.on('connection', (socket) => {
   socket.on('finish_round', (data) => {
     const targetRoomId = data?.roomId || data?.userId || 'default';
     db.clearCardEntries(targetRoomId);
-    io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId });
+
+    // Làm mới hoàn toàn bộ đệm Replay video của phiên stream này
+    const session = db.getActiveStream(targetRoomId) || db.getLatestStream(targetRoomId);
+    if (session && session.streamKey) {
+      resetReplaySession(session.streamKey);
+    }
+
+    const ts = Date.now();
+    io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-    io.to('room_admin').emit('round_finished', { roomId: targetRoomId });
+    io.to('room_admin').emit('round_finished', { roomId: targetRoomId, timestamp: ts });
     io.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   });
 

@@ -351,19 +351,37 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
 
     const handleRoundFinished = () => {
-      // Reload HLS để bỏ segment cũ, bắt đầu lại window từ đầu phiên mới.
-      if (hlsRef.current && videoRef.current && stream?.streamKey) {
-        hlsRef.current.startLoad();
-        videoRef.current.currentTime = 0;
-      }
+      // 1. Chuyển ngay về Live mode và xóa sạch các mốc tua cũ
       setIsLive(true);
       isLiveRef.current = true;
       updateFrozenTimeline(null);
       setPlaybackRate(1.0);
+      setDragRatio(null);
+      dragRatioRef.current = null;
+      setCurrentTime(0);
+      setHlsWindowStart(0);
+      setHlsLiveEdge(0);
+      setLiveElapsedSeconds(0);
       setTextOverlays([]);
       try {
         localStorage.removeItem('live_text_overlays_' + (roomId || 'default'));
       } catch {}
+
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+      }
+
+      // 2. Dừng nạp segment cũ và khởi động lại sau 1.2s khi server tạo xong segment đầu tiên của phiên mới
+      if (hlsRef.current) {
+        try {
+          hlsRef.current.stopLoad();
+          setTimeout(() => {
+            if (hlsRef.current) {
+              hlsRef.current.startLoad();
+            }
+          }, 1200);
+        } catch {}
+      }
     };
 
     socket.on('initial_state', handleInitialState);

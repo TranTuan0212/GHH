@@ -114,6 +114,71 @@ export function stopFfmpegOnly(streamKey: string): void {
   }
 }
 
+/**
+ * Làm mới toàn bộ bộ đệm Replay cho streamKey khi bấm "Xong Phiên":
+ * 1. Dừng tiến trình FFmpeg replay cũ.
+ * 2. Xóa sạch các file .ts và playlist .m3u8 cũ của phiên trước.
+ * 3. Khởi động tiến trình FFmpeg replay mới để thu thập dữ liệu từ mốc 0s của phiên mới.
+ * Lưu ý: Luồng WebRTC Live (Live preview) vẫn tiếp tục chạy không bị ảnh hưởng.
+ */
+export function resetReplaySession(streamKey: string): boolean {
+  const session = hlsSessions.get(streamKey);
+  if (!session) return false;
+
+  // Dừng tiến trình ffmpeg replay cũ (process index 0)
+  const oldReplayFfmpeg = session.ffmpegProcesses[0];
+  if (oldReplayFfmpeg && !oldReplayFfmpeg.killed) {
+    try { oldReplayFfmpeg.kill('SIGTERM'); } catch {}
+  }
+
+  // Xóa sạch file .ts và index.m3u8 cũ trong thư mục replay
+  const outputDir = getStreamDir('replay', streamKey);
+  try {
+    if (fs.existsSync(outputDir)) {
+      const files = fs.readdirSync(outputDir);
+      for (const file of files) {
+        if (file.endsWith('.ts') || file.endsWith('.m3u8') || file.endsWith('.tmp')) {
+          try { fs.unlinkSync(path.join(outputDir, file)); } catch {}
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[MediaServer] Lỗi dọn dẹp file replay cũ cho ${streamKey}:`, err);
+  }
+
+  // Khởi động lại ffmpeg replay mới
+  const bundledFfmpeg = path.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
+  const ffmpegPath = process.env.FFMPEG_PATH || (fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
+  const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
+
+  const ffmpegArgs = [
+    '-i', `rtmp://localhost:1935/live/${streamKey}`,
+    '-c:v', 'copy',
+    '-an',
+    '-f', 'hls',
+    '-hls_time', String(HLS_SEGMENT_SECONDS),
+    '-hls_list_size', String(hlsListSize),
+    '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
+    '-hls_flags', '+program_date_time',
+    path.join(outputDir, 'index.m3u8')
+  ];
+
+  const newReplayFfmpeg = spawn(ffmpegPath, ffmpegArgs, {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  newReplayFfmpeg.stderr.on('data', () => {
+    const s = hlsSessions.get(streamKey);
+    if (s) s.lastSeen = Date.now() / 1000;
+  });
+
+  session.ffmpegProcesses[0] = newReplayFfmpeg;
+  session.startTime = Date.now() / 1000;
+  session.lastSeen = Date.now() / 1000;
+  console.log(`[MediaServer] Đã làm mới hoàn toàn bộ đệm Replay cho ${streamKey} (Reset video timeline 0s)`);
+  return true;
+}
+
 /** Start HLS segmentation for a streamKey using ffmpeg directly */
 /*
  * Two independent FFmpeg consumers deliberately read the same RTMP source. This keeps the
