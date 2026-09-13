@@ -600,14 +600,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Điều khiển play/pause của liveVideo khi chuyển chế độ Live <-> Replay
   useEffect(() => {
     if (isLive) {
-      if (liveVideoRef.current) {
-        liveVideoRef.current.muted = true;
+      if (hasLiveFrame && liveVideoRef.current) {
+        liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
+        replayVideoRef.current?.pause();
+      } else if (replayVideoRef.current) {
+        // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp!
+        replayVideoRef.current.muted = isMuted;
+        replayVideoRef.current.playbackRate = 1.0;
+        replayVideoRef.current.play().catch(() => {});
       }
     } else {
       liveVideoRef.current?.pause();
+      if (replayVideoRef.current) {
+        replayVideoRef.current.play().catch(() => {});
+      }
     }
-  }, [isLive]);
+  }, [isLive, hasLiveFrame, isMuted]);
 
   // Luôn đồng bộ playbackRate vào replayVideoRef khi chọn tốc độ (kể cả 1.0x) hoặc đổi chế độ
   useEffect(() => {
@@ -779,7 +788,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           }, 0);
           video.play().catch(() => {});
         } else {
-          video.pause();
+          // Khi đang ở chế độ Live:
+          // Nếu không có WebRTC (hasLiveFrame = false), HLS phát trực tiếp cho người xem
+          video.muted = isMuted;
+          video.play().catch((err) => {
+            console.warn('[LivePlayer] Autoplay HLS live:', err);
+          });
         }
       });
 
@@ -1599,11 +1613,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           autoPlay
         />
 
-        {/* Thẻ 2: HLS DVR Replay (Luôn chạy ngầm để đệm sẵn buffer vào RAM, phục vụ tua tức thì 0ms) */}
+        {/* Thẻ 2: HLS DVR Replay & HLS Live Fallback (hiển thị khi đang tua HOẶC khi không có WebRTC) */}
         <video
           ref={replayVideoRef}
           className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
-            !isLive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+            (!isLive || !hasLiveFrame) && hasFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
           }`}
           style={{
             transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
