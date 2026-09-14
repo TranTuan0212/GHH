@@ -43,7 +43,7 @@ const db_1 = require("./db");
  */
 const MEDIA_ROOT = path_1.default.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
-const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 5 * 60;
+const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
 const HLS_SEGMENT_SECONDS = 1;
 // Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
@@ -421,19 +421,17 @@ function startCleanupScheduler() {
 function timeoutCheckOnce() {
     const now = Date.now() / 1000;
     const cleaned = [];
-    // Timeout: no segment for SESSION_TIMEOUT_SECONDS → cleanup
+    const activeStreamKeys = new Set(sessionToStreamKey.values());
+    // Chỉ dọn dẹp các session FFmpeg mồ côi (orphaned) khi:
+    // 1. iPhone/RTMP publisher KHÔNG còn kết nối trong NMS (không có trong sessionToStreamKey)
+    // 2. Và không có hoạt động ffmpeg trong suốt SESSION_TIMEOUT_SECONDS
+    // Tuyệt đối KHÔNG ngắt các luồng đang phát RTMP trực tiếp từ iPhone!
     for (const [streamKey, session] of exports.hlsSessions) {
-        if (now - session.lastSeen > SESSION_TIMEOUT_SECONDS) {
-            console.warn(`[MediaServer] Stream ${streamKey} timeout — cleaning up`);
-            cleanupStreamSession(streamKey);
+        const hasActivePublisher = activeStreamKeys.has(streamKey);
+        if (!hasActivePublisher && (now - session.lastSeen > SESSION_TIMEOUT_SECONDS)) {
+            console.warn(`[MediaServer] Orphaned stream ${streamKey} timeout (không có RTMP publisher trong ${Math.round(now - session.lastSeen)}s) — dừng ffmpeg`);
+            stopFfmpegOnly(streamKey);
             cleaned.push(streamKey);
-        }
-    }
-    // Also check NMS sessions (in case HLS ffmpeg crashed but NMS still has session)
-    for (const [sessionId, info] of nmsSessions) {
-        if (now - info.connectedAt > SESSION_TIMEOUT_SECONDS) {
-            console.warn(`[MediaServer] NMS session ${sessionId} (${info.streamKey}) timeout`);
-            onStreamEnd(sessionId);
         }
     }
     return cleaned;
