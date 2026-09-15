@@ -13,7 +13,8 @@ webrtcEncryption: false
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: true
-webrtcAdditionalHosts: ["161.248.146.201"]
+webrtcAdditionalHosts: ["161.248.146.201", "streamslo.date"]
+webrtcWriteQueueSize: 2048
 
 paths:
   all_others:

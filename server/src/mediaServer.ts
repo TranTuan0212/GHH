@@ -259,7 +259,7 @@ function startHlsSession(streamKey: string): void {
   // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
   const liveFfmpegArgs = [
     // LFLiveKit at 240fps occasionally emits a malformed access unit. This is only for
-    // the disposable 60fps rendition: drop that corrupt packet and continue decoding the
+    // the disposable live preview rendition: drop corrupt packet and continue decoding
     // next frame instead of blocking the entire live encoder. The replay master remains
     // an untouched `-c:v copy` stream above.
     '-fflags', '+genpts+discardcorrupt',
@@ -267,25 +267,26 @@ function startHlsSession(streamKey: string): void {
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     '-map', '0:v:0',
     '-an',
-    '-vf', `fps=${LIVE_PREVIEW_FPS}:round=down`,
+    // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
+    '-fpsmax', String(LIVE_PREVIEW_FPS),
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
+    '-preset', 'ultrafast',
     '-tune', 'zerolatency',
     // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
-    // Repeat SPS/PPS on every 1s IDR so a viewer joining an already-running RTSP
-    // publisher can decode immediately instead of displaying a black video element.
     '-profile:v', 'baseline',
     '-level:v', '4.1',
     '-pix_fmt', 'yuv420p',
     '-bf', '0',
-    '-x264-params', `keyint=${LIVE_PREVIEW_FPS}:min-keyint=${LIVE_PREVIEW_FPS}:scenecut=0:repeat-headers=1:aq-mode=2`,
-    '-b:v', '5200k',
-    '-maxrate', '6500k',
-    '-bufsize', '8000k',
-    '-g', String(LIVE_PREVIEW_FPS),
-    '-keyint_min', String(LIVE_PREVIEW_FPS),
+    '-x264-params', 'scenecut=0:repeat-headers=1',
+    // Bitrate tối ưu 2.5Mbps - 3.0Mbps: siêu nét mà nhẹ mạng, không bao giờ tràn write queue WebRTC
+    '-b:v', '2500k',
+    '-maxrate', '3000k',
+    '-bufsize', '3500k',
+    '-g', '30',
+    '-keyint_min', '15',
     '-sc_threshold', '0',
-    '-force_key_frames', 'expr:gte(t,n_forced*1)',
+    // Bắt buộc chèn IDR Keyframe mỗi 0.5s: Nếu mạng gián đoạn rớt gói, màn hình lập tức phục hồi sau 0.5s (chống bóng ma triệt để)
+    '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
     '-f', 'rtsp',
     '-rtsp_transport', 'tcp',
     `rtsp://127.0.0.1:8554/${streamKey}`
@@ -294,7 +295,7 @@ function startHlsSession(streamKey: string): void {
   console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
   console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS)`);
-  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (${LIVE_PREVIEW_FPS}fps, 2.2Mbps)`);
+  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, 0.5s IDR)`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']

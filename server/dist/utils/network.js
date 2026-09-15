@@ -59,7 +59,12 @@ function resolveRtmpHostForClient(req) {
     }
     const primaryIp = getPrimaryIp();
     if (hostHeader === primaryIp) {
-        console.log(`[Network] Host header là IP LAN (${primaryIp}), trả lại cho RTMP.`);
+        console.log(`[Network] Host header là IP máy (${primaryIp}), trả lại cho RTMP.`);
+        return { rtmpHost: primaryIp, rtmpPort: 1935 };
+    }
+    const isPrivateIp = /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)/.test(primaryIp);
+    if (!isPrivateIp || hostHeader.includes('streamslo.date')) {
+        console.log(`[Network] Nhận diện kết nối qua "${hostHeader}", sử dụng IP Public ${primaryIp}:1935 cho RTMP.`);
         return { rtmpHost: primaryIp, rtmpPort: 1935 };
     }
     console.warn(`[Network] ⚠️ Fallback về IP LAN (${primaryIp}) dù Host header là "${hostHeader}". Nếu client ở xa (5G/mạng khác), RTMP có thể không kết nối được — cần điền RTMP Host Override.`);
