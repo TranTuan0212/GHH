@@ -465,8 +465,8 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                     className={`p-1.5 rounded-xl border flex flex-col justify-between cursor-pointer transition-all ${
                       isSelectedGroup
                         ? 'bg-amber-950/60 border-amber-400 ring-2 ring-amber-400 shadow-lg shadow-amber-500/30'
-                        : ans.isWinner
-                        ? 'bg-amber-500/20 border-amber-400 shadow-md shadow-amber-500/20'
+                        : ans.isComplete && ans.rankCardClass
+                        ? ans.rankCardClass
                         : 'bg-slate-900/90 border-white/10 hover:border-white/25'
                     }`}
                     title={`Bấm vào nhóm để gán thêm số cho ${ans.name}`}

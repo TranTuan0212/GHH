@@ -297,26 +297,22 @@ export function evaluate3Cards(cards: DataEntry[]): {
   // 3. Kiểm tra Nhóm Cao (Ba Tây / cả 3 mục đều là J, Q, K / 11, 12, 13)
   const is3Tay = ranks.every((r) => r === '11' || r === '12' || r === '13' || r === 'J' || r === 'Q' || r === 'K');
   if (is3Tay) {
-    const tayPowers = ranks.map(getRankPower).sort((a, b) => a - b);
     return {
       type: '3tay',
       label: 'Nhóm Cao (11-13) ✨',
-      // Base score 1,000 + phân cấp theo quân cao nhất
-      score: 1000 + tayPowers[2] * 20 + tayPowers[1],
+      // Base score 1,000. Nếu cùng là 3 Tây thì bằng điểm nhau và đều thắng!
+      score: 1000,
       highlightClass: 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
     };
   }
 
   // 4. Tính điểm thường: tổng điểm mod 10
-  // Nếu bằng điểm nhau, nhóm có quân bài lớn nhất (A=14, K=13..2) sẽ THẮNG!
+  // Luật mới: TRÙNG ĐIỂM THÌ ĐỀU LÀ THẮNG!
+  // Không xét quân bài lớn nhất để phá vỡ hòa điểm.
+  // 2 nhóm cùng 9 điểm sẽ có cùng 900 điểm, đều xếp Hạng 1 (Thắng) và có cùng màu sắc!
   const sum = parsed.reduce((acc, p) => acc + p.value, 0);
   const mod10 = sum % 10;
-  const sortedPowers = ranks.map(getRankPower).sort((a, b) => a - b);
-  const maxPower = sortedPowers[2] || 0;
-  const midPower = sortedPowers[1] || 0;
-  const minPower = sortedPowers[0] || 0;
-  // mod10 quyết định điểm chính (0..9); quân bài cao nhất phá vỡ hòa điểm
-  const normalScore = mod10 * 100 + maxPower + (midPower / 20) + (minPower / 400);
+  const normalScore = mod10 * 100;
 
   return {
     type: 'points',
@@ -501,10 +497,118 @@ export interface GroupAnswerItem {
   totalCompared: number;
   rankBadgeText: string;
   rankBadgeClass: string;
+  rankCardClass: string;
+  rankNumBadgeClass: string;
   wonAgainst: VersusDetail[];
   lostAgainst: VersusDetail[];
   tiedWith: VersusDetail[];
   vsDealerResult?: 'win' | 'loss' | 'tie' | null;
+}
+
+/**
+ * Bảng màu sắc hiển thị riêng biệt cho từng thứ hạng (Không trùng màu nhau)
+ * Hạng 1: Vàng Kim (Thắng)
+ * Hạng 2: Bạc
+ * Hạng 3: Đồng
+ * Hạng 4: Xanh Ngọc
+ * Hạng 5: Xanh Lam Lơ
+ * Hạng 6: Tím
+ * Hạng 7: Xanh Dương
+ * Hạng 8: Đỏ Hồng
+ * Hạng 9: Cam
+ * Hạng 10+: Xám
+ */
+export function getRankTheme(r: number | null, isComplete: boolean) {
+  if (r === null) {
+    return {
+      rankBadgeText: '',
+      rankBadgeClass: '',
+      rankCardClass: 'bg-slate-900/70 border-white/5 hover:border-white/20',
+      rankNumBadgeClass: 'bg-slate-800 text-slate-300'
+    };
+  }
+
+  if (!isComplete) {
+    return {
+      rankBadgeText: `Hạng ${r} (Tạm)`,
+      rankBadgeClass: 'bg-slate-800 text-amber-300 border border-amber-500/40 text-[9px] font-bold',
+      rankCardClass: 'bg-slate-900/70 border-white/10 hover:border-white/20',
+      rankNumBadgeClass: 'bg-slate-800 text-amber-300 font-bold'
+    };
+  }
+
+  switch (r) {
+    case 1:
+      return {
+        rankBadgeText: '👑 Hạng 1 (Thắng)',
+        rankBadgeClass: 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 font-black shadow-md shadow-amber-400/40 border border-yellow-200 ring-1 ring-amber-400/60',
+        rankCardClass: 'bg-amber-500/15 border-amber-400 ring-2 ring-amber-400/50 shadow-lg shadow-amber-500/20',
+        rankNumBadgeClass: 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 font-black shadow-sm'
+      };
+    case 2:
+      return {
+        rankBadgeText: '🥈 Hạng 2',
+        rankBadgeClass: 'bg-gradient-to-r from-slate-200 to-slate-100 text-slate-950 font-black border border-white shadow-md shadow-slate-300/30',
+        rankCardClass: 'bg-slate-300/15 border-slate-300 ring-1 ring-slate-300/50 shadow-md shadow-slate-400/15',
+        rankNumBadgeClass: 'bg-slate-200 text-slate-950 font-black shadow-sm'
+      };
+    case 3:
+      return {
+        rankBadgeText: '🥉 Hạng 3',
+        rankBadgeClass: 'bg-gradient-to-r from-amber-700 to-amber-600 text-white font-black border border-amber-500 shadow-md shadow-amber-700/30',
+        rankCardClass: 'bg-amber-700/15 border-amber-600 ring-1 ring-amber-600/50 shadow-md shadow-amber-700/15',
+        rankNumBadgeClass: 'bg-amber-700 text-white font-black shadow-sm'
+      };
+    case 4:
+      return {
+        rankBadgeText: '💎 Hạng 4',
+        rankBadgeClass: 'bg-gradient-to-r from-emerald-500 to-emerald-400 text-slate-950 font-black border border-emerald-300 shadow-md shadow-emerald-500/30',
+        rankCardClass: 'bg-emerald-500/15 border-emerald-400 ring-1 ring-emerald-400/50 shadow-md shadow-emerald-500/15',
+        rankNumBadgeClass: 'bg-emerald-500 text-slate-950 font-black shadow-sm'
+      };
+    case 5:
+      return {
+        rankBadgeText: '⭐ Hạng 5',
+        rankBadgeClass: 'bg-gradient-to-r from-cyan-500 to-cyan-400 text-slate-950 font-black border border-cyan-200 shadow-md shadow-cyan-500/30',
+        rankCardClass: 'bg-cyan-500/15 border-cyan-400 ring-1 ring-cyan-400/50 shadow-md shadow-cyan-500/15',
+        rankNumBadgeClass: 'bg-cyan-500 text-slate-950 font-black shadow-sm'
+      };
+    case 6:
+      return {
+        rankBadgeText: '⚡ Hạng 6',
+        rankBadgeClass: 'bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white font-black border border-purple-300 shadow-md shadow-purple-500/30',
+        rankCardClass: 'bg-purple-500/15 border-purple-400 ring-1 ring-purple-400/50 shadow-md shadow-purple-500/15',
+        rankNumBadgeClass: 'bg-purple-500 text-white font-black shadow-sm'
+      };
+    case 7:
+      return {
+        rankBadgeText: '🎯 Hạng 7',
+        rankBadgeClass: 'bg-gradient-to-r from-blue-600 to-indigo-500 text-white font-black border border-blue-400 shadow-md shadow-blue-600/30',
+        rankCardClass: 'bg-blue-600/15 border-blue-500 ring-1 ring-blue-500/50 shadow-md shadow-blue-600/15',
+        rankNumBadgeClass: 'bg-blue-600 text-white font-black shadow-sm'
+      };
+    case 8:
+      return {
+        rankBadgeText: '🔥 Hạng 8',
+        rankBadgeClass: 'bg-gradient-to-r from-rose-500 to-pink-500 text-white font-black border border-rose-300 shadow-md shadow-rose-500/30',
+        rankCardClass: 'bg-rose-500/15 border-rose-400 ring-1 ring-rose-400/50 shadow-md shadow-rose-500/15',
+        rankNumBadgeClass: 'bg-rose-500 text-white font-black shadow-sm'
+      };
+    case 9:
+      return {
+        rankBadgeText: '🔹 Hạng 9',
+        rankBadgeClass: 'bg-gradient-to-r from-orange-500 to-amber-500 text-white font-black border border-orange-300 shadow-md shadow-orange-500/30',
+        rankCardClass: 'bg-orange-500/15 border-orange-400 ring-1 ring-orange-400/50 shadow-md shadow-orange-500/15',
+        rankNumBadgeClass: 'bg-orange-500 text-white font-black shadow-sm'
+      };
+    default:
+      return {
+        rankBadgeText: `Hạng ${r}`,
+        rankBadgeClass: 'bg-slate-700 text-slate-200 font-bold border border-slate-500 shadow-sm',
+        rankCardClass: 'bg-slate-800/40 border-slate-600/60 ring-1 ring-slate-600/30',
+        rankNumBadgeClass: 'bg-slate-700 text-slate-200 font-bold shadow-sm'
+      };
+  }
 }
 
 // Hàm tính toán đáp án và ĐỐI CHIẾU TẤT CẢ CÁC NHÓM VỚI NHAU (Cross-Check & Leaderboard)
@@ -642,7 +746,7 @@ export function computeAllGroupAnswers(
   let currentRank = 1;
   for (let i = 0; i < sortedComplete.length; i++) {
     if (i > 0 && Math.abs(sortedComplete[i].score - sortedComplete[i - 1].score) >= 0.0001) {
-      currentRank = i + 1;
+      currentRank++;
     }
     ranksMap[sortedComplete[i].groupNum] = currentRank;
   }
@@ -664,27 +768,11 @@ export function computeAllGroupAnswers(
     const tiedWith = headToHead[a.groupNum]?.tiedWith || [];
     const totalCompared = Math.max(0, completeGroupsCount - 1);
 
-    let rankBadgeText = '';
-    let rankBadgeClass = '';
-
-    if (r !== null) {
-      if (!a.isComplete) {
-        rankBadgeText = `Hạng ${r} (Tạm)`;
-        rankBadgeClass = 'bg-slate-800 text-amber-300 border border-amber-500/40 text-[9px] font-bold';
-      } else if (r === 1) {
-        rankBadgeText = '👑 Hạng 1 (Thắng)';
-        rankBadgeClass = 'bg-amber-400 text-slate-950 font-black shadow-md shadow-amber-400/30 border border-amber-300 ring-1 ring-amber-400/50';
-      } else if (r === 2) {
-        rankBadgeText = '🥈 Hạng 2';
-        rankBadgeClass = 'bg-slate-200 text-slate-950 font-bold border border-slate-100 shadow-sm';
-      } else if (r === 3) {
-        rankBadgeText = '🥉 Hạng 3';
-        rankBadgeClass = 'bg-amber-700/85 text-amber-100 font-bold border border-amber-600/70 shadow-sm';
-      } else {
-        rankBadgeText = `Hạng ${r}`;
-        rankBadgeClass = 'bg-slate-800 text-slate-300 border border-white/15 font-semibold';
-      }
-    }
+    const theme = getRankTheme(r, a.isComplete);
+    const rankBadgeText = theme.rankBadgeText;
+    const rankBadgeClass = theme.rankBadgeClass;
+    const rankCardClass = theme.rankCardClass;
+    const rankNumBadgeClass = theme.rankNumBadgeClass;
 
     // So riêng với Nhà Cái (Nhóm 1)
     let vsDealerResult: 'win' | 'loss' | 'tie' | null = null;
@@ -709,6 +797,8 @@ export function computeAllGroupAnswers(
       totalCompared,
       rankBadgeText,
       rankBadgeClass,
+      rankCardClass,
+      rankNumBadgeClass,
       vsDealerResult
     };
   });
@@ -717,12 +807,17 @@ export function computeAllGroupAnswers(
     .filter((a) => a.rank !== null)
     .sort((a, b) => (a.rank || 999) - (b.rank || 999));
 
-  const leaderboardText = sortedCompleteAnswers
-    .map((g) => {
-      const icon = g.rank === 1 ? '👑 ' : g.rank === 2 ? '🥈 ' : g.rank === 3 ? '🥉 ' : '';
-      return `${icon}${g.name} (Hạng ${g.rank} • ${g.label})`;
-    })
-    .join('  >  ');
+  let leaderboardText = '';
+  for (let i = 0; i < sortedCompleteAnswers.length; i++) {
+    const g = sortedCompleteAnswers[i];
+    const icon = g.rank === 1 ? '👑 ' : g.rank === 2 ? '🥈 ' : g.rank === 3 ? '🥉 ' : '';
+    if (i > 0) {
+      const prev = sortedCompleteAnswers[i - 1];
+      const isTie = Math.abs(g.score - prev.score) < 0.0001;
+      leaderboardText += isTie ? '  =  ' : '  >  ';
+    }
+    leaderboardText += `${icon}${g.name} (Hạng ${g.rank} • ${g.label})`;
+  }
 
   return {
     answers,
@@ -1380,25 +1475,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             {/* Dây chuyền đối chiếu thứ hạng từ cao xuống thấp */}
             <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar text-xs font-mono font-bold">
               {sortedComplete.map((item, sIdx) => {
-                const r = item.rank;
+                const isTieWithPrev = sIdx > 0 && Math.abs(item.score - sortedComplete[sIdx - 1].score) < 0.0001;
                 return (
                   <React.Fragment key={item.groupNum}>
-                    {sIdx > 0 && <span className="text-slate-500 px-0.5 font-sans font-black select-none">&gt;</span>}
+                    {sIdx > 0 && (
+                      <span className={`px-0.5 font-sans font-black select-none ${isTieWithPrev ? 'text-amber-400 text-sm' : 'text-slate-500'}`}>
+                        {isTieWithPrev ? '=' : '>'}
+                      </span>
+                    )}
                     <div
-                      className={`px-2 py-1 rounded-xl border flex items-center space-x-1.5 flex-shrink-0 cursor-default transition-all ${
-                        r === 1
-                          ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20 font-black'
-                          : r === 2
-                          ? 'bg-slate-200 text-slate-900 border-slate-100 font-bold'
-                          : r === 3
-                          ? 'bg-amber-700/85 text-amber-100 border-amber-600/70 font-bold'
-                          : 'bg-slate-800/90 text-slate-300 border-white/10'
-                      }`}
+                      className={`px-2 py-1 rounded-xl border flex items-center space-x-1.5 flex-shrink-0 cursor-default transition-all shadow-sm ${item.rankBadgeClass}`}
                       title={`Thắng ${item.winsCount}/${item.totalCompared} nhóm khác`}
                     >
-                      <span>{r === 1 ? '👑' : r === 2 ? '🥈' : r === 3 ? '🥉' : `#${r}`}</span>
                       <span>{item.name}:</span>
-                      <span className="opacity-90">{item.label}</span>
+                      <span className="opacity-95">{item.label}</span>
                     </div>
                   </React.Fragment>
                 );
@@ -1460,8 +1550,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               className={`rounded-2xl p-2.5 sm:p-3 transition-all border flex flex-col justify-between shadow-md relative overflow-hidden cursor-pointer ${
                 isThisGroupSelected
                   ? 'bg-amber-950/40 border-amber-400 ring-2 ring-amber-400 shadow-lg shadow-amber-500/20'
-                  : ansItem?.isWinner
-                  ? 'bg-amber-500/10 border-amber-400/80 ring-2 ring-amber-400/40 shadow-amber-500/10'
+                  : ansItem?.isComplete && ansItem.rankCardClass
+                  ? ansItem.rankCardClass
                   : isStoodPat
                   ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
                   : isNextTarget
@@ -1478,8 +1568,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                       className={`w-5 h-5 rounded-lg flex items-center justify-center font-bold text-[11px] flex-shrink-0 ${
                         isThisGroupSelected
                           ? 'bg-amber-400 text-slate-950 font-black shadow-sm'
-                          : ansItem?.isWinner
-                          ? 'bg-amber-400 text-slate-950 font-black shadow-sm'
+                          : ansItem?.isComplete && ansItem.rankNumBadgeClass
+                          ? ansItem.rankNumBadgeClass
                           : isNextTarget
                           ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40'
                           : 'bg-slate-800 text-slate-300'
