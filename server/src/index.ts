@@ -5,7 +5,8 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
-import { authRouter } from './routes/auth';
+import jwt from 'jsonwebtoken';
+import { authRouter, JWT_SECRET } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { db } from './db';
@@ -29,6 +30,42 @@ const io = new SocketIOServer(server, {
     methods: ['GET', 'POST', 'PUT', 'DELETE']
   },
   maxHttpBufferSize: 1e7
+});
+
+// Middleware xác thực JWT cho mọi kết nối Socket.IO
+io.use((socket, next) => {
+  const token = (socket.handshake.auth?.token as string) ||
+                (socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '') as string) ||
+                (socket.handshake.query?.token as string);
+
+  if (!token) {
+    (socket as any).user = null;
+    return next();
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const user = db.getUserById(decoded.id);
+    if (!user) {
+      return next(new Error('Tài khoản không tồn tại.'));
+    }
+    if (user.isBlocked) {
+      return next(new Error('Tài khoản đã bị khóa bởi Admin.'));
+    }
+    if (new Date(user.expiresAt) < new Date()) {
+      return next(new Error('Tài khoản đã hết hạn sử dụng.'));
+    }
+
+    (socket as any).user = {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      platform: decoded.platform
+    };
+    next();
+  } catch (err) {
+    return next(new Error('Token xác thực Socket không hợp lệ hoặc đã hết hạn.'));
+  }
 });
 
 setSocketServer(io);
@@ -303,17 +340,30 @@ const MAX_VIEWERS_PER_ROOM = 2;
 const roomViewers = new Map<string, Map<string, string>>();
 
 io.on('connection', (socket) => {
-  console.log(`[Socket] Client connected: ${socket.id}`);
+  const user = (socket as any).user;
+  console.log(`[Socket] Client connected: ${socket.id} | User: ${user ? `${user.username} (${user.role})` : 'Anonymous'}`);
+
+  const canControlRoom = (targetRoomId: string): boolean => {
+    if (!user) return false;
+    return user.role === 'ADMIN' || user.id === targetRoomId;
+  };
 
   socket.on('join_room', (data) => {
-    const roomId = data?.roomId || 'default';
-    const role = data?.role;
-    const userId = data?.userId || '';
+    if (!user) {
+      console.warn(`[Socket] Từ chối kết nối Socket chưa xác thực token: ${socket.id}`);
+      socket.emit('error_message', 'Bạn cần đăng nhập với tài khoản hợp lệ.');
+      socket.disconnect(true);
+      return;
+    }
+
+    // Nếu là ADMIN: được phép chuyển sang bất kỳ phòng nào; nếu là USER thường: cố định ở phòng của chính mình
+    const roomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
 
     // Rời tất cả phòng cũ trước khi vào phòng mới
     Array.from(socket.rooms).forEach((r) => {
       if (r !== socket.id) socket.leave(r);
     });
+
     // Dọn viewer tracking ở phòng cũ nếu có
     const prevRoomId = (socket as any)._viewerRoomId as string | undefined;
     if (prevRoomId && (socket as any)._isViewer) {
@@ -326,11 +376,11 @@ io.on('connection', (socket) => {
     (socket as any)._viewerRoomId = undefined;
     (socket as any)._isViewer = false;
 
-    const isAdmin = role === 'ADMIN';
-    const isOwner = !!(userId && userId === roomId); // chủ phòng: userId trùng roomId
+    const isAdmin = user.role === 'ADMIN';
+    const isOwner = user.id === roomId;
     const isViewer = !isAdmin && !isOwner;
 
-    // Kiểm tra giới hạn viewer
+    // Kiểm tra giới hạn viewer: Admin và chủ phòng được miễn giới hạn!
     if (isViewer) {
       if (!roomViewers.has(roomId)) roomViewers.set(roomId, new Map());
       const viewers = roomViewers.get(roomId)!;
@@ -340,7 +390,7 @@ io.on('connection', (socket) => {
         socket.disconnect(true);
         return;
       }
-      viewers.set(socket.id, userId);
+      viewers.set(socket.id, user.id);
       (socket as any)._viewerRoomId = roomId;
       (socket as any)._isViewer = true;
       console.log(`[Socket] Viewer joined room ${roomId}: ${viewers.size}/${MAX_VIEWERS_PER_ROOM}`);
@@ -356,8 +406,7 @@ io.on('connection', (socket) => {
     const cardEntries = db.getCardEntries(roomId);
     const ips = getLocalIpAddresses();
     const primaryIp = ips[0] || 'localhost';
-    // QUAN TRỌNG: dùng resolveRtmpHostForClient để khi mobile kết nối qua tunnel thì socket cũng
-    // nhận được URL đúng dạng tunnel, không phải IP LAN.
+
     const fakeReq = { headers: socket.handshake.headers } as any;
     const { rtmpHost, rtmpPort } = resolveRtmpHostForClient(fakeReq);
 
@@ -375,8 +424,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_gps', (data) => {
-    const { userId, streamId, lat, lng, roomId } = data;
-    const targetRoomId = roomId || userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    const { lat, lng } = data;
     if (lat && lng) {
       const gpsLog = {
         id: 'gps-' + Date.now(),
@@ -388,13 +438,18 @@ io.on('connection', (socket) => {
       };
       db.addGpsLog(gpsLog);
       io.to(`room_${targetRoomId}`).emit('gps_updated', gpsLog);
-      io.to('room_admin').emit('gps_updated', gpsLog);
     }
   });
 
   socket.on('add_card', (data) => {
-    const { cardValue, groupCount, userId, roomId, targetGroup } = data;
-    const targetRoomId = roomId || userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) {
+      console.warn(`[Socket] Từ chối add_card trái phép từ ${user.username} vào phòng ${targetRoomId}`);
+      return;
+    }
+
+    const { cardValue, groupCount, targetGroup } = data;
     if (cardValue) {
       const rawItems = cardValue.toString().split(',').map((c: string) => c.trim()).filter((c: string) => c.length > 0);
       const numGroups = parseInt(groupCount) || 3;
@@ -420,74 +475,83 @@ io.on('connection', (socket) => {
 
       const updated = db.getCardEntries(targetRoomId);
       io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
-      io.to('room_admin').emit('card_added', { roomId: targetRoomId, allEntries: updated });
     }
   });
 
   socket.on('edit_card', (data) => {
-    const { id, newCardValue, roomId, userId } = data;
-    const targetRoomId = roomId || userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
+    const { id, newCardValue } = data;
     if (id && newCardValue) {
       db.updateCardEntry(id, newCardValue);
       const updated = db.getCardEntries(targetRoomId);
       io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
-      io.to('room_admin').emit('card_added', { roomId: targetRoomId, allEntries: updated });
     }
   });
 
   socket.on('delete_card', (data) => {
-    const { id, roomId, userId } = data;
-    const targetRoomId = roomId || userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
+    const { id } = data;
     if (id) {
       db.deleteCardEntry(id);
       const updated = db.getCardEntries(targetRoomId);
       io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
-      io.to('room_admin').emit('card_added', { roomId: targetRoomId, allEntries: updated });
     }
   });
 
   socket.on('set_group_names', (data) => {
-    const { groupNames, roomId, userId } = data;
-    const targetRoomId = roomId || userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
+    const { groupNames } = data;
     if (groupNames) {
       db.setGroupNames(targetRoomId, groupNames);
       io.to(`room_${targetRoomId}`).emit('group_names_updated', { roomId: targetRoomId, groupNames });
-      io.to('room_admin').emit('group_names_updated', { roomId: targetRoomId, groupNames });
     }
   });
 
   socket.on('undo_card', (data) => {
-    const targetRoomId = data?.roomId || data?.userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
     db.popCardEntry(targetRoomId);
     const updated = db.getCardEntries(targetRoomId);
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
-    io.to('room_admin').emit('card_added', { roomId: targetRoomId, allEntries: updated });
   });
 
   socket.on('clear_cards', (data) => {
-    const targetRoomId = data?.roomId || data?.userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
     db.clearCardEntries(targetRoomId);
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-    io.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   });
 
   socket.on('finish_round', (data) => {
-    const targetRoomId = data?.roomId || data?.userId || 'default';
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
     db.clearCardEntries(targetRoomId);
 
-    const liveSession = db.getActiveStream(targetRoomId) || db.getActiveStream();
-    const latestSession = db.getLatestStream(targetRoomId) || db.getLatestStream();
+    const liveSession = db.getActiveStream(targetRoomId);
+    const latestSession = db.getLatestStream(targetRoomId);
 
     if (liveSession && liveSession.streamKey) {
-      // 1. Nếu stream đang LIVE: làm mới bộ đệm replay về 0s và cập nhật startedAt của round mới
       resetReplaySession(liveSession.streamKey);
       db.resetStreamStartTime(liveSession.streamKey);
       const updated = db.getActiveStream(targetRoomId) || liveSession;
       io.to(`room_${targetRoomId}`).emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session: updated });
       io.to('room_admin').emit('stream_status_changed', { roomId: targetRoomId, status: 'LIVE', session: updated });
     } else if (latestSession) {
-      // 2. Nếu stream đã kết thúc (không còn LIVE): người dùng bấm "Xong Phiên" hoàn tất xem lại
-      // Xóa toàn bộ file replay trên đĩa và xóa phiên kết thúc khỏi database
       if (latestSession.streamKey) {
         resetReplaySession(latestSession.streamKey);
       }
@@ -499,22 +563,9 @@ io.on('connection', (socket) => {
     const ts = Date.now();
     io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-    io.to('room_admin').emit('round_finished', { roomId: targetRoomId, timestamp: ts });
-    io.to('room_admin').emit('cards_cleared', { roomId: targetRoomId });
   });
 
-  // ĐÃ XOÁ: socket.on('toggle_stream', ...)
-  // Lý do: đây là đường khởi tạo/kết thúc stream SONG SONG với REST API chính thức
-  // (POST /api/stream/start|end), dùng quy tắc streamKey khác ('live_' + roomId, không có
-  // timestamp) và KHÔNG hề đụng tới RTMP/FFmpeg thật (mediaServer.ts). Vì db.createStreamSession()
-  // tự động ENDED mọi phiên LIVE cũ cùng userId, nếu event này từng bị gọi trong lúc một phiên
-  // live RTMP thật đang chạy, nó sẽ khiến DB báo ENDED trong khi FFmpeg/HLS vẫn tiếp tục ghi file
-  // — làm sai lệch trạng thái hiển thị cho client. Đã grep toàn bộ codebase xác nhận không có
-  // client (web/iOS) nào emit 'toggle_stream' nên xoá an toàn. Nếu cần điều khiển live từ web,
-  // hãy gọi qua REST API /api/stream/start và /api/stream/end.
-
   socket.on('disconnect', () => {
-    // Dọn viewer slot khi socket ngắt kết nối
     const roomId = (socket as any)._viewerRoomId as string | undefined;
     if (roomId && (socket as any)._isViewer) {
       const viewers = roomViewers.get(roomId);

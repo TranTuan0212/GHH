@@ -625,9 +625,25 @@ export function startNativeMediaServer(): void {
   try {
     const nms = new NodeMediaServer(mediaConfig);
 
-    // Khi iOS bắt đầu push RTMP
+    // Khi iOS bắt đầu push RTMP — xác thực streamKey trong Database trước khi cho phép
     nms.on('prePublish', (id: string, StreamPath: string, _args: any) => {
-      console.log(`[MediaServer] iPhone bắt đầu phát RTMP: ${StreamPath}`);
+      const streamKey = StreamPath.split('/').pop() || '';
+      const activeStream = db.getStreams().find(s => s.streamKey === streamKey && s.status === 'LIVE');
+
+      if (!activeStream) {
+        console.warn(`[MediaServer] [BẢO MẬT] Từ chối kết nối RTMP không hợp lệ hoặc chưa được cấp phép: ${StreamPath} (Session: ${id})`);
+        try {
+          const session = nms.getSession(id);
+          if (session) {
+            session.reject();
+          }
+        } catch (e) {
+          console.error(`[MediaServer] Lỗi khi reject session RTMP:`, e);
+        }
+        return;
+      }
+
+      console.log(`[MediaServer] iPhone bắt đầu phát RTMP hợp lệ (${activeStream.username}): ${StreamPath}`);
       onStreamStart(id, StreamPath);
     });
 

@@ -37,13 +37,6 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
     // QUAN TRỌNG: khi iOS app kết nối qua Cloudflare tunnel / public domain, request đến server qua
     // domain đó. Ta phải trả lại URL RTMP mà iPhone có thể truy cập được từ mạng của nó, KHÔNG phải
     // IP LAN của server (vì IP LAN chỉ truy cập được khi cùng Wi-Fi).
-    //
-    // Logic:
-    //   1. Nếu request qua tunnel (Host header chứa trycloudflare.com / ngrok / custom domain):
-    //      trả về URL cùng host đó, port RTMP cũng phải được expose qua tunnel tương ứng.
-    //      User cần setup tunnel mở port 1935 (vd: cloudflared tunnel --url tcp://localhost:1935)
-    //   2. Nếu request qua LAN (Host header là IP LAN): trả về IP LAN như cũ.
-    //   3. Fallback: primaryIp LAN.
     const { rtmpHost, rtmpPort } = (0, network_1.resolveRtmpHostForClient)(req);
     const newStream = {
         id: 'stream-' + Date.now(),
@@ -56,9 +49,6 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
         startedAt: new Date().toISOString()
     };
     db_1.db.createStreamSession(newStream);
-    // KHÔNG tự xóa cardEntries khi start live — người dùng phải xóa thủ công.
-    // Trước đây clear ở đây làm mất toàn bộ dữ liệu bài mỗi lần bắt đầu live.
-    // db.clearCardEntries(roomId);
     if (globalIo) {
         globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
         globalIo.to('room_admin').emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
@@ -70,22 +60,15 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
         streamKey
     });
 });
-// resolveRtmpHostForClient được dùng chung từ ../utils/network (đã gộp bản trùng lặp ở đây và
-// ở index.ts để tránh 2 nơi lệch logic khi thêm domain tunnel mới).
 // POST /api/stream/end — stop ffmpeg nhưng GIỮ LẠI file replay để người xem có thể tua
 exports.streamRouter.post('/end', auth_1.authMiddleware, (req, res) => {
-    const roomId = req.user?.id || req.body.streamId;
+    const roomId = (req.user?.role === 'ADMIN' && req.body.streamId) ? req.body.streamId : req.user.id;
     let session = db_1.db.getActiveStream(roomId);
     if (!session) {
-        // Nếu RTMP ngắt trước đó vài mili giây, getActiveStream sẽ trả về undefined.
-        // Dùng getLatestStream để tìm lại chính phiên vừa kết thúc, tuyệt đối không để null.
         session = db_1.db.getLatestStream(roomId);
     }
     const streamKey = session?.streamKey;
     const ended = db_1.db.endStreamSession(session?.id || roomId) || session;
-    // CHỈ dừng ffmpeg process, KHÔNG xóa file .ts/.m3u8
-    // Mục đích DVR: người xem vẫn tua lại được sau khi live kết thúc.
-    // File cũ sẽ được cron tự xóa sau CRON_MAX_AGE_SECONDS (mặc định 24h).
     if (streamKey) {
         (0, mediaServer_1.stopFfmpegOnly)(streamKey);
     }
@@ -101,17 +84,18 @@ exports.streamRouter.post('/gps', auth_1.authMiddleware, (req, res) => {
     if (typeof lat !== 'number' || typeof lng !== 'number') {
         return res.status(400).json({ error: 'Tọa độ GPS lat/lng không hợp lệ.' });
     }
+    const targetRoomId = req.user.id;
     const gpsLog = {
         id: 'gps-' + Date.now(),
-        streamId: streamId || db_1.db.getActiveStream()?.id || 'default-stream',
-        userId: req.user.id,
+        streamId: streamId || db_1.db.getActiveStream(targetRoomId)?.id || targetRoomId,
+        userId: targetRoomId,
         lat,
         lng,
         recordedAt: new Date().toISOString()
     };
     db_1.db.addGpsLog(gpsLog);
     if (globalIo) {
-        globalIo.emit('gps_updated', gpsLog);
+        globalIo.to(`room_${targetRoomId}`).emit('gps_updated', gpsLog);
     }
     res.json({ status: 'ok', gps: gpsLog });
 });
@@ -128,26 +112,30 @@ exports.streamRouter.get('/active', (req, res) => {
         cardEntries
     });
 });
-// GET /api/stream/items (or /cards)
+// GET /api/stream/items (or /cards) — cô lập chỉ xem đúng bài của phòng mình
 const getEntriesHandler = (req, res) => {
-    res.json({ entries: db_1.db.getCardEntries() });
+    const targetRoomId = (req.user?.role === 'ADMIN' && req.query.roomId)
+        ? req.query.roomId
+        : req.user.id;
+    res.json({ entries: db_1.db.getCardEntries(targetRoomId) });
 };
-exports.streamRouter.get('/items', getEntriesHandler);
-exports.streamRouter.get('/cards', getEntriesHandler);
-// POST /api/stream/items (or /cards)
+exports.streamRouter.get('/items', auth_1.authMiddleware, getEntriesHandler);
+exports.streamRouter.get('/cards', auth_1.authMiddleware, getEntriesHandler);
+// POST /api/stream/items (or /cards) — thêm bài vào đúng phòng
 const addEntryHandler = (req, res) => {
-    const { cardValue, groupCount } = req.body;
+    const { cardValue, groupCount, roomId } = req.body;
     if (!cardValue) {
         return res.status(400).json({ error: 'Vui lòng nhập mã dữ liệu.' });
     }
+    const targetRoomId = (req.user?.role === 'ADMIN' && roomId) ? roomId : req.user.id;
     const numGroups = parseInt(groupCount) || 3;
-    const existingEntries = db_1.db.getCardEntries();
+    const existingEntries = db_1.db.getCardEntries(targetRoomId);
     const sequenceOrder = existingEntries.length + 1;
     const groupIndex = ((sequenceOrder - 1) % numGroups) + 1;
     const newEntry = {
         id: 'item-' + Date.now(),
-        streamId: db_1.db.getActiveStream()?.id || 'live-session',
-        userId: req.user.id,
+        streamId: db_1.db.getActiveStream(targetRoomId)?.id || targetRoomId,
+        userId: targetRoomId,
         cardValue: cardValue.toString().toUpperCase(),
         groupIndex,
         sequenceOrder,
@@ -155,19 +143,22 @@ const addEntryHandler = (req, res) => {
     };
     db_1.db.addCardEntry(newEntry);
     if (globalIo) {
-        globalIo.emit('card_added', { entry: newEntry, allEntries: db_1.db.getCardEntries() });
+        globalIo.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, entry: newEntry, allEntries: db_1.db.getCardEntries(targetRoomId) });
     }
     res.json({ message: 'Đã phân loại mã dữ liệu thành công', entry: newEntry });
 };
 exports.streamRouter.post('/items', auth_1.authMiddleware, addEntryHandler);
 exports.streamRouter.post('/cards', auth_1.authMiddleware, addEntryHandler);
-// DELETE /api/stream/items (or /cards)
+// DELETE /api/stream/items (or /cards) — CHỈ xóa bài của đúng phòng đó, tuyệt đối không xóa phòng khác
 const clearEntriesHandler = (req, res) => {
-    db_1.db.clearCardEntries();
+    const targetRoomId = (req.user?.role === 'ADMIN' && req.query.roomId)
+        ? req.query.roomId
+        : req.user.id;
+    db_1.db.clearCardEntries(targetRoomId);
     if (globalIo) {
-        globalIo.emit('cards_cleared');
+        globalIo.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
     }
-    res.json({ message: 'Đã xóa toàn bộ danh sách dữ liệu.' });
+    res.json({ message: 'Đã xóa toàn bộ danh sách dữ liệu của phòng.' });
 };
 exports.streamRouter.delete('/items', auth_1.authMiddleware, clearEntriesHandler);
 exports.streamRouter.delete('/cards', auth_1.authMiddleware, clearEntriesHandler);
@@ -178,8 +169,8 @@ exports.streamRouter.get('/cleanup-status', (_req, res) => {
         ...(0, mediaServer_1.getCleanupStatus)()
     });
 });
-// POST /api/stream/trigger-cleanup — Kích hoạt quét dọn dẹp ngay lập tức (Test auto-xóa)
-exports.streamRouter.post('/trigger-cleanup', auth_1.authMiddleware, (_req, res) => {
+// POST /api/stream/trigger-cleanup — Kích hoạt quét dọn dẹp ngay lập tức (Chỉ Admin mới có quyền)
+exports.streamRouter.post('/trigger-cleanup', auth_1.adminMiddleware, (_req, res) => {
     const report = (0, mediaServer_1.runCronCleanupOnce)();
     res.json({
         message: 'Đã kích hoạt quét dọn dẹp dữ liệu cũ thành công',

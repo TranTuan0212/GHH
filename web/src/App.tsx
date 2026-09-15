@@ -35,13 +35,23 @@ export const App: React.FC = () => {
 
   // Initialize Socket.io and Room Joining
   useEffect(() => {
+    if (!token) {
+      if (socket) {
+        socket.disconnect();
+        setSocket(null);
+      }
+      return;
+    }
+
     const host = window.location.hostname;
     const isTunnelOrHttps = host.includes('trycloudflare.com') || host.includes('ngrok') || window.location.protocol === 'https:';
     const defaultUrl = isTunnelOrHttps 
       ? `${window.location.protocol}//${host}` 
       : `${window.location.protocol}//${host}:4000`;
     const socketUrl = (import.meta as any).env?.VITE_API_URL || defaultUrl;
-    const newSocket = io(socketUrl);
+    const newSocket = io(socketUrl, {
+      auth: { token }
+    });
     setSocket(newSocket);
 
     newSocket.on('initial_state', (data) => {
@@ -85,7 +95,9 @@ export const App: React.FC = () => {
       setFinishRoundTrigger((prev) => prev + 1);
       const targetRoom = data?.roomId || currentRoomIdRef.current;
       // Tự động kiểm tra luồng live hiện tại thay vì ép về null
-      fetch(`/api/stream/active?roomId=${encodeURIComponent(targetRoom || '')}`)
+      fetch(`/api/stream/active?roomId=${encodeURIComponent(targetRoom || '')}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
         .then((res) => res.json())
         .then((resp) => {
           if (resp && resp.stream && resp.stream.status === 'LIVE') {
@@ -116,19 +128,17 @@ export const App: React.FC = () => {
     return () => {
       newSocket.disconnect();
     };
-  }, []);
+  }, [token]);
 
   // Join Room when socket or currentRoomId changes
   useEffect(() => {
     if (socket && currentRoomId) {
       setViewerBlocked(false); // Reset khi đổi phòng
       socket.emit('join_room', {
-        roomId: currentRoomId,
-        role: user?.role,
-        userId: user?.id    // server dùng để xác định chủ phòng (miễn giới hạn)
+        roomId: currentRoomId
       });
     }
-  }, [socket, currentRoomId, user?.role, user?.id]);
+  }, [socket, currentRoomId]);
 
   // Fetch Current Auth User on Token change
   useEffect(() => {
