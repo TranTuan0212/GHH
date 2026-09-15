@@ -351,15 +351,13 @@ io.on('connection', (socket) => {
         socket._viewerRoomId = undefined;
         socket._isViewer = false;
         const isAdmin = user.role === 'ADMIN';
-        const isOwner = user.id === roomId;
-        const isViewer = !isAdmin && !isOwner;
-        // Kiểm tra giới hạn viewer: Admin và chủ phòng được miễn giới hạn!
-        if (isViewer) {
+        // Giới hạn tối đa 2 thiết bị Web cùng mở xem và điều khiển phòng A (Chỉ Admin mới được miễn giới hạn)
+        if (!isAdmin) {
             if (!roomViewers.has(roomId))
                 roomViewers.set(roomId, new Map());
             const viewers = roomViewers.get(roomId);
             if (viewers.size >= MAX_VIEWERS_PER_ROOM) {
-                console.log(`[Socket] Viewer limit reached for room ${roomId} (${viewers.size}/${MAX_VIEWERS_PER_ROOM}). Rejecting ${socket.id}`);
+                console.log(`[Socket] Phòng ${roomId} đã đủ tối đa ${MAX_VIEWERS_PER_ROOM} người xem/điều khiển. Từ chối ${socket.id}`);
                 socket.emit('viewer_limit_reached', { max: MAX_VIEWERS_PER_ROOM, current: viewers.size });
                 socket.disconnect(true);
                 return;
@@ -367,7 +365,7 @@ io.on('connection', (socket) => {
             viewers.set(socket.id, user.id);
             socket._viewerRoomId = roomId;
             socket._isViewer = true;
-            console.log(`[Socket] Viewer joined room ${roomId}: ${viewers.size}/${MAX_VIEWERS_PER_ROOM}`);
+            console.log(`[Socket] Người dùng ${user.username} (${socket.id}) vào phòng ${roomId}: ${viewers.size}/${MAX_VIEWERS_PER_ROOM}`);
         }
         socket.join(`room_${roomId}`);
         if (isAdmin) {
