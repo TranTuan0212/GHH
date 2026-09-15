@@ -13,7 +13,7 @@ webrtcEncryption: false
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: true
-webrtcAdditionalHosts: ["157.66.100.10"]
+webrtcAdditionalHosts: ["161.248.146.201"]
 
 paths:
   all_others:
