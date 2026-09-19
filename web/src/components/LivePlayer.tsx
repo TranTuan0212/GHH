@@ -21,7 +21,9 @@ import {
   Type,
   Plus,
   Trash2,
-  X
+  X,
+  Maximize,
+  Minimize
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -140,6 +142,67 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return next;
     });
   };
+
+  // Fullscreen state & ref giống YouTube
+  const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = () => {
+    const elem = playerContainerRef.current;
+    if (!elem) return;
+
+    const isCurrentlyFullscreen = !!(
+      document.fullscreenElement ||
+      (document as any).webkitFullscreenElement ||
+      (document as any).mozFullScreenElement ||
+      (document as any).msFullscreenElement ||
+      isFullscreen
+    );
+
+    if (!isCurrentlyFullscreen) {
+      if (elem.requestFullscreen) {
+        elem.requestFullscreen().catch(() => {
+          setIsFullscreen(true);
+        });
+      } else if ((elem as any).webkitRequestFullscreen) {
+        (elem as any).webkitRequestFullscreen();
+      } else if ((elem as any).webkitEnterFullscreen) {
+        const activeVid = (isLiveRef.current && hasLiveFrame) ? liveVideoRef.current : replayVideoRef.current;
+        if (activeVid && (activeVid as any).webkitEnterFullscreen) {
+          (activeVid as any).webkitEnterFullscreen();
+        } else {
+          setIsFullscreen(true);
+        }
+      } else {
+        setIsFullscreen(true);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if ((document as any).webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+      }
+      setIsFullscreen(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      const isFs = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement
+      );
+      setIsFullscreen(isFs);
+    };
+
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
+  }, []);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [hlsWindowStart, setHlsWindowStart] = useState<number>(0);
@@ -1415,9 +1478,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return;
     }
 
-    if (e.key === 'm' || e.key === 'M' || e.key === 'f' || e.key === 'F') {
+    if (e.key === 'm' || e.key === 'M') {
       e.preventDefault();
       toggleFlip();
+      return;
+    }
+
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
+
+    if (e.key === 'Escape' && isFullscreen) {
+      e.preventDefault();
+      toggleFullscreen();
       return;
     }
 
@@ -1687,7 +1762,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         : (isLive ? totalSpan : Math.max(0, currentTime - timelineStart)));
 
   return (
-    <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col">
+    <div
+      ref={playerContainerRef}
+      className={`glass-panel overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col transition-all ${
+        isFullscreen
+          ? 'fixed inset-0 z-[999999] w-screen h-screen rounded-none bg-black max-h-none border-none'
+          : 'rounded-2xl'
+      }`}
+    >
       {/* Header Info Bar */}
       <div className="px-3 py-1.5 sm:px-4 sm:py-2 bg-slate-900/80 border-b border-white/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
         <div className="flex items-center space-x-2 sm:space-x-3 w-full sm:w-auto justify-between sm:justify-start">
@@ -1717,7 +1799,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       {/* Video Container */}
       <div
         ref={videoContainerRef}
-        className="relative aspect-video w-full bg-black flex items-center justify-center group overflow-hidden max-h-[58vh]"
+        onDoubleClick={toggleFullscreen}
+        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
+          isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
+        }`}
+        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F)"
       >
         {textOverlays.map((item) => (
           <div
@@ -2162,6 +2248,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 {isLive ? '1.0x' : (playbackRate === 0.0625 ? '1/16x' : `${playbackRate}x`)}
               </span>
             </div>
+
+            {/* Nút Phóng to toàn màn hình như YouTube */}
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-white/10 transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95"
+              title={isFullscreen ? 'Thu nhỏ (F hoặc Esc)' : 'Toàn màn hình (F)'}
+            >
+              {isFullscreen ? (
+                <Minimize className="w-3.5 h-3.5 text-amber-300" />
+              ) : (
+                <Maximize className="w-3.5 h-3.5" />
+              )}
+            </button>
           </div>
         </div>
       </div>
