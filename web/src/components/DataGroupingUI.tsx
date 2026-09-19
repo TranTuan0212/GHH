@@ -951,6 +951,20 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     groupNum: 1
   });
 
+  // Tự động ẩn nút nổi khi video đang toàn màn hình
+  const [isScreenFullscreen, setIsScreenFullscreen] = useState(false);
+  React.useEffect(() => {
+    const handleFs = () => {
+      setIsScreenFullscreen(!!(document.fullscreenElement || (document as any).webkitFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFs);
+    document.addEventListener('webkitfullscreenchange', handleFs);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFs);
+      document.removeEventListener('webkitfullscreenchange', handleFs);
+    };
+  }, []);
+
   const handleSelectGameMode = (mode: GameMode) => {
     setGameMode(mode);
     try {
@@ -1993,8 +2007,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         }}
       />
 
-      {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng số bất cứ khi nào */}
-      {!isCardPickerOpen && typeof document !== 'undefined' && createPortal(
+      {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng số bất cứ khi nào (Ẩn khi đang toàn màn hình) */}
+      {!isCardPickerOpen && !isScreenFullscreen && typeof document !== 'undefined' && createPortal(
         <button
           type="button"
           onClick={() => setIsCardPickerOpen(true)}

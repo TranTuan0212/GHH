@@ -1534,6 +1534,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Chrome/Safari tối thiểu hỗ trợ playbackRate = 0.0625 (1/16). 0.05 sẽ throw NotSupportedError.
   const speedOptions = [0.0625, 0.1, 0.125, 0.25, 0.5, 0.75, 1.0];
+
+  // Menu chọn tốc độ Custom chuẩn YouTube (tránh iPad văng fullscreen do thẻ select)
+  const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState(false);
+  const speedMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isSpeedMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) {
+        setIsSpeedMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isSpeedMenuOpen]);
   const hasStreamData = !!stream && (hasFrame || hasLiveFrame || (hlsLiveEdge > hlsWindowStart) || duration > 0);
   const activeDuration = !hasStreamData
     ? 0
@@ -2222,31 +2241,62 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               </div>
             )}
 
-            {/* Dropdown chọn tốc độ slow */}
-            <div className="flex items-center space-x-1 flex-shrink-0">
-              <Gauge className="w-3 h-3 text-indigo-400" />
-              <select
-                value={isLive ? 1.0 : playbackRate}
-                onChange={(e) => handleSpeedChange(Number(e.target.value))}
-                className="bg-slate-800 text-indigo-300 font-bold font-mono text-[11px] rounded-lg border border-indigo-500/40 px-2 py-0.5 cursor-pointer hover:bg-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
-                title="Chọn tốc độ phát xem lại (Replay)"
+            {/* Menu chọn tốc độ Custom chuẩn YouTube (KHÔNG dùng thẻ select để tránh iPad văng fullscreen) */}
+            <div ref={speedMenuRef} className="relative flex items-center space-x-1 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsSpeedMenuOpen(!isSpeedMenuOpen)}
+                className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-sm active:scale-95 ${
+                  isSpeedMenuOpen
+                    ? 'bg-indigo-600 text-white border-indigo-400 ring-2 ring-indigo-400/50'
+                    : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-indigo-500/40'
+                }`}
+                title="Chọn tốc độ phát lại (Slow-Motion)"
               >
-                {speedOptions.map((rate) => (
-                  <option key={rate} value={rate}>
-                    {rate === 0.0625 ? '1/16x — Siêu chậm' :
-                     rate === 0.1   ? '0.1x — Cực chậm'   :
-                     rate === 0.125 ? '1/8x — Rất chậm'   :
-                     rate === 0.25  ? '0.25x — Chậm'       :
-                     rate === 0.5   ? '0.5x — Nửa tốc'    :
-                     rate === 0.75  ? '0.75x — Hơi chậm'  :
-                                     '1.0x — Bình thường'}
-                  </option>
-                ))}
-              </select>
-              {/* Badge tốc độ đang chọn */}
-              <span className="text-[10px] font-black font-mono text-indigo-300 bg-indigo-600/20 border border-indigo-500/30 rounded px-1.5 py-0.5">
-                {isLive ? '1.0x' : (playbackRate === 0.0625 ? '1/16x' : `${playbackRate}x`)}
-              </span>
+                <Gauge className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{isLive ? '1.0x' : (playbackRate === 0.0625 ? '1/16x' : `${playbackRate}x`)}</span>
+              </button>
+
+              {/* Popover danh sách tốc độ mở hướng lên trên giống YouTube */}
+              {isSpeedMenuOpen && (
+                <div className="absolute bottom-full right-0 mb-2 w-44 bg-slate-900/98 backdrop-blur-xl border border-indigo-500/40 rounded-xl shadow-2xl p-1 z-[100] space-y-0.5 animate-fadeIn">
+                  <div className="text-[10px] font-bold text-slate-400 px-2 py-1 border-b border-white/10 uppercase tracking-wider flex items-center justify-between">
+                    <span>Tốc độ phát</span>
+                    <span className="text-amber-400 font-mono">Slow</span>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto no-scrollbar py-0.5 space-y-0.5">
+                    {speedOptions.map((rate) => {
+                      const isCurrent = (!isLive && playbackRate === rate) || (isLive && rate === 1.0);
+                      const label =
+                        rate === 0.0625 ? '1/16x (Siêu chậm)' :
+                        rate === 0.1   ? '0.1x (Cực chậm)'   :
+                        rate === 0.125 ? '1/8x (Rất chậm)'   :
+                        rate === 0.25  ? '0.25x (Chậm)'       :
+                        rate === 0.5   ? '0.5x (Nửa tốc)'    :
+                        rate === 0.75  ? '0.75x (Hơi chậm)'  :
+                                        '1.0x (Bình thường)';
+                      return (
+                        <button
+                          key={rate}
+                          type="button"
+                          onClick={() => {
+                            handleSpeedChange(rate);
+                            setIsSpeedMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                            isCurrent
+                              ? 'bg-indigo-600 text-white font-bold shadow-sm'
+                              : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                          }`}
+                        >
+                          <span>{label}</span>
+                          {isCurrent && <span className="text-amber-300 font-black text-xs">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Nút Phóng to toàn màn hình như YouTube */}
