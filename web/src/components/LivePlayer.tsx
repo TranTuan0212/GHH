@@ -84,6 +84,7 @@ interface LivePlayerProps {
   roomName?: string;
   onFinishRound?: () => void;
   finishRoundTrigger?: number;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
 }
 
 export const LivePlayer: React.FC<LivePlayerProps> = ({
@@ -93,6 +94,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   roomName,
   onFinishRound,
   finishRoundTrigger,
+  onFullscreenChange,
 }) => {
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const replayVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -147,6 +149,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  const setFullscreenState = (fs: boolean) => {
+    setIsFullscreen(fs);
+    onFullscreenChange?.(fs);
+  };
+
   const toggleFullscreen = () => {
     const elem = playerContainerRef.current;
     if (!elem) return;
@@ -162,7 +169,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (!isCurrentlyFullscreen) {
       if (elem.requestFullscreen) {
         elem.requestFullscreen().catch(() => {
-          setIsFullscreen(true);
+          setFullscreenState(true);
         });
       } else if ((elem as any).webkitRequestFullscreen) {
         (elem as any).webkitRequestFullscreen();
@@ -171,10 +178,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         if (activeVid && (activeVid as any).webkitEnterFullscreen) {
           (activeVid as any).webkitEnterFullscreen();
         } else {
-          setIsFullscreen(true);
+          setFullscreenState(true);
         }
       } else {
-        setIsFullscreen(true);
+        setFullscreenState(true);
       }
     } else {
       if (document.exitFullscreen) {
@@ -182,7 +189,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if ((document as any).webkitExitFullscreen) {
         (document as any).webkitExitFullscreen();
       }
-      setIsFullscreen(false);
+      setFullscreenState(false);
     }
   };
 
@@ -193,7 +200,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         (document as any).webkitFullscreenElement ||
         (document as any).mozFullScreenElement
       );
-      setIsFullscreen(isFs);
+      setFullscreenState(isFs);
     };
 
     document.addEventListener('fullscreenchange', handleFsChange);
@@ -203,6 +210,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       document.removeEventListener('webkitfullscreenchange', handleFsChange);
     };
   }, []);
+
+  useEffect(() => {
+    if (isFullscreen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isFullscreen]);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [hlsWindowStart, setHlsWindowStart] = useState<number>(0);
@@ -2222,7 +2240,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </div>
 
           {/* Slow Motion Speed Controls & Nút Về Live */}
-          <div className="flex items-center space-x-1 bg-slate-950/70 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar max-w-full">
+          <div className="flex items-center space-x-1 bg-slate-950/70 p-1 rounded-xl border border-white/10 relative flex-shrink-0">
             {/* Nút VỀ LIVE to nổi bật khi đang xem Replay */}
             {!isLive ? (
               <button
@@ -2245,7 +2263,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             <div ref={speedMenuRef} className="relative flex items-center space-x-1 flex-shrink-0">
               <button
                 type="button"
-                onClick={() => setIsSpeedMenuOpen(!isSpeedMenuOpen)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSpeedMenuOpen(!isSpeedMenuOpen);
+                }}
                 className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-sm active:scale-95 ${
                   isSpeedMenuOpen
                     ? 'bg-indigo-600 text-white border-indigo-400 ring-2 ring-indigo-400/50'
@@ -2259,43 +2280,61 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
               {/* Popover danh sách tốc độ mở hướng lên trên giống YouTube */}
               {isSpeedMenuOpen && (
-                <div className="absolute bottom-full right-0 mb-2 w-44 bg-slate-900/98 backdrop-blur-xl border border-indigo-500/40 rounded-xl shadow-2xl p-1 z-[100] space-y-0.5 animate-fadeIn">
-                  <div className="text-[10px] font-bold text-slate-400 px-2 py-1 border-b border-white/10 uppercase tracking-wider flex items-center justify-between">
-                    <span>Tốc độ phát</span>
-                    <span className="text-amber-400 font-mono">Slow</span>
+                <>
+                  <div
+                    className="fixed inset-0 z-[100] bg-transparent"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsSpeedMenuOpen(false);
+                    }}
+                    onTouchEnd={(e) => {
+                      e.stopPropagation();
+                      setIsSpeedMenuOpen(false);
+                    }}
+                  />
+                  <div
+                    className="absolute bottom-full right-0 mb-2 w-48 bg-slate-900/98 backdrop-blur-xl border border-indigo-500/50 rounded-xl shadow-2xl p-1 z-[101] space-y-0.5 animate-fadeIn"
+                    onClick={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-slate-400 px-2 py-1 border-b border-white/10 uppercase tracking-wider flex items-center justify-between">
+                      <span>Tốc độ phát</span>
+                      <span className="text-amber-400 font-mono">Slow</span>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto no-scrollbar py-0.5 space-y-0.5">
+                      {speedOptions.map((rate) => {
+                        const isCurrent = (!isLive && playbackRate === rate) || (isLive && rate === 1.0);
+                        const label =
+                          rate === 0.0625 ? '1/16x (Siêu chậm)' :
+                          rate === 0.1   ? '0.1x (Cực chậm)'   :
+                          rate === 0.125 ? '1/8x (Rất chậm)'   :
+                          rate === 0.25  ? '0.25x (Chậm)'       :
+                          rate === 0.5   ? '0.5x (Nửa tốc)'    :
+                          rate === 0.75  ? '0.75x (Hơi chậm)'  :
+                                          '1.0x (Bình thường)';
+                        return (
+                          <button
+                            key={rate}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSpeedChange(rate);
+                              setIsSpeedMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                              isCurrent
+                                ? 'bg-indigo-600 text-white font-bold shadow-sm'
+                                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                            }`}
+                          >
+                            <span>{label}</span>
+                            {isCurrent && <span className="text-amber-300 font-black text-xs">✓</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="max-h-56 overflow-y-auto no-scrollbar py-0.5 space-y-0.5">
-                    {speedOptions.map((rate) => {
-                      const isCurrent = (!isLive && playbackRate === rate) || (isLive && rate === 1.0);
-                      const label =
-                        rate === 0.0625 ? '1/16x (Siêu chậm)' :
-                        rate === 0.1   ? '0.1x (Cực chậm)'   :
-                        rate === 0.125 ? '1/8x (Rất chậm)'   :
-                        rate === 0.25  ? '0.25x (Chậm)'       :
-                        rate === 0.5   ? '0.5x (Nửa tốc)'    :
-                        rate === 0.75  ? '0.75x (Hơi chậm)'  :
-                                        '1.0x (Bình thường)';
-                      return (
-                        <button
-                          key={rate}
-                          type="button"
-                          onClick={() => {
-                            handleSpeedChange(rate);
-                            setIsSpeedMenuOpen(false);
-                          }}
-                          className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
-                            isCurrent
-                              ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                              : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                          }`}
-                        >
-                          <span>{label}</span>
-                          {isCurrent && <span className="text-amber-300 font-black text-xs">✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                </>
               )}
             </div>
 

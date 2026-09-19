@@ -25,6 +25,7 @@ export const App: React.FC = () => {
   currentRoomIdRef.current = currentRoomId;
   const [finishRoundTrigger, setFinishRoundTrigger] = useState<number>(0);
   const [viewerBlocked, setViewerBlocked] = useState<boolean>(false);
+  const [isVideoFullscreen, setIsVideoFullscreen] = useState<boolean>(false);
 
   // Set initial currentRoomId when user logs in
   useEffect(() => {
@@ -393,7 +394,7 @@ export const App: React.FC = () => {
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3.5 items-start">
               {/* Left Column: Custom Live Slow-Mo 240fps Player */}
-              <div className="lg:col-span-7 space-y-2.5">
+              <div className={`${isVideoFullscreen ? 'col-span-12' : 'lg:col-span-7'} space-y-2.5`}>
                 <LivePlayer
                   stream={activeStream}
                   socket={socket}
@@ -401,16 +402,18 @@ export const App: React.FC = () => {
                   roomName={activeRoomName}
                   onFinishRound={handleFinishRound}
                   finishRoundTrigger={finishRoundTrigger}
+                  onFullscreenChange={setIsVideoFullscreen}
                 />
               </div>
 
-              {/* Right Column: Auto Round-Robin Data Grouping System */}
-              <div className="lg:col-span-5 space-y-2.5">
+              {/* Right Column: Auto Round-Robin Data Grouping System (Ẩn hoàn toàn khi Fullscreen) */}
+              <div className={`lg:col-span-5 space-y-2.5 ${isVideoFullscreen ? 'hidden pointer-events-none' : ''}`}>
                 <DataGroupingUI
                   entries={cardEntries}
                   roomId={currentRoomId}
                   roomName={activeRoomName}
                   groupNames={groupNames}
+                  isVideoFullscreen={isVideoFullscreen}
                   onAddCard={handleAddCard}
                   onClearCards={handleClearCards}
                   onUndoCard={handleUndoCard}

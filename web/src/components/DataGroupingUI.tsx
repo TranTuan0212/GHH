@@ -37,6 +37,7 @@ interface DataGroupingUIProps {
   onEditCard?: (cardId: string, newCardValue: string) => void;
   onDeleteCard?: (cardId: string) => void;
   onSetGroupNames?: (names: { [groupIndex: number]: string }) => void;
+  isVideoFullscreen?: boolean;
 }
 
 // Chuẩn hóa và bóc tách giá trị số (hỗ trợ số từ 1..13 và số 0 không thấy)
@@ -839,7 +840,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   onFinishRound,
   onEditCard,
   onDeleteCard,
-  onSetGroupNames
+  onSetGroupNames,
+  isVideoFullscreen = false
 }) => {
   // Game Mode: 3 Mục ('3cards') vs 2 Mục ('2cards') - Mặc định: 3 mục ('3cards')
   const [gameMode, setGameMode] = useState<GameMode>(() => {
@@ -1971,44 +1973,46 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         </div>
       )}
 
-      {/* 9. Floating Draggable 1-13 & 0 Picker Popup (Có kèm Bảng Đáp Án & Xong Phiên) */}
-      <CardPickerPopup
-        isOpen={isCardPickerOpen}
-        onClose={() => setIsCardPickerOpen(false)}
-        target={cardPickerTarget}
-        numGroups={numGroups}
-        groupNames={groupNames}
-        entries={entries}
-        gameMode={gameMode}
-        danGroups={danGroups}
-        onSelectCard={handleSelectCardFromPicker}
-        onDeleteCard={onDeleteCard}
-        onChangeTargetGroup={(gNum) => {
-          setSelectedGroupTarget(gNum);
-          setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum, mode: 'add', cardId: undefined, currentValue: undefined }));
-        }}
-        onFinishRound={handleRequestFinishRound}
-        onSetTarget={(t) => {
-          if (t.mode === 'add') {
-            setSelectedGroupTarget(t.groupNum);
-          }
-          setCardPickerTarget(t);
-        }}
-        onChangeGameMode={handleSelectGameMode}
-        onChangeNumGroups={handleSelectNumGroups}
-        onClearCards={() => {
-          onClearCards();
-          setDanGroups({});
-          setGroupBotInputs({});
-          setManualInput('');
-          setSelectedGroupTarget(null);
-          setCardPickerTarget({ mode: 'add', groupNum: 1 });
-          showToast('🗑️ Đã xóa sạch toàn bộ số, sẵn sàng điền lại!');
-        }}
-      />
+      {/* 9. Floating Draggable 1-13 & 0 Picker Popup (Ẩn hoàn toàn khi video đang toàn màn hình) */}
+      {!isVideoFullscreen && !isScreenFullscreen && (
+        <CardPickerPopup
+          isOpen={isCardPickerOpen}
+          onClose={() => setIsCardPickerOpen(false)}
+          target={cardPickerTarget}
+          numGroups={numGroups}
+          groupNames={groupNames}
+          entries={entries}
+          gameMode={gameMode}
+          danGroups={danGroups}
+          onSelectCard={handleSelectCardFromPicker}
+          onDeleteCard={onDeleteCard}
+          onChangeTargetGroup={(gNum) => {
+            setSelectedGroupTarget(gNum);
+            setCardPickerTarget((prev) => ({ ...prev, groupNum: gNum, mode: 'add', cardId: undefined, currentValue: undefined }));
+          }}
+          onFinishRound={handleRequestFinishRound}
+          onSetTarget={(t) => {
+            if (t.mode === 'add') {
+              setSelectedGroupTarget(t.groupNum);
+            }
+            setCardPickerTarget(t);
+          }}
+          onChangeGameMode={handleSelectGameMode}
+          onChangeNumGroups={handleSelectNumGroups}
+          onClearCards={() => {
+            onClearCards();
+            setDanGroups({});
+            setGroupBotInputs({});
+            setManualInput('');
+            setSelectedGroupTarget(null);
+            setCardPickerTarget({ mode: 'add', groupNum: 1 });
+            showToast('🗑️ Đã xóa sạch toàn bộ số, sẵn sàng điền lại!');
+          }}
+        />
+      )}
 
       {/* 10. Nút Nổi To Cố Định Ở Góc Màn Hình: Bật lại bảng số bất cứ khi nào (Ẩn khi đang toàn màn hình) */}
-      {!isCardPickerOpen && !isScreenFullscreen && typeof document !== 'undefined' && createPortal(
+      {!isCardPickerOpen && !isScreenFullscreen && !isVideoFullscreen && typeof document !== 'undefined' && createPortal(
         <button
           type="button"
           onClick={() => setIsCardPickerOpen(true)}
