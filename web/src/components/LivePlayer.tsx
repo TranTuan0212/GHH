@@ -143,57 +143,42 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     });
   };
 
-  // Fullscreen state & ref giống YouTube
+  // Toàn màn hình tràn viền (Web Fullscreen) - KHÔNG gọi requestFullscreen của hệ điều hành
+  // để tránh hoàn toàn thông báo màu vàng của iPad/Safari che màn hình.
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const toggleFullscreen = () => {
-    const elem = playerContainerRef.current;
-    if (!elem) return;
-
-    const isCurrentlyFullscreen = !!(
-      document.fullscreenElement ||
-      (document as any).webkitFullscreenElement ||
-      (document as any).mozFullScreenElement ||
-      (document as any).msFullscreenElement ||
-      isFullscreen
-    );
-
-    if (!isCurrentlyFullscreen) {
-      if (elem.requestFullscreen) {
-        elem.requestFullscreen().catch(() => {
-          setIsFullscreen(true);
-        });
-      } else if ((elem as any).webkitRequestFullscreen) {
-        (elem as any).webkitRequestFullscreen();
-      } else if ((elem as any).webkitEnterFullscreen) {
-        const activeVid = (isLiveRef.current && hasLiveFrame) ? liveVideoRef.current : replayVideoRef.current;
-        if (activeVid && (activeVid as any).webkitEnterFullscreen) {
-          (activeVid as any).webkitEnterFullscreen();
-        } else {
-          setIsFullscreen(true);
-        }
-      } else {
-        setIsFullscreen(true);
+    setIsFullscreen((prev) => {
+      const next = !prev;
+      // Thoát native fullscreen nếu trước đó có đang kích hoạt
+      if (document.fullscreenElement || (document as any).webkitFullscreenElement) {
+        try {
+          if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+          else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
+        } catch {}
       }
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen();
-      }
-      setIsFullscreen(false);
-    }
+      return next;
+    });
   };
+
+  // Khóa cuộn trang khi đang ở chế độ toàn màn hình tràn viền
+  useEffect(() => {
+    if (isFullscreen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isFullscreen]);
 
   useEffect(() => {
     const handleFsChange = () => {
-      const isFs = !!(
-        document.fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (document as any).mozFullScreenElement
-      );
-      setIsFullscreen(isFs);
+      if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
+        // Native fullscreen exited
+      }
     };
 
     document.addEventListener('fullscreenchange', handleFsChange);
@@ -1766,7 +1751,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       ref={playerContainerRef}
       className={`glass-panel overflow-hidden shadow-2xl border border-indigo-500/20 flex flex-col transition-all ${
         isFullscreen
-          ? 'fixed inset-0 z-[999999] w-screen h-screen rounded-none bg-black max-h-none border-none'
+          ? 'fixed inset-0 z-[999999] w-full h-[100dvh] rounded-none bg-black max-h-none border-none'
           : 'rounded-2xl'
       }`}
     >
@@ -1787,6 +1772,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </div>
 
         <div className="flex items-center space-x-1.5 sm:space-x-2 self-end sm:self-auto">
+          {isFullscreen && (
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="px-2.5 py-0.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold flex items-center space-x-1 shadow-md transition-all active:scale-95 cursor-pointer"
+              title="Thoát toàn màn hình (Esc hoặc F)"
+            >
+              <Minimize className="w-3 h-3" />
+              <span>Thu nhỏ</span>
+            </button>
+          )}
           <span className="px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-300 text-[10px] font-mono font-medium border border-amber-500/30 flex items-center gap-1" title="Playlist HLS (.m3u8) do server slice; segment .ts chứa toàn bộ frame 120/240fps gốc.">
             HLS DVR
           </span>
