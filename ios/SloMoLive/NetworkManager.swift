@@ -6,8 +6,8 @@ public class NetworkManager: ObservableObject {
     public static let shared = NetworkManager()
 
     // Cấu hình máy chủ gán cứng cố định (Ẩn hoàn toàn khỏi giao diện người dùng)
-    public static let defaultServerURL = "http://161.248.146.201:4000"
-    public static let defaultRtmpHost = "161.248.146.201"
+    public static let defaultServerURL = "http://157.66.100.10:4000"
+    public static let defaultRtmpHost = "157.66.100.10"
     public static let defaultRtmpPort = "1935"
 
     @Published public var serverURL: String = defaultServerURL {
@@ -25,7 +25,7 @@ public class NetworkManager: ObservableObject {
     @Published public var hlsPlaylistUrl: String? = nil
     @Published public var errorMessage: String? = nil
 
-    /// Host & Port RTMP gán cứng vào VPS 161.248.146.201:1935
+    /// Host & Port RTMP gán cứng vào VPS 157.66.100.10:1935
     @Published public var customRtmpHost: String = defaultRtmpHost {
         didSet {
             UserDefaults.standard.set(customRtmpHost, forKey: "custom_rtmp_host")
