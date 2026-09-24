@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import LFLiveKit
 import UIKit
+import CoreMotion
 
 /// CameraManager đẩy luồng video 120fps/240fps gốc (không bỏ frame, không re-encode lại thành JPEG rời)
 /// vào Server qua giao thức RTMP/H.264 tới `rtmp://<server>:1935/live/{streamKey}`.
@@ -48,47 +49,122 @@ public class CameraManager: NSObject, ObservableObject {
     /// mà không cần truy cập @Published var từ thread không phải main.
     private var isStreamingAtomic: Bool = false
 
+    /// CMMotionManager đọc trực tiếp gia tốc trọng lực thực tế từ phần cứng (không bị khóa bởi Control Center,
+    /// không bị ảnh hưởng bởi iOS 16 UIWindowScene orientation suppression, và nhận biết được kể cả khi đặt nằm ngang trước).
+    private let motionManager = CMMotionManager()
+
+    /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
+    @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
     public override init() {
         super.init()
-        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(deviceOrientationDidChange),
-            name: UIDevice.orientationDidChangeNotification,
-            object: nil
-        )
+        startMotionUpdates()
     }
 
     deinit {
+        stopMotionUpdates()
+    }
+
+    private func startMotionUpdates() {
+        if motionManager.isAccelerometerAvailable {
+            motionManager.accelerometerUpdateInterval = 0.2
+            motionManager.startAccelerometerUpdates(to: .main) { [weak self] data, error in
+                guard let self = self, let acceleration = data?.acceleration else { return }
+                self.handleAcceleration(acceleration)
+            }
+        } else {
+            // Fallback sang UIDevice nếu thiết bị không hỗ trợ gia tốc kế (như simulator)
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(deviceOrientationDidChange),
+                name: UIDevice.orientationDidChangeNotification,
+                object: nil
+            )
+        }
+    }
+
+    private func stopMotionUpdates() {
+        if motionManager.isAccelerometerActive {
+            motionManager.stopAccelerometerUpdates()
+        }
         NotificationCenter.default.removeObserver(self)
         UIDevice.current.endGeneratingDeviceOrientationNotifications()
     }
 
-    /// The camera sensor is naturally landscape while the app UI is portrait-locked.
-    /// Explicitly update the capture output connection so the encoded RTMP frame has the
-    /// same orientation as the phone, rather than relying on preview-only orientation.
     @objc private func deviceOrientationDidChange() {
-        updateVideoOrientation()
+        guard !isStreamingAtomic && !isConnecting else { return }
+        let isFront = (self.cameraPosition == .front)
+        let newOrientation: AVCaptureVideoOrientation
+        switch UIDevice.current.orientation {
+        case .landscapeLeft:
+            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+        case .landscapeRight:
+            newOrientation = isFront ? .landscapeRight : .landscapeLeft
+        case .portraitUpsideDown:
+            newOrientation = .portraitUpsideDown
+        default:
+            newOrientation = .portrait
+        }
+        if newOrientation != currentCaptureOrientation {
+            currentCaptureOrientation = newOrientation
+            updateVideoOrientation()
+            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                rebuildLiveSession()
+            }
+        }
     }
 
-    private func updateVideoOrientation() {
+    /// Xử lý vector trọng lực đọc từ con quay gia tốc kế của iPhone.
+    /// Nhận biết chính xác điện thoại đang nằm ngang hay đứng bất kể góc ngửa trên tripod hay khóa xoay iOS.
+    private func handleAcceleration(_ acceleration: CMAcceleration) {
+        // Trong lúc live stream: KHÔNG đổi orientation giữa chừng để tránh vỡ SPS/PPS của H.264 encoder
+        guard !isStreamingAtomic && !isConnecting else { return }
+
+        let x = acceleration.x
+        let y = acceleration.y
         let isFront = (self.cameraPosition == .front)
-        let orientation: AVCaptureVideoOrientation
-        switch UIDevice.current.orientation {
-        // Với camera sau: thiết bị nghiêng trái (landscapeLeft) thì góc quay video là landscapeRight.
-        // Với camera trước (quay vào mặt): cảm biến được đặt đối xứng gương, nên landscapeLeft thiết bị tương ứng đúng landscapeLeft video!
-        case .landscapeLeft:
-            orientation = isFront ? .landscapeLeft : .landscapeRight
-        case .landscapeRight:
-            orientation = isFront ? .landscapeRight : .landscapeLeft
-        case .portraitUpsideDown:
-            orientation = .portraitUpsideDown
-        default:
-            orientation = .portrait
+
+        let newOrientation: AVCaptureVideoOrientation
+        if abs(x) > abs(y) {
+            // Thiết bị đang nằm ngang (Landscape)
+            // x > 0: đỉnh máy nghiêng sang trái (top left, home right) -> UIDeviceOrientation.landscapeLeft
+            // Với camera sau: tương ứng AVCaptureVideoOrientation.landscapeRight
+            // Với camera trước: đối xứng gương nên là .landscapeLeft
+            if x > 0.15 {
+                newOrientation = isFront ? .landscapeLeft : .landscapeRight
+            } else if x < -0.15 {
+                newOrientation = isFront ? .landscapeRight : .landscapeLeft
+            } else {
+                return
+            }
+        } else {
+            // Thiết bị đang dựng đứng (Portrait)
+            if y < -0.15 {
+                newOrientation = .portrait
+            } else if y > 0.15 {
+                newOrientation = .portraitUpsideDown
+            } else {
+                return
+            }
         }
+
+        if newOrientation != currentCaptureOrientation {
+            currentCaptureOrientation = newOrientation
+            updateVideoOrientation()
+            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                rebuildLiveSession()
+            }
+        }
+    }
+
+    /// Đồng bộ videoOrientation của camera output theo orientation nhận diện từ cảm biến
+    private func updateVideoOrientation() {
+        let orientation = self.currentCaptureOrientation
+        let isFront = (self.cameraPosition == .front)
 
         sessionQueue.async { [weak self] in
             guard let self = self,
@@ -123,15 +199,33 @@ public class CameraManager: NSObject, ObservableObject {
         // track audio thực tế không có dữ liệu — video vẫn "thuần" Slo-Mo như thiết kế ban đầu.
         let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
 
-        // LFLiveKit's preset defaults to 30 FPS. Its public configuration is backed by
-        // VideoToolbox, so match its encoder clock to the camera's active high-FPS format.
-        // These properties bridge from Objective-C as UInt in Swift.
-        guard let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3) else {
+        let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
+        let uiOrientation: UIInterfaceOrientation = {
+            switch currentCaptureOrientation {
+            case .landscapeLeft: return .landscapeLeft
+            case .landscapeRight: return .landscapeRight
+            case .portraitUpsideDown: return .portraitUpsideDown
+            default: return .portrait
+            }
+        }()
+
+        guard let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3, outputImageOrientation: uiOrientation) ?? LFLiveVideoConfiguration.defaultConfiguration(for: .high3) else {
             DispatchQueue.main.async {
                 self.errorMessage = "Không tạo được cấu hình video cho encoder live."
             }
             return
         }
+
+        // QUAN TRỌNG: Khớp hoàn hảo videoSize của bộ nén với hướng xoay của camera.
+        // Tránh tình trạng camera xuất khung ngang 16:9 nhưng encoder bị kẹp 720x1280 (9:16) làm hình bị nén méo (nén thẳng).
+        if isLandscape {
+            videoCfg.videoSize = CGSize(width: 1280, height: 720)
+            videoCfg.outputImageOrientation = uiOrientation
+        } else {
+            videoCfg.videoSize = CGSize(width: 720, height: 1280)
+            videoCfg.outputImageOrientation = .portrait
+        }
+
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
         let targetBitrate: UInt = targetFps >= 240 ? 12_000_000 : (targetFps >= 120 ? 8_000_000 : 3_000_000)
 
@@ -145,7 +239,7 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoBitRate = targetBitrate
         videoCfg.videoMaxBitRate = targetBitrate * 12 / 10
         videoCfg.videoMinBitRate = targetBitrate * 55 / 100
-        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, target bitrate \(targetBitrate / 1_000_000)Mbps")
+        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(targetBitrate / 1_000_000)Mbps")
 
         // FIX BUILD: bản LFLiveKit đang dùng đã đổi `captureType` thành property get-only — nó chỉ
         // còn đọc được, không gán được sau khi session đã tạo. Giá trị này giờ phải truyền vào NGAY
@@ -337,16 +431,10 @@ public class CameraManager: NSObject, ObservableObject {
                     self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
                     self.captureSession.addOutput(self.videoDataOutput)
 
-                    // Nếu dùng connection từ output, ép video orientation portrait và bật HFR nếu hỗ trợ
+                    // Đồng bộ video orientation theo orientation đã nhận diện từ cảm biến
                     if let connection = self.videoDataOutput.connection(with: .video) {
                         if connection.isVideoOrientationSupported {
-                            // Set an initial orientation before the first encoded frame.
-                            switch UIDevice.current.orientation {
-                            case .landscapeLeft: connection.videoOrientation = .landscapeRight
-                            case .landscapeRight: connection.videoOrientation = .landscapeLeft
-                            case .portraitUpsideDown: connection.videoOrientation = .portraitUpsideDown
-                            default: connection.videoOrientation = .portrait
-                            }
+                            connection.videoOrientation = self.currentCaptureOrientation
                         }
                         if connection.isVideoMirroringSupported {
                             connection.isVideoMirrored = (self.cameraPosition == .front)
@@ -385,6 +473,10 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var cameraPosition: AVCaptureDevice.Position = .back
 
     public func startLiveStream() {
+        // Đồng bộ hướng camera và tái cấu hình encoder theo đúng hướng thực tế trước khi bấm Live
+        updateVideoOrientation()
+        rebuildLiveSession()
+
         // Bật RTMP push — server (NMS + FFmpeg) sẽ slice thành HLS .ts/.m3u8.
         guard let session = liveSession else {
             DispatchQueue.main.async {
