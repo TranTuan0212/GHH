@@ -64,7 +64,7 @@ export function resolveRtmpHostForClient(req: Pick<Request, 'headers'>): { rtmpH
   }
 
   const isPrivateIp = /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)/.test(primaryIp);
-  if (!isPrivateIp || hostHeader.includes('streamslo.date')) {
+  if (!isPrivateIp || hostHeader.includes('slomoview.stream')) {
     console.log(`[Network] Nhận diện kết nối qua "${hostHeader}", sử dụng IP Public ${primaryIp}:1935 cho RTMP.`);
     return { rtmpHost: primaryIp, rtmpPort: 1935 };
   }
