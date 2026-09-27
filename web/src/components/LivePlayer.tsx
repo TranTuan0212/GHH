@@ -2822,10 +2822,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                         ? 'bg-amber-600/30 text-amber-300 border-amber-500/50'
                         : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40')
                 }`}
-                title="Chọn độ phân giải (360p siêu nhẹ mượt, 720p sắc nét)"
+                title="Chọn độ phân giải (360p siêu nhẹ mượt, 480p cân bằng, 720p sắc nét - tất cả đều 60fps)"
               >
                 <span>
-                  {selectedResolution === '360p' ? '360p Mượt' : (selectedResolution === '480p' ? 'SD 480p' : 'HD 720p')}
+                  {selectedResolution === '360p' ? '360p 60fps' : (selectedResolution === '480p' ? '480p 60fps' : '720p 60fps')}
                 </span>
               </button>
 
@@ -2848,7 +2848,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                     onTouchStart={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-slate-400 px-2 py-1 border-b border-white/10 uppercase tracking-wider flex items-center justify-between">
-                      <span>Độ phân giải</span>
+                      <span>Độ phân giải (Full 60fps)</span>
                       <span className="text-cyan-400 font-mono">Live</span>
                     </div>
                     <div className="py-0.5 space-y-0.5">
@@ -2886,8 +2886,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                         }`}
                       >
                         <div>
-                          <div>SD (480p 30fps)</div>
-                          <div className="text-[10px] text-amber-200 opacity-80">Tiêu chuẩn cân bằng</div>
+                          <div>SD (480p 60fps)</div>
+                          <div className="text-[10px] text-amber-200 opacity-80">Mượt mà, siêu nhẹ dữ liệu</div>
                         </div>
                         {selectedResolution === '480p' && <span className="text-amber-300 font-black text-xs">✓</span>}
                       </button>
@@ -2907,10 +2907,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                       >
                         <div>
                           <div className="flex items-center space-x-1">
-                            <span>Siêu Mượt (360p)</span>
+                            <span>Siêu Mượt (360p 60fps)</span>
                             <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-400 text-black font-black uppercase">Nhẹ</span>
                           </div>
-                          <div className="text-[10px] text-emerald-200 opacity-80">Cực nhẹ, mạng 3G/yếu 100% mượt</div>
+                          <div className="text-[10px] text-emerald-200 opacity-80">Mạng 3G/yếu mượt 100%, không cắt frame</div>
                         </div>
                         {selectedResolution === '360p' && <span className="text-amber-300 font-black text-xs">✓</span>}
                       </button>

@@ -297,7 +297,7 @@ function startHlsSession(streamKey: string): void {
     `rtsp://127.0.0.1:8554/${streamKey}`
   ];
 
-  // Rendition phụ (SD 480p, 30fps, 800kbps) phục vụ người xem chọn chế độ "Mạng yếu / Tiết kiệm"
+  // Rendition phụ (SD 480p, 60fps, 1000kbps) - Giảm độ phân giải để mượt, giữ nguyên 60fps
   const lowLiveFfmpegArgs = [
     '-fflags', '+genpts+discardcorrupt',
     '-err_detect', 'ignore_err',
@@ -305,7 +305,7 @@ function startHlsSession(streamKey: string): void {
     '-map', '0:v:0',
     '-map', '0:a?',
     '-vf', 'scale=-2:480',
-    '-fpsmax', '30',
+    '-fpsmax', String(LIVE_PREVIEW_FPS),
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
     '-tune', 'zerolatency',
@@ -314,10 +314,10 @@ function startHlsSession(streamKey: string): void {
     '-pix_fmt', 'yuv420p',
     '-bf', '0',
     '-x264-params', 'scenecut=0:repeat-headers=1',
-    '-b:v', '800k',
-    '-maxrate', '1000k',
-    '-bufsize', '1200k',
-    '-g', '15',
+    '-b:v', '1000k',
+    '-maxrate', '1200k',
+    '-bufsize', '1500k',
+    '-g', '30',
     '-keyint_min', '15',
     '-sc_threshold', '0',
     '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
@@ -330,7 +330,7 @@ function startHlsSession(streamKey: string): void {
     `rtsp://127.0.0.1:8554/${streamKey}_low`
   ];
 
-  // Rendition siêu nhẹ (360p, 30fps, 400kbps) phục vụ người xem mạng 3G/4G yếu, siêu mượt 100%
+  // Rendition siêu nhẹ (360p, 60fps, 500kbps) - Giảm độ phân giải cho máy/mạng yếu, giữ nguyên 60fps
   const ultraLiveFfmpegArgs = [
     '-fflags', '+genpts+discardcorrupt',
     '-err_detect', 'ignore_err',
@@ -338,7 +338,7 @@ function startHlsSession(streamKey: string): void {
     '-map', '0:v:0',
     '-map', '0:a?',
     '-vf', 'scale=-2:360',
-    '-fpsmax', '30',
+    '-fpsmax', String(LIVE_PREVIEW_FPS),
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
     '-tune', 'zerolatency',
@@ -347,10 +347,10 @@ function startHlsSession(streamKey: string): void {
     '-pix_fmt', 'yuv420p',
     '-bf', '0',
     '-x264-params', 'scenecut=0:repeat-headers=1',
-    '-b:v', '400k',
-    '-maxrate', '500k',
-    '-bufsize', '600k',
-    '-g', '15',
+    '-b:v', '500k',
+    '-maxrate', '650k',
+    '-bufsize', '800k',
+    '-g', '30',
     '-keyint_min', '15',
     '-sc_threshold', '0',
     '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
@@ -367,8 +367,8 @@ function startHlsSession(streamKey: string): void {
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
   console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, video-only)`);
   console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, with audio)`);
-  console.log(`[MediaServer]   web live SD:   WHEP /${streamKey}_low/whep (480p, 30fps, 800k for weak network)`);
-  console.log(`[MediaServer]   web live Ultra: WHEP /${streamKey}_ultra/whep (360p, 30fps, 400k ultra smooth)`);
+  console.log(`[MediaServer]   web live SD:   WHEP /${streamKey}_low/whep (480p, up to ${LIVE_PREVIEW_FPS}fps, 1000k for weak network)`);
+  console.log(`[MediaServer]   web live Ultra: WHEP /${streamKey}_ultra/whep (360p, up to ${LIVE_PREVIEW_FPS}fps, 500k ultra smooth)`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
