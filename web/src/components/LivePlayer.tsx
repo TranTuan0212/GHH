@@ -25,7 +25,8 @@ import {
   Maximize,
   Minimize,
   ArrowLeftRight,
-  Move
+  Move,
+  ZoomIn
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -360,6 +361,100 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     });
   };
 
+  // Zoom & Pan cho màn hình video chính (hỗ trợ phóng to cận cảnh 1x - 4x bằng 2 ngón tay khi xem Fullscreen hoặc xem thường)
+  const [mainZoom, setMainZoom] = useState<number>(1.0);
+  const [mainPan, setMainPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const mainPinchStartRef = useRef<{ initialDistance: number; initialZoom: number } | null>(null);
+  const mainPanStartRef = useRef<{ startX: number; startY: number; origPan: { x: number; y: number } } | null>(null);
+  const lastTapTimeRef = useRef<number>(0);
+
+  const handleContainerTouchStart = (e: React.TouchEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('[data-pip-window="true"]') || target.closest('[data-text-overlay="true"]')) {
+      return;
+    }
+
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      mainPinchStartRef.current = {
+        initialDistance: dist,
+        initialZoom: mainZoom,
+      };
+      mainPanStartRef.current = null;
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      // Nhấp đúp để reset zoom 1x (hoặc phóng to 2x nếu đang 1x)
+      const now = Date.now();
+      if (now - lastTapTimeRef.current < 300) {
+        if (mainZoom > 1.05) {
+          setMainZoom(1.0);
+          setMainPan({ x: 0, y: 0 });
+        } else {
+          setMainZoom(2.0);
+        }
+        lastTapTimeRef.current = 0;
+        return;
+      }
+      lastTapTimeRef.current = now;
+
+      if (mainZoom > 1.05) {
+        mainPanStartRef.current = {
+          startX: e.touches[0].clientX,
+          startY: e.touches[0].clientY,
+          origPan: { ...mainPan },
+        };
+      }
+    }
+  };
+
+  const handleContainerTouchMove = (e: React.TouchEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('[data-pip-window="true"]') || target.closest('[data-text-overlay="true"]')) {
+      return;
+    }
+
+    if (e.touches.length === 2 && mainPinchStartRef.current) {
+      if (e.cancelable) e.preventDefault();
+      const currentDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const scale = currentDist / mainPinchStartRef.current.initialDistance;
+      const newZoom = Math.max(1.0, Math.min(4.0, Number((mainPinchStartRef.current.initialZoom * scale).toFixed(2))));
+      setMainZoom(newZoom);
+      if (newZoom <= 1.02) {
+        setMainPan({ x: 0, y: 0 });
+      }
+      return;
+    }
+
+    if (e.touches.length === 1 && mainPanStartRef.current && mainZoom > 1.05) {
+      if (e.cancelable) e.preventDefault();
+      const dx = e.touches[0].clientX - mainPanStartRef.current.startX;
+      const dy = e.touches[0].clientY - mainPanStartRef.current.startY;
+      const maxPanX = (mainZoom - 1) * 220;
+      const maxPanY = (mainZoom - 1) * 160;
+      setMainPan({
+        x: Math.max(-maxPanX, Math.min(maxPanX, mainPanStartRef.current.origPan.x + dx)),
+        y: Math.max(-maxPanY, Math.min(maxPanY, mainPanStartRef.current.origPan.y + dy)),
+      });
+    }
+  };
+
+  const handleContainerTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) {
+      mainPinchStartRef.current = null;
+    }
+    if (e.touches.length === 0) {
+      mainPanStartRef.current = null;
+    }
+  };
+
   // Fullscreen state & ref giống YouTube
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -599,7 +694,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [hlsBaseUrl, setHlsBaseUrl] = useState<string>('');
   const [replayHlsBaseUrl, setReplayHlsBaseUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
-  const [selectedResolution, setSelectedResolution] = useState<'720p' | '480p'>('720p');
+  const [selectedResolution, setSelectedResolution] = useState<'720p' | '480p' | '360p'>('720p');
   const [isResMenuOpen, setIsResMenuOpen] = useState(false);
   const resMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -622,7 +717,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     ? (() => {
         try {
           const endpoint = new URL(detectedServerUrl);
-          const pathKey = selectedResolution === '480p' ? `${stream.streamKey}_low` : stream.streamKey;
+          const pathKey = selectedResolution === '360p'
+            ? `${stream.streamKey}_ultra`
+            : (selectedResolution === '480p' ? `${stream.streamKey}_low` : stream.streamKey);
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
             if (typeof window !== 'undefined' && window.location.hostname) {
@@ -2069,14 +2166,35 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       <div
         ref={videoContainerRef}
         onDoubleClick={toggleFullscreen}
+        onTouchStart={handleContainerTouchStart}
+        onTouchMove={handleContainerTouchMove}
+        onTouchEnd={handleContainerTouchEnd}
         className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
-        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F)"
+        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay để zoom cận cảnh."
       >
+        {/* Nút đặt lại zoom khi đang phóng to cận cảnh */}
+        {mainZoom > 1.05 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMainZoom(1.0);
+              setMainPan({ x: 0, y: 0 });
+            }}
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white text-xs font-mono font-bold shadow-xl backdrop-blur flex items-center space-x-1.5 border border-indigo-400 active:scale-95 cursor-pointer animate-fadeIn"
+            title="Bấm để đưa về kích thước chuẩn 1x"
+          >
+            <ZoomIn className="w-3.5 h-3.5 text-amber-300" />
+            <span>Zoom: {mainZoom}x (Chạm để về 1x)</span>
+          </button>
+        )}
+
         {textOverlays.map((item) => (
           <div
             key={item.id}
+            data-text-overlay="true"
             style={{
               position: 'absolute',
               left: `${item.x}%`,
@@ -2121,8 +2239,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             (!isLive || !hasLiveFrame) && hasFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
           }`}
           style={{
-            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
-            transition: 'transform 0.2s ease-in-out',
+            transform: !isLive
+              ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
+              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+            transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0
           }}
@@ -2134,6 +2254,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             - Khi LIVE: Màn hình to toàn bộ.
             - Khi TUA: Cửa sổ PiP nhỏ có thể kéo thả di chuyển tự do (sang trái/phải), chỉnh to/nhỏ linh hoạt */}
         <div
+          data-pip-window="true"
           onMouseDown={(e) => {
             if (!isLive) {
               e.preventDefault();
@@ -2174,8 +2295,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               isLive && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
             }`}
             style={{
-              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
-              transition: 'transform 0.2s ease-in-out'
+              transform: isLive
+                ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
+                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+              transition: 'transform 0.1s ease-out'
             }}
             playsInline
             muted={isMuted}
@@ -2676,7 +2799,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </button>
 
-            {/* Menu Chọn Độ Phân Giải (HD 720p / SD 480p Mạng yếu) */}
+            {/* Menu Chọn Độ Phân Giải (HD 720p / SD 480p / 360p Siêu Mượt) */}
             <div ref={resMenuRef} className="relative flex items-center space-x-1 flex-shrink-0">
               <button
                 type="button"
@@ -2685,13 +2808,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   setIsResMenuOpen(!isResMenuOpen);
                 }}
                 className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center space-x-1 transition-all cursor-pointer shadow-sm active:scale-95 ${
-                  selectedResolution === '480p'
-                    ? 'bg-amber-600/30 text-amber-300 border-amber-500/50'
-                    : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40'
+                  selectedResolution === '360p'
+                    ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500/50'
+                    : (selectedResolution === '480p'
+                        ? 'bg-amber-600/30 text-amber-300 border-amber-500/50'
+                        : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40')
                 }`}
-                title="Chọn độ phân giải (Chọn SD nếu mạng yếu)"
+                title="Chọn độ phân giải (360p siêu nhẹ mượt, 720p sắc nét)"
               >
-                <span>{selectedResolution === '480p' ? 'SD 480p' : 'HD 720p'}</span>
+                <span>
+                  {selectedResolution === '360p' ? '360p Mượt' : (selectedResolution === '480p' ? 'SD 480p' : 'HD 720p')}
+                </span>
               </button>
 
               {isResMenuOpen && (
@@ -2708,7 +2835,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                     }}
                   />
                   <div
-                    className="absolute bottom-full right-0 mb-2 w-48 bg-slate-900/98 backdrop-blur-xl border border-cyan-500/50 rounded-xl shadow-2xl p-1 z-[101] space-y-0.5 animate-fadeIn"
+                    className="absolute bottom-full right-0 mb-2 w-52 bg-slate-900/98 backdrop-blur-xl border border-cyan-500/50 rounded-xl shadow-2xl p-1 z-[101] space-y-0.5 animate-fadeIn"
                     onClick={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
                   >
@@ -2751,10 +2878,33 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                         }`}
                       >
                         <div>
-                          <div>SD (480p Mạng yếu)</div>
-                          <div className="text-[10px] text-amber-200 opacity-80">Mượt, nhẹ mạng</div>
+                          <div>SD (480p 30fps)</div>
+                          <div className="text-[10px] text-amber-200 opacity-80">Tiêu chuẩn cân bằng</div>
                         </div>
                         {selectedResolution === '480p' && <span className="text-amber-300 font-black text-xs">✓</span>}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedResolution('360p');
+                          setIsResMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                          selectedResolution === '360p'
+                            ? 'bg-emerald-600 text-white font-bold shadow-sm'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center space-x-1">
+                            <span>Siêu Mượt (360p)</span>
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-400 text-black font-black uppercase">Nhẹ</span>
+                          </div>
+                          <div className="text-[10px] text-emerald-200 opacity-80">Cực nhẹ, mạng 3G/yếu 100% mượt</div>
+                        </div>
+                        {selectedResolution === '360p' && <span className="text-amber-300 font-black text-xs">✓</span>}
                       </button>
                     </div>
                   </div>

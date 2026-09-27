@@ -332,11 +332,44 @@ function startHlsSession(streamKey) {
         '-rtsp_transport', 'tcp',
         `rtsp://127.0.0.1:8554/${streamKey}_low`
     ];
+    // Rendition siêu nhẹ (360p, 30fps, 400kbps) phục vụ người xem mạng 3G/4G yếu, siêu mượt 100%
+    const ultraLiveFfmpegArgs = [
+        '-fflags', '+genpts+discardcorrupt',
+        '-err_detect', 'ignore_err',
+        '-i', `rtmp://localhost:1935/live/${streamKey}`,
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        '-vf', 'scale=-2:360',
+        '-fpsmax', '30',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v', 'baseline',
+        '-level:v', '3.0',
+        '-pix_fmt', 'yuv420p',
+        '-bf', '0',
+        '-x264-params', 'scenecut=0:repeat-headers=1',
+        '-b:v', '400k',
+        '-maxrate', '500k',
+        '-bufsize', '600k',
+        '-g', '15',
+        '-keyint_min', '15',
+        '-sc_threshold', '0',
+        '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
+        '-c:a', 'libopus',
+        '-b:a', '48k',
+        '-ar', '48000',
+        '-ac', '2',
+        '-f', 'rtsp',
+        '-rtsp_transport', 'tcp',
+        `rtsp://127.0.0.1:8554/${streamKey}_ultra`
+    ];
     console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
     console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
     console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, video-only)`);
     console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, with audio)`);
     console.log(`[MediaServer]   web live SD:   WHEP /${streamKey}_low/whep (480p, 30fps, 800k for weak network)`);
+    console.log(`[MediaServer]   web live Ultra: WHEP /${streamKey}_ultra/whep (360p, 30fps, 400k ultra smooth)`);
     const ffmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -346,11 +379,14 @@ function startHlsSession(streamKey) {
     const lowLiveFfmpeg = (0, child_process_1.spawn)(ffmpegPath, lowLiveFfmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
+    const ultraLiveFfmpeg = (0, child_process_1.spawn)(ffmpegPath, ultraLiveFfmpegArgs, {
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
     const session = {
         streamKey,
         startTime: Date.now() / 1000,
         lastSeen: Date.now() / 1000,
-        ffmpegProcesses: [ffmpeg, liveFfmpeg, lowLiveFfmpeg]
+        ffmpegProcesses: [ffmpeg, liveFfmpeg, lowLiveFfmpeg, ultraLiveFfmpeg]
     };
     exports.hlsSessions.set(streamKey, session);
     ffmpeg.stdout.on('data', (data) => {
