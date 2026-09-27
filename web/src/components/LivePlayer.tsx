@@ -23,7 +23,9 @@ import {
   Trash2,
   X,
   Maximize,
-  Minimize
+  Minimize,
+  ArrowLeftRight,
+  Move
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -142,6 +144,136 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         localStorage.setItem('player_flipped', String(next));
       } catch {}
       return next;
+    });
+  };
+
+  // Vị trí & kích thước tuỳ chỉnh của màn hình nhỏ PiP Live (tính theo % x, y từ góc trên-trái và width theo pixel)
+  const [pipPos, setPipPos] = useState<{ xPercent: number; yPercent: number } | null>(null);
+  const [pipWidth, setPipWidth] = useState<number>(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) return 150;
+    return 240;
+  });
+  const [isPipDragging, setIsPipDragging] = useState(false);
+  const pipDragStartRef = useRef<{ startX: number; startY: number; origXPercent: number; origYPercent: number; moved: boolean } | null>(null);
+  const pipResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  // Xử lý kéo thả vị trí màn nhỏ PiP (Mouse + Touch)
+  const handlePipDragStart = (clientX: number, clientY: number) => {
+    const container = videoContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+
+    const currentX = pipPos ? pipPos.xPercent : Math.max(1, ((rect.width - pipWidth - 16) / rect.width) * 100);
+    const currentY = pipPos ? pipPos.yPercent : 3;
+
+    pipDragStartRef.current = {
+      startX: clientX,
+      startY: clientY,
+      origXPercent: currentX,
+      origYPercent: currentY,
+      moved: false,
+    };
+    setIsPipDragging(true);
+
+    const onMove = (moveX: number, moveY: number) => {
+      if (!pipDragStartRef.current) return;
+      const dx = moveX - pipDragStartRef.current.startX;
+      const dy = moveY - pipDragStartRef.current.startY;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        pipDragStartRef.current.moved = true;
+      }
+      const dxPercent = (dx / rect.width) * 100;
+      const dyPercent = (dy / rect.height) * 100;
+
+      const pipWidthPercent = (pipWidth / rect.width) * 100;
+      const newX = Math.max(0.5, Math.min(99.5 - pipWidthPercent, pipDragStartRef.current.origXPercent + dxPercent));
+      const newY = Math.max(0.5, Math.min(85, pipDragStartRef.current.origYPercent + dyPercent));
+
+      setPipPos({ xPercent: newX, yPercent: newY });
+    };
+
+    const onMouseMove = (e: MouseEvent) => onMove(e.clientX, e.clientY);
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches[0]) onMove(e.touches[0].clientX, e.touches[0].clientY);
+    };
+
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onEnd);
+      setIsPipDragging(false);
+      // Nếu không di chuyển (>5px) thì coi là chạm (tap/click) -> quay về Live!
+      if (pipDragStartRef.current && !pipDragStartRef.current.moved) {
+        jumpToLive();
+      }
+      pipDragStartRef.current = null;
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  };
+
+  // Xử lý kéo góc để thu phóng to/nhỏ màn PiP
+  const handlePipResizeStart = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    pipResizeStartRef.current = {
+      startX: clientX,
+      startWidth: pipWidth,
+    };
+
+    const onMove = (moveX: number) => {
+      if (!pipResizeStartRef.current) return;
+      const dx = moveX - pipResizeStartRef.current.startX;
+      const newWidth = Math.max(120, Math.min(480, pipResizeStartRef.current.startWidth + dx));
+      setPipWidth(newWidth);
+    };
+
+    const onMouseMove = (ev: MouseEvent) => onMove(ev.clientX);
+    const onTouchMove = (ev: TouchEvent) => {
+      if (ev.touches[0]) onMove(ev.touches[0].clientX);
+    };
+
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onEnd);
+      pipResizeStartRef.current = null;
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  };
+
+  // Nút bấm nhanh đổi kích thước (Chu kỳ: Nhỏ 150px -> Vừa 240px -> To 340px)
+  const cyclePipSize = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    setPipWidth((prev) => {
+      if (prev < 190) return 240;
+      if (prev < 290) return 340;
+      return 150;
+    });
+  };
+
+  // Nút bấm nhanh đổi góc (Trái <-> Phải)
+  const togglePipCorner = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    setPipPos((prev) => {
+      const container = videoContainerRef.current;
+      const rect = container?.getBoundingClientRect();
+      const currentX = prev ? prev.xPercent : 75;
+      const pipWidthPercent = rect ? (pipWidth / rect.width) * 100 : 25;
+      const newX = currentX > 40 ? 1.5 : Math.max(1.5, 98.5 - pipWidthPercent);
+      return {
+        xPercent: newX,
+        yPercent: prev ? prev.yPercent : 3,
+      };
     });
   };
 
@@ -1312,9 +1444,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setPlaybackRate(speed);
     setIsPlaying(true);
 
-    // Không pause liveVideoRef mà chỉ tắt tiếng, để WebRTC tiếp tục giải mã ngầm chính xác thời gian thực!
+    // Màn nhỏ Live giữ nguyên âm thanh (theo cài đặt isMuted) và tiếp tục phát mượt mà không bao giờ pause
     if (liveVideoRef.current) {
-      liveVideoRef.current.muted = true;
+      liveVideoRef.current.muted = isMuted;
+      liveVideoRef.current.play().catch(() => {});
     }
 
     const video = replayVideoRef.current;
@@ -1413,7 +1546,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      if (liveVideoRef.current) liveVideoRef.current.muted = true;
       const start = hlsWindowStart;
       const end = hlsLiveEdge;
       const target = Math.max(start, end - 4);
@@ -1450,7 +1582,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      if (liveVideoRef.current) liveVideoRef.current.muted = true;
       updateFrozenTimeline({ start, end });
       performScrub(start + ratio * span, true);
       return;
@@ -1467,7 +1598,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      if (liveVideoRef.current) liveVideoRef.current.muted = true;
       const v = replayVideoRef.current;
       if (v) {
         v.muted = true;
@@ -1670,7 +1800,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setDragRatio(initialRatio);
 
     const wasLive = isLiveRef.current;
-    liveVideoRef.current?.pause();
     const video = replayVideoRef.current;
     if (video) {
       wasPlayingBeforeDragRef.current = wasLive ? true : !video.paused;
@@ -1742,7 +1871,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setDragRatio(initialRatio);
 
     const wasLive = isLiveRef.current;
-    liveVideoRef.current?.pause();
     const video = replayVideoRef.current;
     if (video) {
       wasPlayingBeforeDragRef.current = wasLive ? true : !video.paused;
@@ -1921,25 +2049,45 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
         {/* Thẻ 1: Live WebRTC
             - Khi LIVE: Màn hình to toàn bộ.
-            - Khi TUA: Hiển thị dạng cửa sổ nhỏ (Picture-in-Picture giống Messenger) ở góc trên bên phải, xem trực tiếp thời gian thực, bấm vào là về Live! */}
+            - Khi TUA: Cửa sổ PiP nhỏ có thể kéo thả di chuyển tự do (sang trái/phải), chỉnh to/nhỏ linh hoạt */}
         <div
-          onClick={() => {
+          onMouseDown={(e) => {
             if (!isLive) {
-              jumpToLive();
+              e.preventDefault();
+              handlePipDragStart(e.clientX, e.clientY);
             }
           }}
-          className={`transition-all duration-300 ease-in-out select-none ${
+          onTouchStart={(e) => {
+            if (!isLive && e.touches[0]) {
+              handlePipDragStart(e.touches[0].clientX, e.touches[0].clientY);
+            }
+          }}
+          style={
+            !isLive && hasLiveFrame
+              ? {
+                  position: 'absolute',
+                  left: pipPos ? `${pipPos.xPercent}%` : undefined,
+                  right: pipPos ? undefined : '0.75rem',
+                  top: pipPos ? `${pipPos.yPercent}%` : '0.75rem',
+                  width: `${pipWidth}px`,
+                  zIndex: 35,
+                  cursor: isPipDragging ? 'grabbing' : 'grab',
+                  touchAction: 'none',
+                }
+              : undefined
+          }
+          className={`select-none ${
             isLive
               ? 'absolute inset-0 w-full h-full z-10 pointer-events-auto'
               : (hasLiveFrame
-                  ? 'absolute top-3 right-3 sm:top-4 sm:right-4 w-32 sm:w-56 aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black z-30 cursor-pointer hover:scale-105 hover:border-red-400 group ring-4 ring-black/70 shadow-black'
+                  ? 'aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black group ring-4 ring-black/70 shadow-black'
                   : 'opacity-0 pointer-events-none absolute')
-          }`}
-          title={!isLive ? 'Bấm để về Trực Tiếp (Live)' : undefined}
+          } ${isPipDragging ? '' : 'transition-[top,left] duration-150 ease-out'}`}
+          title={!isLive ? 'Kéo để di chuyển, chạm để về Live' : undefined}
         >
           <video
             ref={liveVideoRef}
-            className={`w-full h-full object-contain bg-black ${
+            className={`w-full h-full object-contain bg-black pointer-events-none ${
               isLive && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
             }`}
             style={{
@@ -1951,12 +2099,50 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             autoPlay
           />
 
-          {/* Huy hiệu trên màn nhỏ góc khi đang tua: video trong suốt sắc nét 100% không bị che mờ */}
+          {/* Huy hiệu và thanh công cụ điều khiển trên màn nhỏ PiP */}
           {!isLive && hasLiveFrame && (
-            <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider pointer-events-none">
-              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-              <span>LIVE</span>
-            </div>
+            <>
+              {/* Nhãn LIVE nhấp nháy ở góc trên-trái */}
+              <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider pointer-events-none">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                <span>LIVE</span>
+              </div>
+
+              {/* Các nút bấm nhanh ở góc trên-phải: Đổi góc Trái/Phải & Đổi kích thước To/Nhỏ */}
+              <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 z-40">
+                {/* Nút chuyển nhanh góc Trái <-> Phải */}
+                <button
+                  type="button"
+                  onClick={togglePipCorner}
+                  onTouchEnd={togglePipCorner}
+                  className="p-1 rounded-md bg-black/70 hover:bg-black/95 text-slate-200 hover:text-white backdrop-blur border border-white/20 shadow active:scale-95 cursor-pointer"
+                  title="Chuyển góc Trái / Phải"
+                >
+                  <ArrowLeftRight className="w-3 h-3 text-amber-300" />
+                </button>
+
+                {/* Nút đổi kích thước To / Vừa / Nhỏ */}
+                <button
+                  type="button"
+                  onClick={cyclePipSize}
+                  onTouchEnd={cyclePipSize}
+                  className="p-1 rounded-md bg-black/70 hover:bg-black/95 text-slate-200 hover:text-white backdrop-blur border border-white/20 shadow active:scale-95 cursor-pointer"
+                  title="Đổi kích thước To/Nhỏ"
+                >
+                  <Maximize className="w-3 h-3 text-emerald-300" />
+                </button>
+              </div>
+
+              {/* Tay nắm kéo góc dưới-phải để kéo giãn to/nhỏ tự do */}
+              <div
+                onMouseDown={handlePipResizeStart}
+                onTouchStart={handlePipResizeStart}
+                className="absolute bottom-0 right-0 w-6 h-6 flex items-end justify-end p-1 cursor-nwse-resize z-40 hover:opacity-100 opacity-70 active:opacity-100"
+                title="Kéo góc để phóng to/thu nhỏ"
+              >
+                <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-amber-400 rounded-br-sm" />
+              </div>
+            </>
           )}
         </div>
 
