@@ -155,10 +155,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   });
   const [isPipDragging, setIsPipDragging] = useState(false);
   const pipDragStartRef = useRef<{ startX: number; startY: number; origXPercent: number; origYPercent: number; moved: boolean } | null>(null);
+  const pipPinchStartRef = useRef<{ initialDistance: number; initialWidth: number } | null>(null);
   const pipResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
-  // Xử lý kéo thả vị trí màn nhỏ PiP (Mouse + Touch)
-  const handlePipDragStart = (clientX: number, clientY: number) => {
+  const getTouchDistance = (t1: { clientX: number; clientY: number }, t2: { clientX: number; clientY: number }) => {
+    return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+  };
+
+  // Xử lý kéo thả vị trí (1 ngón tay / chuột) & Phóng to thu nhỏ 2 ngón tay (Pinch-to-Zoom)
+  const handlePipMouseDown = (clientX: number, clientY: number) => {
     const container = videoContainerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
@@ -175,10 +180,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
     setIsPipDragging(true);
 
-    const onMove = (moveX: number, moveY: number) => {
+    const onMouseMove = (ev: MouseEvent) => {
       if (!pipDragStartRef.current) return;
-      const dx = moveX - pipDragStartRef.current.startX;
-      const dy = moveY - pipDragStartRef.current.startY;
+      const dx = ev.clientX - pipDragStartRef.current.startX;
+      const dy = ev.clientY - pipDragStartRef.current.startY;
       if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
         pipDragStartRef.current.moved = true;
       }
@@ -192,18 +197,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setPipPos({ xPercent: newX, yPercent: newY });
     };
 
-    const onMouseMove = (e: MouseEvent) => onMove(e.clientX, e.clientY);
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches[0]) onMove(e.touches[0].clientX, e.touches[0].clientY);
-    };
-
-    const onEnd = () => {
+    const onMouseUp = () => {
       window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onEnd);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onEnd);
+      window.removeEventListener('mouseup', onMouseUp);
       setIsPipDragging(false);
-      // Nếu không di chuyển (>5px) thì coi là chạm (tap/click) -> quay về Live!
       if (pipDragStartRef.current && !pipDragStartRef.current.moved) {
         jumpToLive();
       }
@@ -211,9 +208,95 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
 
     window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handlePipTouchStart = (e: React.TouchEvent) => {
+    const container = videoContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+
+    if (e.touches.length === 2) {
+      // Bắt đầu chụm / bung 2 ngón tay để thu phóng (Pinch to Zoom)
+      const dist = getTouchDistance(e.touches[0], e.touches[1]);
+      pipPinchStartRef.current = {
+        initialDistance: dist,
+        initialWidth: pipWidth,
+      };
+      pipDragStartRef.current = null;
+      setIsPipDragging(false);
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      const currentX = pipPos ? pipPos.xPercent : Math.max(1, ((rect.width - pipWidth - 16) / rect.width) * 100);
+      const currentY = pipPos ? pipPos.yPercent : 3;
+
+      pipDragStartRef.current = {
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+        origXPercent: currentX,
+        origYPercent: currentY,
+        moved: false,
+      };
+      setIsPipDragging(true);
+    }
+
+    let hadPinch = false;
+
+    const onTouchMove = (ev: TouchEvent) => {
+      // 1. Nếu đang dùng 2 ngón tay -> Phóng to / Thu nhỏ khung hình
+      if (ev.touches.length === 2) {
+        ev.preventDefault();
+        hadPinch = true;
+        if (!pipPinchStartRef.current) {
+          pipPinchStartRef.current = {
+            initialDistance: getTouchDistance(ev.touches[0], ev.touches[1]),
+            initialWidth: pipWidth,
+          };
+        } else {
+          const currentDist = getTouchDistance(ev.touches[0], ev.touches[1]);
+          const scale = currentDist / pipPinchStartRef.current.initialDistance;
+          const newWidth = Math.max(120, Math.min(520, Math.round(pipPinchStartRef.current.initialWidth * scale)));
+          setPipWidth(newWidth);
+        }
+        return;
+      }
+
+      // 2. Nếu đang dùng 1 ngón tay -> Kéo di chuyển vị trí
+      if (ev.touches.length === 1 && pipDragStartRef.current && !hadPinch) {
+        const dx = ev.touches[0].clientX - pipDragStartRef.current.startX;
+        const dy = ev.touches[0].clientY - pipDragStartRef.current.startY;
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+          pipDragStartRef.current.moved = true;
+        }
+        const dxPercent = (dx / rect.width) * 100;
+        const dyPercent = (dy / rect.height) * 100;
+
+        const pipWidthPercent = (pipWidth / rect.width) * 100;
+        const newX = Math.max(0.5, Math.min(99.5 - pipWidthPercent, pipDragStartRef.current.origXPercent + dxPercent));
+        const newY = Math.max(0.5, Math.min(85, pipDragStartRef.current.origYPercent + dyPercent));
+
+        setPipPos({ xPercent: newX, yPercent: newY });
+      }
+    };
+
+    const onTouchEnd = (ev: TouchEvent) => {
+      if (ev.touches.length === 0) {
+        window.removeEventListener('touchmove', onTouchMove);
+        window.removeEventListener('touchend', onTouchEnd);
+        setIsPipDragging(false);
+
+        if (!hadPinch && pipDragStartRef.current && !pipDragStartRef.current.moved) {
+          jumpToLive();
+        }
+        pipDragStartRef.current = null;
+        pipPinchStartRef.current = null;
+      }
+    };
+
     window.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('touchend', onEnd);
+    window.addEventListener('touchend', onTouchEnd);
   };
 
   // Xử lý kéo góc để thu phóng to/nhỏ màn PiP
@@ -2054,12 +2137,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           onMouseDown={(e) => {
             if (!isLive) {
               e.preventDefault();
-              handlePipDragStart(e.clientX, e.clientY);
+              handlePipMouseDown(e.clientX, e.clientY);
             }
           }}
           onTouchStart={(e) => {
-            if (!isLive && e.touches[0]) {
-              handlePipDragStart(e.touches[0].clientX, e.touches[0].clientY);
+            if (!isLive) {
+              handlePipTouchStart(e);
             }
           }}
           style={
