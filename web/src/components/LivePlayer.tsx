@@ -370,7 +370,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchStart = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest('[data-pip-window="true"]') || target.closest('[data-text-overlay="true"]')) {
+    // CHỈ bỏ qua nếu đang ở chế độ tua (!isLive) VÀ chạm trúng màn nhỏ PiP ở góc hoặc text overlay
+    if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
+      return;
+    }
+    if (target.closest('[data-text-overlay="true"]') || target.closest('button')) {
       return;
     }
 
@@ -414,7 +418,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchMove = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest('[data-pip-window="true"]') || target.closest('[data-text-overlay="true"]')) {
+    if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
+      return;
+    }
+    if (target.closest('[data-text-overlay="true"]') || target.closest('button')) {
       return;
     }
 
@@ -2169,6 +2176,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         onTouchStart={handleContainerTouchStart}
         onTouchMove={handleContainerTouchMove}
         onTouchEnd={handleContainerTouchEnd}
+        style={{ touchAction: 'none' }}
         className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
@@ -2254,7 +2262,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             - Khi LIVE: Màn hình to toàn bộ.
             - Khi TUA: Cửa sổ PiP nhỏ có thể kéo thả di chuyển tự do (sang trái/phải), chỉnh to/nhỏ linh hoạt */}
         <div
-          data-pip-window="true"
+          data-pip-window={!isLive && hasLiveFrame ? 'true' : undefined}
           onMouseDown={(e) => {
             if (!isLive) {
               e.preventDefault();
