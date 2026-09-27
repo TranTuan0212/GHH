@@ -38,14 +38,19 @@ workflows:
             CODE_SIGNING_ALLOWED=NO
       - name: Package .app into .ipa file
         script: |
-          APP_PATH=$(find $HOME/Library/Developer/Xcode/DerivedData -name "SloMoLive.app" | head -n 1)
+          set -e
+          APP_PATH=$(find $HOME/Library/Developer/Xcode/DerivedData -path "*/Build/Products/Release-iphoneos/SloMoLive.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find $HOME/Library/Developer/Xcode/DerivedData -name "SloMoLive.app" | head -n 1)
+          fi
           echo "Found app at: $APP_PATH"
           if [ -d "$APP_PATH" ]; then
+            rm -rf $HOME/export
             mkdir -p $HOME/export/Payload
-            cp -r "$APP_PATH" $HOME/export/Payload/
+            cp -R "$APP_PATH" $HOME/export/Payload/
             cd $HOME/export
-            zip -r SloMoLive.ipa Payload
-            echo "Successfully created SloMoLive.ipa"
+            zip -qr -y SloMoLive.ipa Payload
+            echo "Successfully created SloMoLive.ipa with preserved symlinks"
           else
             echo "Error: Could not locate SloMoLive.app"
             exit 1
