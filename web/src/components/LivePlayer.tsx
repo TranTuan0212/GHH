@@ -1951,20 +1951,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             autoPlay
           />
 
-          {/* Huy hiệu và nút bấm trên màn nhỏ góc khi đang tua */}
+          {/* Huy hiệu trên màn nhỏ góc khi đang tua: video trong suốt sắc nét 100% không bị che mờ */}
           {!isLive && hasLiveFrame && (
-            <>
-              <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider">
-                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                <span>LIVE</span>
-              </div>
-
-              {/* Lớp phủ hover khi rê chuột vào màn nhỏ PiP */}
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] sm:text-xs font-bold gap-1 backdrop-blur-[1px]">
-                <RotateCcw className="w-4 h-4 text-red-400" />
-                <span>Bấm về Live</span>
-              </div>
-            </>
+            <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider pointer-events-none">
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+              <span>LIVE</span>
+            </div>
           )}
         </div>
 
