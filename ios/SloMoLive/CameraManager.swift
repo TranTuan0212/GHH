@@ -241,12 +241,12 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinBitRate = targetBitrate * 55 / 100
         print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(targetBitrate / 1_000_000)Mbps")
 
-        // Kích hoạt thu âm thanh từ micro bằng .captureDefaultAudio (LFLiveKit tự thu Audio, Video nhận từ AVCaptureVideoDataOutput).
+        // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
         guard let session = LFLiveSession(
             audioConfiguration: audioCfg,
             videoConfiguration: videoCfg,
-            captureType: .captureDefaultAudio
+            captureType: .captureMaskAudioInputVideo
         ) ?? LFLiveSession(
             audioConfiguration: audioCfg,
             videoConfiguration: videoCfg,
@@ -271,11 +271,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     private func requestAudioPermissionIfNeeded() {
-        if #available(iOS 17.0, *) {
-            AVAudioApplication.requestRecordPermission { _ in }
-        } else {
-            AVAudioSession.sharedInstance().requestRecordPermission { _ in }
-        }
+        AVAudioSession.sharedInstance().requestRecordPermission { _ in }
         do {
             try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
             try AVAudioSession.sharedInstance().setActive(true)
