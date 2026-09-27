@@ -241,17 +241,13 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinBitRate = targetBitrate * 55 / 100
         print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(targetBitrate / 1_000_000)Mbps")
 
-        // FIX BUILD: bản LFLiveKit đang dùng đã đổi `captureType` thành property get-only — nó chỉ
-        // còn đọc được, không gán được sau khi session đã tạo. Giá trị này giờ phải truyền vào NGAY
-        // lúc khởi tạo qua initializer `LFLiveSession(audioConfiguration:videoConfiguration:captureType:)`.
-        // Dùng external-video ONLY. Bản trước dùng capture audio nội bộ + video bên ngoài;
-        // LFLiveKit vì thế phải chờ audio/keyframe để AV-align. Ở 240fps đường AV-align đó
-        // phát sinh packet timestamp/DTS lặp dù app không cần âm thanh. `inputMaskVideo` gửi
-        // từng frame camera theo timeline video thuần, không tạo AAC track hoặc audio alignment.
-        //
-        // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi
-        // dùng, nếu không compiler báo lỗi truy cập member trên optional chưa unwrap.
+        // Kích hoạt thu âm thanh từ micro bằng .captureDefaultAudio (LFLiveKit tự thu Audio, Video nhận từ AVCaptureVideoDataOutput).
+        // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
         guard let session = LFLiveSession(
+            audioConfiguration: audioCfg,
+            videoConfiguration: videoCfg,
+            captureType: .captureDefaultAudio
+        ) ?? LFLiveSession(
             audioConfiguration: audioCfg,
             videoConfiguration: videoCfg,
             captureType: .inputMaskVideo
@@ -261,6 +257,8 @@ public class CameraManager: NSObject, ObservableObject {
             }
             return
         }
+        // Cho phép phát âm thanh, không mute micro
+        session.muted = false
         // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
         session.captureDevicePosition = AVCaptureDevice.Position.back
 
@@ -272,7 +270,22 @@ public class CameraManager: NSObject, ObservableObject {
         liveSession = session
     }
 
+    private func requestAudioPermissionIfNeeded() {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission { _ in }
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission { _ in }
+        }
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[CameraManager] Audio session config error: \(error)")
+        }
+    }
+
     public func setupCamera(completion: @escaping (Bool) -> Void) {
+        requestAudioPermissionIfNeeded()
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             self.configureAndStartSession(completion: completion)

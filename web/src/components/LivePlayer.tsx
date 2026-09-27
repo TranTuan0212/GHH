@@ -384,21 +384,40 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [hlsBaseUrl, setHlsBaseUrl] = useState<string>('');
   const [replayHlsBaseUrl, setReplayHlsBaseUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const [selectedResolution, setSelectedResolution] = useState<'720p' | '480p'>('720p');
+  const [isResMenuOpen, setIsResMenuOpen] = useState(false);
+  const resMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isResMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (resMenuRef.current && !resMenuRef.current.contains(e.target as Node)) {
+        setIsResMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isResMenuOpen]);
 
   const whepUrl = stream?.streamKey
     ? (() => {
         try {
           const endpoint = new URL(detectedServerUrl);
+          const pathKey = selectedResolution === '480p' ? `${stream.streamKey}_low` : stream.streamKey;
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
             if (typeof window !== 'undefined' && window.location.hostname) {
               endpoint.hostname = window.location.hostname; // chỉ lấy hostname, không lấy port
             }
             endpoint.port = '8889'; // Nginx SSL :8889 → MediaMTX :8888
-            endpoint.pathname = `/${stream.streamKey}/whep`;
+            endpoint.pathname = `/${pathKey}/whep`;
           } else {
             endpoint.port = '8889';
-            endpoint.pathname = `/${stream.streamKey}/whep`;
+            endpoint.pathname = `/${pathKey}/whep`;
           }
           endpoint.search = '';
           return endpoint.toString();
@@ -575,11 +594,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peerConnectionRef.current = peer;
           let receivedVideoTrack = false;
           peer.addTransceiver('video', { direction: 'recvonly' });
+          peer.addTransceiver('audio', { direction: 'recvonly' });
           peer.ontrack = ({ streams }) => {
             if (cancelled || !streams[0]) return;
             receivedVideoTrack = true;
             video.srcObject = streams[0];
-            video.muted = isLiveRef.current ? isMuted : true;
+            video.muted = isMuted;
             setHasLiveFrame(true);
             setHasFrame(true);
             video.play().catch((err) => {
@@ -686,7 +706,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
-        replayVideoRef.current?.pause();
+        if (replayVideoRef.current) {
+          replayVideoRef.current.pause();
+          replayVideoRef.current.muted = true;
+        }
       } else if (replayVideoRef.current) {
         // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
         const video = replayVideoRef.current;
@@ -701,17 +724,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.play().catch(() => {});
       }
     } else {
-      // QUAN TRỌNG: TUYỆT ĐỐI KHÔNG pause liveVideoRef!
-      // WebRTC là luồng realtime liên tục. Nếu gọi pause(), clock nội bộ của thẻ video
-      // sẽ bị lệch hàng chục giây so với gói tin RTP đang đến, dẫn đến video bị đơ cứng
-      // hoặc màn hình đen khi bấm 'Về Live' lại.
-      // Chúng ta chỉ cần tắt tiếng (muted = true), CSS sẽ ẩn video đi, luồng WebRTC vẫn tiếp tục
-      // giải mã đúng mili-giây hiện tại. Khi bấm 'Về Live', video hiện ngay lập tức 0ms!
-      if (liveVideoRef.current) {
-        liveVideoRef.current.muted = true;
-      }
+      // Khi tua: Replay video LUÔN LUÔN tắt tiếng (tua không cần âm thanh)
       if (replayVideoRef.current) {
+        replayVideoRef.current.muted = true;
         replayVideoRef.current.play().catch(() => {});
+      }
+      // Live video trong màn nhỏ PiP góc vẫn chạy realtime, âm thanh theo cài đặt isMuted
+      if (liveVideoRef.current) {
+        liveVideoRef.current.muted = isMuted;
+        liveVideoRef.current.play().catch(() => {});
       }
     }
   }, [isLive, hasLiveFrame, isMuted]);
@@ -1882,24 +1903,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             hasFrame — vì effect khởi tạo HLS cần videoRef.current tồn tại TRƯỚC khi có frame đầu
             tiên. Nếu ẩn video đằng sau `hasFrame ? ... : ...` sẽ tạo deadlock: video chỉ mount khi
             hasFrame=true, nhưng hasFrame chỉ được set true SAU khi HLS đã load được vào video đó. */}
-        {/* Thẻ 1: Live WebRTC siêu tốc (<0.2s) */}
-        <video
-          ref={liveVideoRef}
-          className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
-            isLive && hasLiveFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
-          }`}
-          style={{
-            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
-            transition: 'transform 0.2s ease-in-out',
-            position: 'absolute',
-            inset: 0
-          }}
-          playsInline
-          muted={isMuted}
-          autoPlay
-        />
-
-        {/* Thẻ 2: HLS DVR Replay & HLS Live Fallback (hiển thị khi đang tua HOẶC khi không có WebRTC) */}
+        {/* Thẻ 2: HLS DVR Replay & HLS Live Fallback (MÀN HÌNH TO KHI TUA) */}
         <video
           ref={replayVideoRef}
           className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
@@ -1912,8 +1916,57 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             inset: 0
           }}
           playsInline
-          muted={isMuted}
+          muted={true}
         />
+
+        {/* Thẻ 1: Live WebRTC
+            - Khi LIVE: Màn hình to toàn bộ.
+            - Khi TUA: Hiển thị dạng cửa sổ nhỏ (Picture-in-Picture giống Messenger) ở góc trên bên phải, xem trực tiếp thời gian thực, bấm vào là về Live! */}
+        <div
+          onClick={() => {
+            if (!isLive) {
+              jumpToLive();
+            }
+          }}
+          className={`transition-all duration-300 ease-in-out select-none ${
+            isLive
+              ? 'absolute inset-0 w-full h-full z-10 pointer-events-auto'
+              : (hasLiveFrame
+                  ? 'absolute top-3 right-3 sm:top-4 sm:right-4 w-32 sm:w-56 aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black z-30 cursor-pointer hover:scale-105 hover:border-red-400 group ring-4 ring-black/70 shadow-black'
+                  : 'opacity-0 pointer-events-none absolute')
+          }`}
+          title={!isLive ? 'Bấm để về Trực Tiếp (Live)' : undefined}
+        >
+          <video
+            ref={liveVideoRef}
+            className={`w-full h-full object-contain bg-black ${
+              isLive && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
+            }`}
+            style={{
+              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+              transition: 'transform 0.2s ease-in-out'
+            }}
+            playsInline
+            muted={isMuted}
+            autoPlay
+          />
+
+          {/* Huy hiệu và nút bấm trên màn nhỏ góc khi đang tua */}
+          {!isLive && hasLiveFrame && (
+            <>
+              <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                <span>LIVE</span>
+              </div>
+
+              {/* Lớp phủ hover khi rê chuột vào màn nhỏ PiP */}
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] sm:text-xs font-bold gap-1 backdrop-blur-[1px]">
+                <RotateCcw className="w-4 h-4 text-red-400" />
+                <span>Bấm về Live</span>
+              </div>
+            </>
+          )}
+        </div>
 
         {!hasFrame && !hasLiveFrame && (
           <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500 z-20">
@@ -2332,6 +2385,116 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                           </button>
                         );
                       })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Nút Âm thanh Live (Bật / Tắt tiếng) */}
+            <button
+              type="button"
+              onClick={() => {
+                const nextMuted = !isMuted;
+                setIsMuted(nextMuted);
+                if (liveVideoRef.current) {
+                  liveVideoRef.current.muted = nextMuted;
+                }
+              }}
+              className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
+                !isMuted
+                  ? 'bg-emerald-600 text-white border-emerald-400 ring-2 ring-emerald-400/40'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-white/10'
+              }`}
+              title={isMuted ? 'Bật âm thanh Trực Tiếp' : 'Tắt tiếng'}
+            >
+              {isMuted ? (
+                <VolumeX className="w-3.5 h-3.5 text-slate-400" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 text-emerald-300 animate-pulse" />
+              )}
+            </button>
+
+            {/* Menu Chọn Độ Phân Giải (HD 720p / SD 480p Mạng yếu) */}
+            <div ref={resMenuRef} className="relative flex items-center space-x-1 flex-shrink-0">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsResMenuOpen(!isResMenuOpen);
+                }}
+                className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center space-x-1 transition-all cursor-pointer shadow-sm active:scale-95 ${
+                  selectedResolution === '480p'
+                    ? 'bg-amber-600/30 text-amber-300 border-amber-500/50'
+                    : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40'
+                }`}
+                title="Chọn độ phân giải (Chọn SD nếu mạng yếu)"
+              >
+                <span>{selectedResolution === '480p' ? 'SD 480p' : 'HD 720p'}</span>
+              </button>
+
+              {isResMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-[100] bg-transparent"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsResMenuOpen(false);
+                    }}
+                    onTouchEnd={(e) => {
+                      e.stopPropagation();
+                      setIsResMenuOpen(false);
+                    }}
+                  />
+                  <div
+                    className="absolute bottom-full right-0 mb-2 w-48 bg-slate-900/98 backdrop-blur-xl border border-cyan-500/50 rounded-xl shadow-2xl p-1 z-[101] space-y-0.5 animate-fadeIn"
+                    onClick={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-slate-400 px-2 py-1 border-b border-white/10 uppercase tracking-wider flex items-center justify-between">
+                      <span>Độ phân giải</span>
+                      <span className="text-cyan-400 font-mono">Live</span>
+                    </div>
+                    <div className="py-0.5 space-y-0.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedResolution('720p');
+                          setIsResMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                          selectedResolution === '720p'
+                            ? 'bg-cyan-600 text-white font-bold shadow-sm'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <div>
+                          <div>HD (720p 60fps)</div>
+                          <div className="text-[10px] text-cyan-200 opacity-80">Sắc nét nhất</div>
+                        </div>
+                        {selectedResolution === '720p' && <span className="text-amber-300 font-black text-xs">✓</span>}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedResolution('480p');
+                          setIsResMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                          selectedResolution === '480p'
+                            ? 'bg-amber-600 text-white font-bold shadow-sm'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <div>
+                          <div>SD (480p Mạng yếu)</div>
+                          <div className="text-[10px] text-amber-200 opacity-80">Mượt, nhẹ mạng</div>
+                        </div>
+                        {selectedResolution === '480p' && <span className="text-amber-300 font-black text-xs">✓</span>}
+                      </button>
                     </div>
                   </div>
                 </>

@@ -266,7 +266,7 @@ function startHlsSession(streamKey: string): void {
     '-err_detect', 'ignore_err',
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     '-map', '0:v:0',
-    '-an',
+    '-map', '0:a?',
     // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
     '-fpsmax', String(LIVE_PREVIEW_FPS),
     '-c:v', 'libx264',
@@ -287,15 +287,54 @@ function startHlsSession(streamKey: string): void {
     '-sc_threshold', '0',
     // Bắt buộc chèn IDR Keyframe mỗi 0.5s: Nếu mạng gián đoạn rớt gói, màn hình lập tức phục hồi sau 0.5s (chống bóng ma triệt để)
     '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
+    // Hỗ trợ âm thanh cho Live qua WebRTC (Opus tiêu chuẩn WebRTC)
+    '-c:a', 'libopus',
+    '-b:a', '96k',
+    '-ar', '48000',
+    '-ac', '2',
     '-f', 'rtsp',
     '-rtsp_transport', 'tcp',
     `rtsp://127.0.0.1:8554/${streamKey}`
   ];
 
+  // Rendition phụ (SD 480p, 30fps, 800kbps) phục vụ người xem chọn chế độ "Mạng yếu / Tiết kiệm"
+  const lowLiveFfmpegArgs = [
+    '-fflags', '+genpts+discardcorrupt',
+    '-err_detect', 'ignore_err',
+    '-i', `rtmp://localhost:1935/live/${streamKey}`,
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-vf', 'scale=-2:480',
+    '-fpsmax', '30',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
+    '-profile:v', 'baseline',
+    '-level:v', '3.1',
+    '-pix_fmt', 'yuv420p',
+    '-bf', '0',
+    '-x264-params', 'scenecut=0:repeat-headers=1',
+    '-b:v', '800k',
+    '-maxrate', '1000k',
+    '-bufsize', '1200k',
+    '-g', '15',
+    '-keyint_min', '15',
+    '-sc_threshold', '0',
+    '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
+    '-c:a', 'libopus',
+    '-b:a', '64k',
+    '-ar', '48000',
+    '-ac', '2',
+    '-f', 'rtsp',
+    '-rtsp_transport', 'tcp',
+    `rtsp://127.0.0.1:8554/${streamKey}_low`
+  ];
+
   console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
-  console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS)`);
-  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, 0.5s IDR)`);
+  console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, video-only)`);
+  console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, with audio)`);
+  console.log(`[MediaServer]   web live SD:   WHEP /${streamKey}_low/whep (480p, 30fps, 800k for weak network)`);
 
   const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
@@ -303,12 +342,15 @@ function startHlsSession(streamKey: string): void {
   const liveFfmpeg = spawn(ffmpegPath, liveFfmpegArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  const lowLiveFfmpeg = spawn(ffmpegPath, lowLiveFfmpegArgs, {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
 
   const session: HlsSession = {
     streamKey,
     startTime: Date.now() / 1000,
     lastSeen: Date.now() / 1000,
-    ffmpegProcesses: [ffmpeg, liveFfmpeg]
+    ffmpegProcesses: [ffmpeg, liveFfmpeg, lowLiveFfmpeg]
   };
   hlsSessions.set(streamKey, session);
 
@@ -356,6 +398,19 @@ function startHlsSession(streamKey: string): void {
   });
   liveFfmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
     console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+  });
+
+  lowLiveFfmpeg.stderr.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (!line) return;
+    const isImportant = /error|warning|fatal|cannot|failed/i.test(line);
+    if (isImportant) console.log(`[MediaServer] [live-low ${streamKey}] ${line}`);
+  });
+  lowLiveFfmpeg.on('error', (err: Error) => {
+    console.error(`[MediaServer] live-low FFmpeg error for ${streamKey}:`, err);
+  });
+  lowLiveFfmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+    console.log(`[MediaServer] live-low FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
   });
   console.log(`[MediaServer] DVR + WebRTC session started for ${streamKey}`);
 }
