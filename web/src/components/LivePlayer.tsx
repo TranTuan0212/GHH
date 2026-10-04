@@ -204,6 +204,29 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     });
   };
 
+  // Chế độ siêu nét (Contrast & Edge Sharpness Boost) - Khử mờ nội suy bilinear của trình duyệt
+  const [isSharpBoost, setIsSharpBoost] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('player_sharp_boost');
+      return saved !== null ? saved === 'true' : true; // Mặc định bật
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleSharpBoost = () => {
+    setIsSharpBoost((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('player_sharp_boost', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Bước nhảy frame: 60 FPS (~16.6ms) hoặc 120 FPS (~8.3ms)
+  const [stepFps, setStepFps] = useState<60 | 120>(60);
+
   // Vị trí & kích thước tuỳ chỉnh của màn hình nhỏ PiP Live (tính theo % x, y từ góc trên-trái và width theo pixel)
   const [pipPos, setPipPos] = useState<{ xPercent: number; yPercent: number } | null>(null);
   const [pipWidth, setPipWidth] = useState<number>(() => {
@@ -896,6 +919,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const ctx = canvas.getContext('2d');
       if (!ctx) return null;
 
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      if (isSharpBoost) {
+        ctx.filter = 'contrast(1.08) saturate(1.1) brightness(1.02)';
+      }
+
       ctx.save();
       if (rot === 90) {
         ctx.translate(canvas.width, 0);
@@ -925,12 +954,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         resizeCanvas.height = Math.round(canvas.height * ratio);
         const rCtx = resizeCanvas.getContext('2d');
         if (rCtx) {
+          rCtx.imageSmoothingEnabled = true;
+          rCtx.imageSmoothingQuality = 'high';
           rCtx.drawImage(canvas, 0, 0, resizeCanvas.width, resizeCanvas.height);
-          return resizeCanvas.toDataURL('image/jpeg', 0.88);
+          return resizeCanvas.toDataURL('image/jpeg', 0.90);
         }
       }
 
-      return canvas.toDataURL('image/jpeg', 0.88);
+      return canvas.toDataURL('image/jpeg', 0.90);
     } catch (err: any) {
       console.error('[LivePlayer] Lỗi captureFrame:', err);
       return null;
@@ -2047,7 +2078,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   };
 
-  // Tua từng frame (chuẩn 120 FPS: 1 frame = 1/120s ~ 0.008333s)
+  // Tua từng frame (chuẩn frame rate: 60 FPS hoặc 120 FPS)
   const stepFrame = (step: number) => {
     if (isLiveRef.current) {
       isLiveRef.current = false;
@@ -2068,9 +2099,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
     const start = currentFrozen?.start ?? hlsWindowStart;
     const end = currentFrozen?.end ?? hlsLiveEdge;
-    // Mỗi step đúng 1 frame của 120 FPS (~0.008333s)
-    const frameDuration = 1 / 120;
-    const target = Math.max(start, Math.min(end, v.currentTime + step * frameDuration));
+    // Mỗi step đúng 1 frame theo stepFps (60 FPS ~0.0167s hoặc 120 FPS ~0.0083s)
+    const frameDuration = 1 / stepFps;
+    const currentBase = pendingScrubTimeRef.current !== null ? pendingScrubTimeRef.current : v.currentTime;
+    const target = Math.max(start, Math.min(end, currentBase + step * frameDuration));
+    pendingScrubTimeRef.current = target;
     performScrub(target, true);
   };
 
@@ -2582,7 +2615,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
-            inset: 0
+            inset: 0,
+            imageRendering: '-webkit-optimize-contrast' as any,
+            filter: isSharpBoost ? 'contrast(1.12) saturate(1.15) brightness(1.02)' : 'none'
           }}
           playsInline
           muted={true}
@@ -2636,7 +2671,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               transform: isLive
                 ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
-              transition: 'transform 0.1s ease-out'
+              transition: 'transform 0.1s ease-out',
+              imageRendering: '-webkit-optimize-contrast' as any,
+              filter: isSharpBoost && isLive ? 'contrast(1.12) saturate(1.15) brightness(1.02)' : 'none'
             }}
             playsInline
             muted={isMuted}
@@ -2912,19 +2949,29 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               {isPlaying ? <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />}
             </button>
 
-            {/* Frame step buttons: chuẩn 120 FPS (1 frame = ~0.0083s) */}
+            {/* Frame step buttons: Hỗ trợ chuyển đổi 60 FPS hoặc 120 FPS */}
             <div className="inline-flex items-center bg-slate-800/80 rounded-lg p-0.5 border border-white/10">
+              <button
+                type="button"
+                onClick={() => setStepFps((f) => (f === 120 ? 60 : 120))}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+                  stepFps === 120 ? 'bg-amber-500/25 text-amber-300 border border-amber-500/40' : 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/40'
+                }`}
+                title={`Đang bước frame theo ${stepFps} FPS. Bấm để đổi sang ${stepFps === 120 ? '60' : '120'} FPS`}
+              >
+                {stepFps}fps
+              </button>
               <button
                 onClick={() => stepFrame(-10)}
                 className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[11px] font-mono font-medium transition-all"
-                title="Lùi 10 khung hình (~0.08s)"
+                title={`Lùi 10 khung hình (~${(10 / stepFps).toFixed(2)}s)`}
               >
                 -10
               </button>
               <button
                 onClick={() => stepFrame(-1)}
                 className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center space-x-0.5 transition-all"
-                title="Lùi 1 khung hình (1/120s ~ 0.008s)"
+                title={`Lùi 1 khung hình (1/${stepFps}s ~ ${(1 / stepFps).toFixed(3)}s)`}
               >
                 <ChevronLeft className="w-3 h-3" />
                 <span>-1</span>
@@ -2932,7 +2979,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               <button
                 onClick={() => stepFrame(1)}
                 className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center space-x-0.5 transition-all"
-                title="Tiến 1 khung hình (1/120s ~ 0.008s)"
+                title={`Tiến 1 khung hình (1/${stepFps}s ~ ${(1 / stepFps).toFixed(3)}s)`}
               >
                 <span>+1</span>
                 <ChevronRight className="w-3 h-3" />
@@ -2940,7 +2987,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               <button
                 onClick={() => stepFrame(10)}
                 className="px-1.5 py-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[11px] font-mono font-medium transition-all"
-                title="Tiến 10 khung hình (~0.08s)"
+                title={`Tiến 10 khung hình (~${(10 / stepFps).toFixed(2)}s)`}
               >
                 +10
               </button>
@@ -2985,6 +3032,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             >
               <FlipHorizontal className="w-3.5 h-3.5 text-amber-400" />
               <span>{isFlipped ? 'Đã Lật' : 'Lật Ảnh'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleSharpBoost}
+              className={`px-2 py-1 rounded-lg border text-xs font-medium flex items-center space-x-1 transition-all ${
+                isSharpBoost
+                  ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 shadow-sm ring-1 ring-emerald-400/40'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-white/10'
+              }`}
+              title="Khử mờ nội suy bilinear & Tăng độ nét tương phản của lá bài"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{isSharpBoost ? 'Nét Cao' : 'Nét Chuẩn'}</span>
             </button>
 
             <button

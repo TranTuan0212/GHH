@@ -11,6 +11,11 @@
     @apply bg-dark-400 text-slate-100 overflow-x-hidden;
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
+  /* Khử mờ nội suy bilinear của trình duyệt khi tua chậm hoặc zoom video */
+  video {
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+  }
 }
 
 /* Glassmorphism background effect */
