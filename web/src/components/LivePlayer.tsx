@@ -756,46 +756,71 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [copiedResult, setCopiedResult] = useState(false);
 
   const captureFrame = (): string | null => {
-    const video = replayVideoRef.current || liveVideoRef.current;
-    if (!video || video.readyState < 2) return null;
+    try {
+      // Xác định thẻ video đang hoạt động hiển thị trên màn hình:
+      // - Đang tua (!isLive) hoặc replay đang có frame: lấy thẻ replayVideoRef (màn to)
+      // - Đang xem trực tiếp (isLive): lấy thẻ liveVideoRef
+      const preferredVideo = (!isLive && hasFrame)
+        ? replayVideoRef.current
+        : (isLive && hasLiveFrame ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current));
 
-    const vw = video.videoWidth || 1280;
-    const vh = video.videoHeight || 720;
-    const canvas = document.createElement('canvas');
+      // Fallback: chọn thẻ nào thực tế đã render kích thước hình ảnh (videoWidth > 0)
+      const video = (preferredVideo && preferredVideo.videoWidth > 0)
+        ? preferredVideo
+        : ([replayVideoRef.current, liveVideoRef.current].find(v => v && v.videoWidth > 0) || preferredVideo);
 
-    const rot = ((rotation % 360) + 360) % 360;
-    if (rot === 90 || rot === 270) {
-      canvas.width = vh;
-      canvas.height = vw;
-    } else {
-      canvas.width = vw;
-      canvas.height = vh;
+      if (!video) {
+        console.warn('[LivePlayer] captureFrame: Không tìm thấy thẻ video nào trong DOM');
+        return null;
+      }
+
+      // Lấy kích thước thực tế của frame hình đang phát
+      const vw = video.videoWidth || (video as any).naturalWidth || video.clientWidth || 1280;
+      const vh = video.videoHeight || (video as any).naturalHeight || video.clientHeight || 720;
+
+      if (vw <= 0 || vh <= 0) {
+        console.warn('[LivePlayer] captureFrame: Thẻ video chưa có frame hình hợp lệ (vw/vh <= 0)');
+        return null;
+      }
+
+      const canvas = document.createElement('canvas');
+      const rot = ((rotation % 360) + 360) % 360;
+      if (rot === 90 || rot === 270) {
+        canvas.width = vh;
+        canvas.height = vw;
+      } else {
+        canvas.width = vw;
+        canvas.height = vh;
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+
+      ctx.save();
+      if (rot === 90) {
+        ctx.translate(canvas.width, 0);
+        ctx.rotate((90 * Math.PI) / 180);
+      } else if (rot === 180) {
+        ctx.translate(canvas.width, canvas.height);
+        ctx.rotate((180 * Math.PI) / 180);
+      } else if (rot === 270) {
+        ctx.translate(0, canvas.height);
+        ctx.rotate((270 * Math.PI) / 180);
+      }
+
+      if (isFlipped) {
+        ctx.translate(vw, 0);
+        ctx.scale(-1, 1);
+      }
+
+      ctx.drawImage(video, 0, 0, vw, vh);
+      ctx.restore();
+
+      return canvas.toDataURL('image/jpeg', 0.92);
+    } catch (err: any) {
+      console.error('[LivePlayer] Lỗi captureFrame:', err);
+      return null;
     }
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    ctx.save();
-    if (rot === 90) {
-      ctx.translate(canvas.width, 0);
-      ctx.rotate((90 * Math.PI) / 180);
-    } else if (rot === 180) {
-      ctx.translate(canvas.width, canvas.height);
-      ctx.rotate((180 * Math.PI) / 180);
-    } else if (rot === 270) {
-      ctx.translate(0, canvas.height);
-      ctx.rotate((270 * Math.PI) / 180);
-    }
-
-    if (isFlipped) {
-      ctx.translate(vw, 0);
-      ctx.scale(-1, 1);
-    }
-
-    ctx.drawImage(video, 0, 0, vw, vh);
-    ctx.restore();
-
-    return canvas.toDataURL('image/jpeg', 0.92);
   };
 
   const handleDetectCards = async () => {
@@ -803,18 +828,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setDetectError(null);
     setCopiedResult(false);
 
-    const dataUrl = captureFrame();
-    if (!dataUrl) {
-      setDetectError('Không thể chụp hình từ video. Hãy chắc chắn video đang mở và hiển thị.');
-      setIsResultOpen(true);
-      return;
-    }
-
-    setDetectedImageThumb(dataUrl);
-    setIsDetecting(true);
-    setIsResultOpen(true);
-
     try {
+      const dataUrl = captureFrame();
+      if (!dataUrl) {
+        setDetectError('Không thể chụp hình từ video. Hãy chắc chắn video đang mở và có hình ảnh hiển thị.');
+        setIsResultOpen(true);
+        return;
+      }
+
+      setDetectedImageThumb(dataUrl);
+      setIsDetecting(true);
+      setIsResultOpen(true);
+
       const res = await fetch('/api/ai/detect-cards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2406,6 +2431,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             position: 'absolute',
             inset: 0
           }}
+          crossOrigin="anonymous"
           playsInline
           muted={true}
         />
@@ -2460,6 +2486,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out'
             }}
+            crossOrigin="anonymous"
             playsInline
             muted={isMuted}
             autoPlay
