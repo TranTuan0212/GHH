@@ -311,9 +311,10 @@ function parseCardCode(code: string) {
 aiRouter.post('/batch-detect', async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
-    const { imagesBase64, apiKey: clientApiKey } = req.body;
-    if (!imagesBase64 || !Array.isArray(imagesBase64) || imagesBase64.length === 0) {
-      return res.status(400).json({ success: false, message: 'Thiếu mảng ảnh (imagesBase64).' });
+    const { imagesBase64, stitchedImageBase64, count: clientCount, apiKey: clientApiKey } = req.body;
+    const totalCount = clientCount || (Array.isArray(imagesBase64) ? imagesBase64.length : (stitchedImageBase64 ? 1 : 0));
+    if (totalCount === 0) {
+      return res.status(400).json({ success: false, message: 'Thiếu dữ liệu ảnh.' });
     }
 
     const apiKey = (clientApiKey && clientApiKey.trim()) || process.env.GEMINI_API_KEY;
@@ -324,22 +325,43 @@ aiRouter.post('/batch-detect', async (req: Request, res: Response) => {
       });
     }
 
-    const promptText = `Dưới đây là ${imagesBase64.length} bức ảnh, theo thứ tự từ 1 đến ${imagesBase64.length}.
+    let parts: any[] = [];
+    if (stitchedImageBase64) {
+      // TỐI ƯU SIÊU TỐC: Dải ảnh ngang đã ghép các ô từ trái sang phải
+      const clean = stitchedImageBase64.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
+      const promptText = `Ảnh này gồm đúng ${totalCount} ô theo thứ tự từ trái sang phải, có đánh số #1 đến #${totalCount}.
+Quan sát từng ô theo thứ tự từ 1 đến ${totalCount}:
+- Nếu thấy quân và chất (ngửa hoặc hé góc), ghi mã ngắn (vd: AS, KH, QD, JC, 10S). S=Spade, H=Heart, D=Diamond, C=Club.
+- Nếu úp hoàn toàn hoặc không thấy rõ, BẮT BUỘC ghi "NONE". TUYỆT ĐỐI KHÔNG ĐOÁN MÒ.
+Trả về DUY NHẤT một mảng JSON gồm đúng ${totalCount} phần tử chuỗi:
+["AS", "NONE", "9H"]`;
+      parts = [
+        { text: promptText },
+        {
+          inline_data: {
+            mime_type: 'image/jpeg',
+            data: clean
+          }
+        }
+      ];
+    } else {
+      // Fallback: Nếu gửi mảng nhiều ảnh rời
+      const promptText = `Dưới đây là ${totalCount} bức ảnh, theo thứ tự từ 1 đến ${totalCount}.
 Quan sát kỹ từng ảnh:
 - Nếu nhìn thấy rõ quân và chất (mặt ngửa hoặc hé gầm/mép dưới), trả về mã ngắn (vd: AS, 9H, 10S, KD). S=Spade, H=Heart, D=Diamond, C=Club.
 - Nếu ảnh nào bài úp hoàn toàn hoặc không nhìn thấy rõ, BẮT BUỘC ghi "NONE". TUYỆT ĐỐI KHÔNG ĐOÁN MÒ.
-Trả về DUY NHẤT một mảng JSON gồm đúng ${imagesBase64.length} phần tử chuỗi:
+Trả về DUY NHẤT một mảng JSON gồm đúng ${totalCount} phần tử chuỗi:
 ["AS", "NONE", "9H"]`;
-
-    const parts: any[] = [{ text: promptText }];
-    for (const img of imagesBase64) {
-      const clean = img.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
-      parts.push({
-        inline_data: {
-          mime_type: 'image/jpeg',
-          data: clean
-        }
-      });
+      parts = [{ text: promptText }];
+      for (const img of (imagesBase64 || [])) {
+        const clean = img.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
+        parts.push({
+          inline_data: {
+            mime_type: 'image/jpeg',
+            data: clean
+          }
+        });
+      }
     }
 
     const payload = {
@@ -347,7 +369,7 @@ Trả về DUY NHẤT một mảng JSON gồm đúng ${imagesBase64.length} ph�
       generationConfig: {
         temperature: 0.0,
         response_mime_type: 'application/json',
-        maxOutputTokens: Math.max(100, imagesBase64.length * 15)
+        maxOutputTokens: Math.max(60, totalCount * 10)
       }
     };
 
@@ -396,7 +418,7 @@ Trả về DUY NHẤT một mảng JSON gồm đúng ${imagesBase64.length} ph�
       rawList = JSON.parse(cleaned);
     }
 
-    const cards = imagesBase64.map((_, i) => {
+    const cards = Array.from({ length: totalCount }, (_, i) => {
       const code = rawList[i] || 'NONE';
       return { index: i + 1, ...parseCardCode(code) };
     });
