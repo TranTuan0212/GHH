@@ -9,7 +9,7 @@ import { adminMiddleware, AuthRequest } from './auth';
 export const adminRouter = Router();
 adminRouter.use(adminMiddleware);
 
-function formatRemaining(expiresAt: string): { text: string; status: 'ACTIVE' | 'WARNING' | 'EXPIRED'; totalDays: number } {
+export function formatRemaining(expiresAt: string): { text: string; status: 'ACTIVE' | 'WARNING' | 'EXPIRED'; totalDays: number } {
   const diff = new Date(expiresAt).getTime() - Date.now();
   if (diff <= 0) {
     return { text: 'Đã hết hạn', status: 'EXPIRED', totalDays: 0 };
