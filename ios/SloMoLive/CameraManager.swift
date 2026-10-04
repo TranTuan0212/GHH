@@ -367,6 +367,17 @@ public class CameraManager: NSObject, ObservableObject {
 
     private func configureAndStartSession(completion: @escaping (Bool) -> Void) {
         sessionQueue.async {
+            if self.captureSession.isRunning {
+                DispatchQueue.main.async { completion(true) }
+                return
+            }
+
+            if self.videoDeviceInput != nil && !self.captureSession.inputs.isEmpty {
+                self.captureSession.startRunning()
+                DispatchQueue.main.async { completion(true) }
+                return
+            }
+
             self.captureSession.beginConfiguration()
 
             // Không để preset .high/.medium giới hạn activeFormat HFR. inputPriority cho phép

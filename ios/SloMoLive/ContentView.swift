@@ -1,30 +1,31 @@
 import SwiftUI
 import AVFoundation
 
+class VideoPreviewView: UIView {
+    override class var layerClass: AnyClass {
+        return AVCaptureVideoPreviewLayer.self
+    }
+
+    var videoPreviewLayer: AVCaptureVideoPreviewLayer {
+        return layer as! AVCaptureVideoPreviewLayer
+    }
+}
+
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: CGRect.zero)
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(previewLayer)
-        context.coordinator.previewLayer = previewLayer
+    func makeUIView(context: Context) -> VideoPreviewView {
+        let view = VideoPreviewView()
+        view.backgroundColor = .black
+        view.videoPreviewLayer.session = session
+        view.videoPreviewLayer.videoGravity = .resizeAspectFill
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        DispatchQueue.main.async {
-            context.coordinator.previewLayer?.frame = uiView.bounds
+    func updateUIView(_ uiView: VideoPreviewView, context: Context) {
+        if uiView.videoPreviewLayer.session !== session {
+            uiView.videoPreviewLayer.session = session
         }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    class Coordinator {
-        var previewLayer: AVCaptureVideoPreviewLayer?
     }
 }
 
@@ -156,6 +157,10 @@ struct ContentView: View {
                 ZStack {
                     CameraPreviewView(session: cameraManager.session)
                         .edgesIgnoringSafeArea(.all)
+                        .onAppear {
+                            locationManager.requestPermissions()
+                            cameraManager.setupCamera { _ in }
+                        }
 
                     // Overlay Status Bar
                     VStack {
@@ -318,6 +323,10 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            if networkManager.isAuthenticated {
+                locationManager.requestPermissions()
+                cameraManager.setupCamera { _ in }
+            }
             // 1. Bấm 3 lần GIẢM âm lượng -> Mở sáng màn hình
             VolumeObserver.shared.onTripleVolumeDown = {
                 DispatchQueue.main.async {
@@ -333,6 +342,11 @@ struct ContentView: View {
             }
             VolumeObserver.shared.resetVolumeSliderToMid()
             enableSystemGestureDeferral()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            if networkManager.isAuthenticated && !cameraManager.session.isRunning {
+                cameraManager.setupCamera { _ in }
+            }
         }
     }
 
