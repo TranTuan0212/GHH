@@ -1197,21 +1197,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     <span className="text-purple-300 font-bold truncate">
                                       #{idx + 1} {d.deviceModel}
                                     </span>
-                                    <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-sans">
+                                    <span className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-bold font-sans ${
+                                      d.voiceUnlocked
+                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    }`}>
                                       <Mic className="w-2.5 h-2.5" />
-                                      <span>VOICE: ĐÃ MỞ TỰ ĐỘNG</span>
+                                      <span>{d.voiceUnlocked ? 'VOICE: ĐÃ MỞ' : 'VOICE: CHỜ KHÁCH NHẬP KEY'}</span>
                                     </span>
                                   </div>
 
                                   {d.voiceKey && (
-                                    <div className="flex items-center justify-between text-[10px] text-amber-300 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-                                      <span className="truncate">Key: {d.voiceKey}</span>
+                                    <div className="flex items-center justify-between text-[11px] text-amber-300 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30 font-mono">
+                                      <div className="truncate">
+                                        <span className="text-slate-400 font-sans text-[10px]">Key gửi khách: </span>
+                                        <strong className="text-amber-200">{d.voiceKey}</strong>
+                                      </div>
                                       <button
                                         onClick={() => copyToClipboard(d.voiceKey!, `key-dev-${d.id}`)}
-                                        className="p-0.5 hover:text-white shrink-0 ml-1"
-                                        title="Sao chép Key"
+                                        className="p-1 hover:text-white shrink-0 ml-1.5 bg-amber-500/20 hover:bg-amber-500/30 rounded text-amber-200 flex items-center space-x-1 text-[10px] font-sans font-semibold cursor-pointer"
+                                        title="Sao chép Key gửi cho khách"
                                       >
                                         {copiedKey === `key-dev-${d.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                        <span>{copiedKey === `key-dev-${d.id}` ? 'Đã chép!' : 'Chép Key'}</span>
                                       </button>
                                     </div>
                                   )}

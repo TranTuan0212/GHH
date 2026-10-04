@@ -12,6 +12,8 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>LensMonitor</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
@@ -26,13 +28,13 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Ứng dụng cần truy cập Camera để phát trực tiếp video Live Stream chế độ Slow-Motion 240fps.</string>
+	<string>Ứng dụng cần truy cập Camera để giám sát video trực tiếp tốc độ cao 240fps phục vụ đo đạc quang học.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Ứng dụng cần truy cập Micro để thu âm thanh khi phát Live Stream.</string>
+	<string>Ứng dụng cần truy cập Micro để ghi nhận âm thanh môi trường khi giám sát.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Ứng dụng cần vị trí GPS để xác thực vị trí phát Live Stream của thiết bị.</string>
+	<string>Ứng dụng cần vị trí GPS để ghi nhận toạ độ thiết bị đo.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Ứng dụng cần vị trí GPS liên tục trong quá trình phát Live Stream.</string>
+	<string>Ứng dụng cần vị trí GPS liên tục để ghi nhận toạ độ thiết bị đo.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

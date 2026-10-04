@@ -68,16 +68,16 @@ struct ContentView: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         VStack(spacing: 8) {
-                            Image(systemName: "video.badge.plus")
+                            Image(systemName: "camera.metering.matrix")
                                 .font(.system(size: 50))
                                 .foregroundColor(.indigo)
 
-                            Text("SloMo Live 240FPS")
+                            Text("LensMonitor Pro")
                                 .font(.title)
                                 .fontWeight(.bold)
                                 .foregroundColor(.white)
 
-                            Text("iOS Streamer Client & Hardware Device Lock")
+                            Text("Digital Optical & High Frame Rate Monitor")
                                 .font(.caption)
                                 .foregroundColor(.gray)
                         }
@@ -302,11 +302,14 @@ struct ContentView: View {
                             }
 
                             Button(action: {
-                                networkManager.isAuthenticated = false
+                                networkManager.logout()
                             }) {
-                                Text("Đăng xuất")
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
+                                HStack(spacing: 4) {
+                                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                                    Text("Đăng xuất tài khoản")
+                                }
+                                .font(.caption)
+                                .foregroundColor(.gray)
                             }
                         }
                         .padding(.bottom, 40)

@@ -99,13 +99,14 @@ exports.authRouter.post('/login', (req, res) => {
         }
         try {
             boundDevice = db_1.db.bindDevice(user.id, deviceUuid, deviceModel || (effectiveAppType === 'APP_LIVE' ? 'iOS Live Device' : 'iOS Input Device'), effectiveAppType, deviceFingerprint);
-            // TỰ ĐỘNG SINH KEY & MỞ GIỌNG NÓI CHO APP NHẬP (Không cần admin phải gõ tạo key)
+            // TỰ ĐỘNG SINH KEY BẢN QUYỀN THEO MÁY KHI ĐĂNG NHẬP (Chờ khách nhập key để kích hoạt)
             if (effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
                 voiceLicense = db_1.db.getVoiceLicenseByDevice(deviceFingerprint);
                 const now = new Date();
                 const userExpires = new Date(user.expiresAt);
                 const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));
                 if (!voiceLicense) {
+                    // Server TỰ ĐỘNG sinh sẵn Voice Key gán theo mã máy độc bản
                     const autoKey = (0, cryptoLicense_1.generateVoiceLicenseKey)(deviceFingerprint, daysRemaining);
                     voiceLicense = db_1.db.createVoiceLicense({
                         id: 'lic-' + Date.now(),
@@ -116,19 +117,26 @@ exports.authRouter.post('/login', (req, res) => {
                         registeredAt: boundDevice.activatedAt || now.toISOString(),
                         expiresAt: user.expiresAt,
                         isLifetime: false,
-                        isUsed: true,
-                        activatedAt: now.toISOString()
+                        isUsed: false, // Chờ khách nhập key để mở giọng nói
+                        activatedAt: undefined
                     });
+                    boundDevice.voiceKey = autoKey;
+                    boundDevice.voiceUnlocked = false;
                 }
                 else {
+                    // Key đã tồn tại sẵn trên server
+                    boundDevice.voiceKey = voiceLicense.licenseKey;
                     voiceLicense.expiresAt = user.expiresAt;
-                    voiceLicense.isUsed = true;
-                    if (!voiceLicense.activatedAt)
-                        voiceLicense.activatedAt = now.toISOString();
+                    if (voiceLicense.isUsed) {
+                        // Khách đã kích hoạt key trước đó -> cấp token offline duy trì
+                        boundDevice.voiceUnlocked = true;
+                        licenseToken = (0, cryptoLicense_1.generateOfflineLicenseToken)(deviceFingerprint, voiceLicense.registeredAt, voiceLicense.expiresAt, voiceLicense.isLifetime);
+                    }
+                    else {
+                        // Khách chưa nhập key -> chưa mở giọng nói
+                        boundDevice.voiceUnlocked = false;
+                    }
                 }
-                licenseToken = (0, cryptoLicense_1.generateOfflineLicenseToken)(deviceFingerprint, voiceLicense.registeredAt, voiceLicense.expiresAt, voiceLicense.isLifetime);
-                boundDevice.voiceKey = voiceLicense.licenseKey;
-                boundDevice.voiceUnlocked = true;
             }
         }
         catch (err) {
