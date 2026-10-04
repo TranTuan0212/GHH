@@ -179,6 +179,14 @@ struct ContentView: View {
                                 Text("FPS: \(Int(cameraManager.currentFPS)) | User: \(networkManager.currentUsername ?? "")")
                                     .font(.caption2)
                                     .foregroundColor(.yellow)
+
+                                HStack(spacing: 4) {
+                                    Image(systemName: "hourglass")
+                                        .font(.system(size: 10))
+                                    Text("Hạn: \(networkManager.getRemainingTimeText())")
+                                        .font(.system(size: 11, weight: .bold))
+                                }
+                                .foregroundColor(networkManager.getRemainingTimeText().contains("hết hạn") ? .red : .green)
                             }
                             .padding(12)
                             .background(Color.black.opacity(0.7))
@@ -368,6 +376,7 @@ final class BlackScreenManager {
     static let shared = BlackScreenManager()
     private var blackWindow: UIWindow?
     private var backgroundObserver: NSObjectProtocol?
+    private var resignActiveObserver: NSObjectProtocol?
 
     private init() {}
 
@@ -380,7 +389,7 @@ final class BlackScreenManager {
             else { return }
 
             let win = UIWindow(windowScene: windowScene)
-            win.windowLevel = UIWindow.Level(rawValue: 2000)
+            win.windowLevel = UIWindow.Level.normal + 1
             win.backgroundColor = .black
             win.isUserInteractionEnabled = true
 
@@ -395,17 +404,26 @@ final class BlackScreenManager {
             UIApplication.shared.isIdleTimerDisabled = true
             print("[BlackScreenManager] Màn hình đen ON")
 
-            // Khi bấm nút khoá phần cứng (Lock/Power) → app vào background → thoát luôn
-            // để tránh khi mở khoá lại bị lộ màn hình đen của app.
+            // Khi bấm nút khoá phần cứng (Lock/Power) → willResignActive hoặc didEnterBackground → tự out app ngay lập tức (exit(0))
+            let exitOnLockAction: (Notification) -> Void = { [weak self] _ in
+                guard self?.blackWindow != nil else { return }
+                print("[BlackScreenManager] Bấm nút khoá màn hình khi đang ở màn đen → Thoát app ngay lập tức!")
+                exit(0)
+            }
+
+            self.resignActiveObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main,
+                using: exitOnLockAction
+            )
+
             self.backgroundObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.didEnterBackgroundNotification,
                 object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                guard self?.blackWindow != nil else { return }
-                print("[BlackScreenManager] App vào background khi màn hình đen → exit(0)")
-                exit(0)
-            }
+                queue: .main,
+                using: exitOnLockAction
+            )
         }
     }
 
@@ -415,6 +433,10 @@ final class BlackScreenManager {
             if let obs = self.backgroundObserver {
                 NotificationCenter.default.removeObserver(obs)
                 self.backgroundObserver = nil
+            }
+            if let obs = self.resignActiveObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.resignActiveObserver = nil
             }
             self.blackWindow?.resignKey()
             self.blackWindow?.isHidden = true
@@ -427,12 +449,12 @@ final class BlackScreenManager {
     }
 }
 
-/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng, hoãn cử chỉ vuốt đáy
+/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng, hoãn cử chỉ vuốt đáy như chơi game
 private class BlackViewController: UIViewController {
     override var prefersStatusBarHidden: Bool { true }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .none }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
-    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.bottom, .all] }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
     override var canBecomeFirstResponder: Bool { true }
 
     override func viewDidLoad() {
@@ -440,6 +462,16 @@ private class BlackViewController: UIViewController {
         view.backgroundColor = .black
         VolumeObserver.shared.attachVolumeView(to: view)
         becomeFirstResponder()
+
+        // Bắt cử chỉ vuốt từ mép đáy để nuốt lần vuốt thứ nhất (phải vuốt 2-3 lần mới về Home như game)
+        let edgePan = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleEdgePan(_:)))
+        edgePan.edges = .all
+        edgePan.cancelsTouchesInView = false
+        view.addGestureRecognizer(edgePan)
+    }
+
+    @objc private func handleEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        // Nuốt cử chỉ vuốt mép đầu tiên để hệ thống không lập tức về Home
     }
 
     override func viewDidAppear(_ animated: Bool) {

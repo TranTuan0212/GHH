@@ -19,6 +19,7 @@ public class NetworkManager: ObservableObject {
     @Published public var authToken: String? = nil
     @Published public var currentUsername: String? = nil
     @Published public var currentUserId: String? = nil
+    @Published public var userExpiresAt: String? = nil
     @Published public var activeStreamId: String? = nil
     @Published public var streamKey: String? = nil
     @Published public var rtmpIngestUrl: String? = nil
@@ -47,6 +48,7 @@ public class NetworkManager: ObservableObject {
             self.authToken = token
             self.currentUsername = UserDefaults.standard.string(forKey: "saved_username")
             self.currentUserId = UserDefaults.standard.string(forKey: "saved_user_id")
+            self.userExpiresAt = UserDefaults.standard.string(forKey: "saved_user_expires_at")
             self.isAuthenticated = true
         }
     }
@@ -132,6 +134,7 @@ public class NetworkManager: ObservableObject {
                     self.authToken = token
                     self.currentUsername = user["username"] as? String
                     self.currentUserId = (user["id"] as? String) ?? (user["_id"] as? String)
+                    self.userExpiresAt = user["expiresAt"] as? String
                     self.isAuthenticated = true
                     self.errorMessage = nil
 
@@ -139,6 +142,11 @@ public class NetworkManager: ObservableObject {
                     UserDefaults.standard.set(token, forKey: "saved_auth_token")
                     UserDefaults.standard.set(self.currentUsername, forKey: "saved_username")
                     UserDefaults.standard.set(self.currentUserId, forKey: "saved_user_id")
+                    if let exp = self.userExpiresAt {
+                        UserDefaults.standard.set(exp, forKey: "saved_user_expires_at")
+                    } else {
+                        UserDefaults.standard.removeObject(forKey: "saved_user_expires_at")
+                    }
 
                     completion(true)
                 } else {
@@ -154,6 +162,7 @@ public class NetworkManager: ObservableObject {
         self.authToken = nil
         self.currentUsername = nil
         self.currentUserId = nil
+        self.userExpiresAt = nil
         self.isAuthenticated = false
         self.activeStreamId = nil
         self.streamKey = nil
@@ -162,6 +171,31 @@ public class NetworkManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "saved_auth_token")
         UserDefaults.standard.removeObject(forKey: "saved_username")
         UserDefaults.standard.removeObject(forKey: "saved_user_id")
+        UserDefaults.standard.removeObject(forKey: "saved_user_expires_at")
+    }
+
+    /// Định dạng thời gian hết hạn thân thiện (Ví dụ: Còn 29 ngày 14 giờ / Vĩnh viễn)
+    public func getRemainingTimeText() -> String {
+        guard let expStr = userExpiresAt, !expStr.isEmpty else {
+            return "Vĩnh viễn (Lifetime)"
+        }
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let expDate = isoFormatter.date(from: expStr) ?? ISO8601DateFormatter().date(from: expStr) else {
+            return "Vĩnh viễn (Lifetime)"
+        }
+        let diff = expDate.timeIntervalSince(Date())
+        if diff <= 0 { return "Đã hết hạn" }
+        let days = Int(diff) / 86400
+        let hours = (Int(diff) % 86400) / 3600
+        let minutes = (Int(diff) % 3600) / 60
+        if days > 0 {
+            return "Còn \(days) ngày \(hours) giờ"
+        } else if hours > 0 {
+            return "Còn \(hours) giờ \(minutes) phút"
+        } else {
+            return "Còn \(minutes) phút"
+        }
     }
 
     /// Gọi `/api/server-info` để biết server đang chạy + auto-fill URL. Gọi NGAY khi app mở
