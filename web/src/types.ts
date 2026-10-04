@@ -6,6 +6,9 @@ export interface User {
   expiresAt: string;
   isExpired?: boolean;
   createdAt?: string;
+  activatedAt?: string;
+  countdown?: string;
+  countdownStatus?: 'ACTIVE' | 'WARNING' | 'EXPIRED';
   assignedRoom?: string;
   devices?: UserDevice[];
 }
@@ -19,7 +22,21 @@ export interface UserDevice {
   deviceFingerprint?: string;
   isLiveDevice: boolean;
   lastLogin: string;
+  createdAt?: string;
+  activatedAt?: string;
+  expiresAt?: string;
+  countdown?: string;
+  countdownStatus?: 'ACTIVE' | 'WARNING' | 'EXPIRED';
+  voiceKey?: string;
+  voiceUnlocked?: boolean;
+  voiceLicense?: {
+    licenseKey: string;
+    expiresAt: string;
+    isLifetime: boolean;
+    isUsed: boolean;
+  } | null;
 }
+
 
 export interface StreamSession {
   id: string;

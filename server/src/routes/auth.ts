@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
+import { generateVoiceLicenseKey, generateOfflineLicenseToken } from '../utils/cryptoLicense';
+
 
 export const authRouter = Router();
 
@@ -109,6 +111,8 @@ authRouter.post('/login', (req: Request, res: Response) => {
   }
 
   let boundDevice = null;
+  let licenseToken: string | null = null;
+  let voiceLicense: any = null;
 
   // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
   const effectiveAppType: 'APP_LIVE' | 'APP_INPUT' | null = 
@@ -127,11 +131,48 @@ authRouter.post('/login', (req: Request, res: Response) => {
         effectiveAppType,
         deviceFingerprint
       );
+
+      // TỰ ĐỘNG SINH KEY & MỞ GIỌNG NÓI CHO APP NHẬP (Không cần admin phải gõ tạo key)
+      if (effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
+        voiceLicense = db.getVoiceLicenseByDevice(deviceFingerprint);
+        const now = new Date();
+        const userExpires = new Date(user.expiresAt);
+        const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));
+
+        if (!voiceLicense) {
+          const autoKey = generateVoiceLicenseKey(deviceFingerprint, daysRemaining);
+          voiceLicense = db.createVoiceLicense({
+            id: 'lic-' + Date.now(),
+            deviceFingerprint,
+            deviceModel: boundDevice.deviceModel,
+            userId: user.id,
+            licenseKey: autoKey,
+            registeredAt: boundDevice.activatedAt || now.toISOString(),
+            expiresAt: user.expiresAt,
+            isLifetime: false,
+            isUsed: true,
+            activatedAt: now.toISOString()
+          });
+        } else {
+          voiceLicense.expiresAt = user.expiresAt;
+          voiceLicense.isUsed = true;
+          if (!voiceLicense.activatedAt) voiceLicense.activatedAt = now.toISOString();
+        }
+
+        licenseToken = generateOfflineLicenseToken(
+          deviceFingerprint,
+          voiceLicense.registeredAt,
+          voiceLicense.expiresAt,
+          voiceLicense.isLifetime
+        );
+
+        boundDevice.voiceKey = voiceLicense.licenseKey;
+        boundDevice.voiceUnlocked = true;
+      }
     } catch (err: any) {
       return res.status(403).json({ error: err.message });
     }
   }
-
 
   const token = jwt.sign(
     {
@@ -153,9 +194,17 @@ authRouter.post('/login', (req: Request, res: Response) => {
       role: user.role,
       expiresAt: user.expiresAt,
       platform: platform || 'web',
-      device: boundDevice
+      device: boundDevice,
+      licenseToken,
+      voiceLicense: voiceLicense ? {
+        licenseKey: voiceLicense.licenseKey,
+        registeredAt: voiceLicense.registeredAt,
+        expiresAt: voiceLicense.expiresAt,
+        isLifetime: voiceLicense.isLifetime
+      } : null
     }
   });
+
 });
 
 // GET /api/auth/me

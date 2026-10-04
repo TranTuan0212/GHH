@@ -101,6 +101,20 @@ class Database {
         const idx = this.data.users.findIndex(u => u.id === id);
         if (idx !== -1) {
             this.data.users[idx] = { ...this.data.users[idx], ...updates };
+            // Tự động đồng bộ thời hạn gia hạn sang toàn bộ thiết bị của user
+            if (updates.expiresAt) {
+                this.data.userDevices.forEach(d => {
+                    if (d.userId === id) {
+                        d.expiresAt = updates.expiresAt;
+                        if (d.deviceFingerprint) {
+                            const lic = this.getVoiceLicenseByDevice(d.deviceFingerprint);
+                            if (lic && !lic.isLifetime) {
+                                lic.expiresAt = updates.expiresAt;
+                            }
+                        }
+                    }
+                });
+            }
             this.save();
             return this.data.users[idx];
         }
@@ -128,6 +142,8 @@ class Database {
     bindDevice(userId, deviceUuid, deviceModel, appType = 'APP_LIVE', deviceFingerprint) {
         const isLive = appType === 'APP_LIVE';
         const userDevices = this.data.userDevices.filter(d => d.userId === userId);
+        const user = this.getUserById(userId);
+        const userExpiresAt = user?.expiresAt || new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
         if (isLive) {
             // Tìm thiết bị Live hiện tại (kiểm tra cả cờ appType === 'APP_LIVE' hoặc isLiveDevice === true)
             const existingLive = userDevices.find(d => d.appType === 'APP_LIVE' || d.isLiveDevice);
@@ -141,10 +157,13 @@ class Database {
                     existingLive.deviceFingerprint = deviceFingerprint;
                 existingLive.appType = 'APP_LIVE';
                 existingLive.isLiveDevice = true;
+                existingLive.activatedAt = existingLive.activatedAt || existingLive.createdAt || new Date().toISOString();
+                existingLive.expiresAt = userExpiresAt;
                 this.save();
                 return existingLive;
             }
             // Tạo mới slot Live duy nhất
+            const nowIso = new Date().toISOString();
             const newLive = {
                 id: 'dev-live-' + Date.now(),
                 userId,
@@ -153,8 +172,10 @@ class Database {
                 appType: 'APP_LIVE',
                 deviceFingerprint,
                 isLiveDevice: true,
-                lastLogin: new Date().toISOString(),
-                createdAt: new Date().toISOString()
+                lastLogin: nowIso,
+                createdAt: nowIso,
+                activatedAt: nowIso,
+                expiresAt: userExpiresAt
             };
             this.data.userDevices.push(newLive);
             this.save();
@@ -169,6 +190,8 @@ class Database {
                 existingInput.deviceModel = deviceModel || existingInput.deviceModel;
                 if (deviceFingerprint)
                     existingInput.deviceFingerprint = deviceFingerprint;
+                existingInput.activatedAt = existingInput.activatedAt || existingInput.createdAt || new Date().toISOString();
+                existingInput.expiresAt = userExpiresAt;
                 this.save();
                 return existingInput;
             }
@@ -176,6 +199,7 @@ class Database {
             if (inputDevices.length >= 2) {
                 throw new Error('Tài khoản đã đạt giới hạn tối đa 2 máy nhập bài! Không thể thêm máy thứ 3.');
             }
+            const nowIso = new Date().toISOString();
             const newInput = {
                 id: 'dev-input-' + Date.now(),
                 userId,
@@ -184,8 +208,10 @@ class Database {
                 appType: 'APP_INPUT',
                 deviceFingerprint,
                 isLiveDevice: false,
-                lastLogin: new Date().toISOString(),
-                createdAt: new Date().toISOString()
+                lastLogin: nowIso,
+                createdAt: nowIso,
+                activatedAt: nowIso,
+                expiresAt: userExpiresAt
             };
             this.data.userDevices.push(newInput);
             this.save();

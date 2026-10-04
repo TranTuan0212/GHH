@@ -10,6 +10,7 @@ const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
+const cryptoLicense_1 = require("../utils/cryptoLicense");
 exports.authRouter = (0, express_1.Router)();
 // JWT_SECRET BẮT BUỘC lấy từ biến môi trường — không fallback về giá trị mặc định.
 // Trước đây hard-code 'SLOMO_240FPS_SECRET_KEY_2026' ngay trong source: bất kỳ ai đọc được
@@ -87,6 +88,8 @@ exports.authRouter.post('/login', (req, res) => {
         return res.status(403).json({ error: 'Tài khoản đã hết hạn sử dụng (' + new Date(user.expiresAt).toLocaleDateString('vi-VN') + '). Vui lòng gia hạn!' });
     }
     let boundDevice = null;
+    let licenseToken = null;
+    let voiceLicense = null;
     // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
     const effectiveAppType = appType === 'APP_INPUT' ? 'APP_INPUT' :
         (appType === 'APP_LIVE' || platform === 'mobile') ? 'APP_LIVE' : null;
@@ -96,6 +99,37 @@ exports.authRouter.post('/login', (req, res) => {
         }
         try {
             boundDevice = db_1.db.bindDevice(user.id, deviceUuid, deviceModel || (effectiveAppType === 'APP_LIVE' ? 'iOS Live Device' : 'iOS Input Device'), effectiveAppType, deviceFingerprint);
+            // TỰ ĐỘNG SINH KEY & MỞ GIỌNG NÓI CHO APP NHẬP (Không cần admin phải gõ tạo key)
+            if (effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
+                voiceLicense = db_1.db.getVoiceLicenseByDevice(deviceFingerprint);
+                const now = new Date();
+                const userExpires = new Date(user.expiresAt);
+                const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));
+                if (!voiceLicense) {
+                    const autoKey = (0, cryptoLicense_1.generateVoiceLicenseKey)(deviceFingerprint, daysRemaining);
+                    voiceLicense = db_1.db.createVoiceLicense({
+                        id: 'lic-' + Date.now(),
+                        deviceFingerprint,
+                        deviceModel: boundDevice.deviceModel,
+                        userId: user.id,
+                        licenseKey: autoKey,
+                        registeredAt: boundDevice.activatedAt || now.toISOString(),
+                        expiresAt: user.expiresAt,
+                        isLifetime: false,
+                        isUsed: true,
+                        activatedAt: now.toISOString()
+                    });
+                }
+                else {
+                    voiceLicense.expiresAt = user.expiresAt;
+                    voiceLicense.isUsed = true;
+                    if (!voiceLicense.activatedAt)
+                        voiceLicense.activatedAt = now.toISOString();
+                }
+                licenseToken = (0, cryptoLicense_1.generateOfflineLicenseToken)(deviceFingerprint, voiceLicense.registeredAt, voiceLicense.expiresAt, voiceLicense.isLifetime);
+                boundDevice.voiceKey = voiceLicense.licenseKey;
+                boundDevice.voiceUnlocked = true;
+            }
         }
         catch (err) {
             return res.status(403).json({ error: err.message });
@@ -116,7 +150,14 @@ exports.authRouter.post('/login', (req, res) => {
             role: user.role,
             expiresAt: user.expiresAt,
             platform: platform || 'web',
-            device: boundDevice
+            device: boundDevice,
+            licenseToken,
+            voiceLicense: voiceLicense ? {
+                licenseKey: voiceLicense.licenseKey,
+                registeredAt: voiceLicense.registeredAt,
+                expiresAt: voiceLicense.expiresAt,
+                isLifetime: voiceLicense.isLifetime
+            } : null
         }
     });
 });

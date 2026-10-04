@@ -13,18 +13,66 @@ const db_1 = require("../db");
 const auth_1 = require("./auth");
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(auth_1.adminMiddleware);
+function formatRemaining(expiresAt) {
+    const diff = new Date(expiresAt).getTime() - Date.now();
+    if (diff <= 0) {
+        return { text: 'Đã hết hạn', status: 'EXPIRED', totalDays: 0 };
+    }
+    const days = Math.floor(diff / (24 * 3600 * 1000));
+    const hours = Math.floor((diff % (24 * 3600 * 1000)) / (3600 * 1000));
+    const minutes = Math.floor((diff % (3600 * 1000)) / (60 * 1000));
+    let text = '';
+    if (days > 0) {
+        text = `Còn ${days} ngày ${hours} giờ`;
+    }
+    else if (hours > 0) {
+        text = `Còn ${hours} giờ ${minutes} phút`;
+    }
+    else {
+        text = `Còn ${minutes} phút`;
+    }
+    const status = days >= 3 ? 'ACTIVE' : 'WARNING';
+    return { text, status, totalDays: days };
+}
 // GET /api/admin/users - List users
 exports.adminRouter.get('/users', (req, res) => {
     const users = db_1.db.getUsers().map(u => {
-        const devices = db_1.db.getDevicesByUserId(u.id);
+        const userCountdown = formatRemaining(u.expiresAt);
+        const devices = db_1.db.getDevicesByUserId(u.id).map(d => {
+            const devExpiresAt = d.expiresAt || u.expiresAt;
+            const devCountdown = formatRemaining(devExpiresAt);
+            let voiceLic = null;
+            if (d.deviceFingerprint) {
+                const lic = db_1.db.getVoiceLicenseByDevice(d.deviceFingerprint);
+                if (lic) {
+                    voiceLic = {
+                        licenseKey: lic.licenseKey,
+                        expiresAt: lic.expiresAt,
+                        isLifetime: lic.isLifetime,
+                        isUsed: lic.isUsed
+                    };
+                }
+            }
+            return {
+                ...d,
+                activatedAt: d.activatedAt || d.createdAt || u.createdAt,
+                expiresAt: devExpiresAt,
+                countdown: devCountdown.text,
+                countdownStatus: devCountdown.status,
+                voiceLicense: voiceLic
+            };
+        });
         return {
             id: u.id,
             username: u.username,
             role: u.role,
             isBlocked: u.isBlocked,
+            createdAt: u.createdAt,
+            activatedAt: u.createdAt,
             expiresAt: u.expiresAt,
             isExpired: new Date(u.expiresAt) < new Date(),
-            createdAt: u.createdAt,
+            countdown: userCountdown.text,
+            countdownStatus: userCountdown.status,
             devices
         };
     });
