@@ -300,14 +300,14 @@ function startHlsSession(streamKey) {
         '-rtsp_transport', 'tcp',
         `rtsp://127.0.0.1:8554/${streamKey}`
     ];
-    // Rendition phụ (SD 480p, 60fps, 1000kbps) - Giảm độ phân giải để mượt, giữ nguyên 60fps
+    // Rendition phụ (SD 480p, 60fps, 1800kbps) - Giảm độ phân giải để mượt, giữ nguyên 60fps, scale Lanczos khử nhòe
     const lowLiveFfmpegArgs = [
         '-fflags', '+genpts+discardcorrupt',
         '-err_detect', 'ignore_err',
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
         '-map', '0:v:0',
         '-map', '0:a?',
-        '-vf', 'scale=-2:480',
+        '-vf', 'scale=-2:480:flags=lanczos',
         '-fpsmax', String(LIVE_PREVIEW_FPS),
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
@@ -317,9 +317,9 @@ function startHlsSession(streamKey) {
         '-pix_fmt', 'yuv420p',
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1',
-        '-b:v', '1000k',
-        '-maxrate', '1200k',
-        '-bufsize', '1500k',
+        '-b:v', '1800k',
+        '-maxrate', '2200k',
+        '-bufsize', '3000k',
         '-g', '30',
         '-keyint_min', '15',
         '-sc_threshold', '0',
@@ -332,14 +332,14 @@ function startHlsSession(streamKey) {
         '-rtsp_transport', 'tcp',
         `rtsp://127.0.0.1:8554/${streamKey}_low`
     ];
-    // Rendition siêu nhẹ (360p, 60fps, 500kbps) - Giảm độ phân giải cho máy/mạng yếu, giữ nguyên 60fps
+    // Rendition siêu nhẹ (360p, 60fps, 750kbps) - Giảm độ phân giải cho máy/mạng yếu, giữ nguyên 60fps
     const ultraLiveFfmpegArgs = [
         '-fflags', '+genpts+discardcorrupt',
         '-err_detect', 'ignore_err',
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
         '-map', '0:v:0',
         '-map', '0:a?',
-        '-vf', 'scale=-2:360',
+        '-vf', 'scale=-2:360:flags=lanczos',
         '-fpsmax', String(LIVE_PREVIEW_FPS),
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
@@ -349,9 +349,9 @@ function startHlsSession(streamKey) {
         '-pix_fmt', 'yuv420p',
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1',
-        '-b:v', '500k',
-        '-maxrate', '650k',
-        '-bufsize', '800k',
+        '-b:v', '750k',
+        '-maxrate', '950k',
+        '-bufsize', '1200k',
         '-g', '30',
         '-keyint_min', '15',
         '-sc_threshold', '0',

@@ -28,10 +28,8 @@ import {
   Move,
   ZoomIn,
   Sparkles,
-  Key,
-  Loader2,
-  RefreshCw,
-  Send
+  Settings,
+  RefreshCw
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -94,57 +92,6 @@ interface LivePlayerProps {
   finishRoundTrigger?: number;
   onFullscreenChange?: (isFullscreen: boolean) => void;
 }
-
-interface CapturedFramesStripProps {
-  frames: string[];
-  onRemove: (index: number) => void;
-  onClear: () => void;
-}
-
-const CapturedFramesStrip: React.FC<CapturedFramesStripProps> = React.memo(({ frames, onRemove, onClear }) => {
-  if (frames.length === 0) return null;
-  return (
-    <div className="flex items-center space-x-2 px-2 py-1.5 bg-purple-950/60 border border-purple-500/40 rounded-xl overflow-x-auto no-scrollbar animate-fadeIn">
-      <span className="text-[11px] font-bold text-purple-200 flex-shrink-0">
-        Đã chụp ({frames.length}):
-      </span>
-      <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar py-0.5">
-        {frames.map((thumb, idx) => (
-          <div key={idx} className="relative group flex-shrink-0">
-            <img
-              src={thumb}
-              alt={`#${idx + 1}`}
-              className="w-12 h-8 object-cover rounded-md border border-purple-400/60 shadow-sm"
-              loading="lazy"
-            />
-            <span className="absolute bottom-0 left-0 bg-black/80 text-[9px] font-mono font-bold text-purple-200 px-1 rounded-tr">
-              #{idx + 1}
-            </span>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove(idx);
-              }}
-              className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center text-[10px] shadow leading-none font-bold cursor-pointer"
-              title="Xoá ảnh này"
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={onClear}
-        className="text-[10px] text-slate-400 hover:text-red-400 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 font-medium flex-shrink-0 transition-colors cursor-pointer"
-        title="Xoá tất cả"
-      >
-        Xoá hết
-      </button>
-    </div>
-  );
-});
 
 export const LivePlayer: React.FC<LivePlayerProps> = ({
   stream,
@@ -780,281 +727,59 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [hlsBaseUrl, setHlsBaseUrl] = useState<string>('');
   const [replayHlsBaseUrl, setReplayHlsBaseUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
-  const [selectedResolution, setSelectedResolution] = useState<'720p' | '480p' | '360p'>('720p');
+  const [selectedResolution, setSelectedResolution] = useState<'auto' | '720p' | '480p' | '360p'>(() => {
+    try {
+      return (localStorage.getItem('player_resolution') as any) || 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+  const [autoResolution, setAutoResolution] = useState<'720p' | '480p' | '360p'>('720p');
+  const activeResolution = selectedResolution === 'auto' ? autoResolution : selectedResolution;
   const [isResMenuOpen, setIsResMenuOpen] = useState(false);
   const resMenuRef = useRef<HTMLDivElement | null>(null);
 
-  // --- AI Card Detection States & Functions ---
-  const [aiProvider, setAiProvider] = useState<'modelapi' | 'gemini'>(() => {
-    try {
-      return (localStorage.getItem('ai_provider') as any) || 'modelapi';
-    } catch {
-      return 'modelapi';
-    }
-  });
-  const [aiApiKey, setAiApiKey] = useState<string>(() => {
-    try {
-      return localStorage.getItem('ai_api_key') || localStorage.getItem('gemini_api_key') || '';
-    } catch {
-      return '';
-    }
-  });
-  const [aiBaseUrl, setAiBaseUrl] = useState<string>(() => {
-    try {
-      return localStorage.getItem('ai_base_url') || 'https://modelapi.vn/v1';
-    } catch {
-      return 'https://modelapi.vn/v1';
-    }
-  });
-  const [aiModel, setAiModel] = useState<string>(() => {
-    try {
-      return localStorage.getItem('ai_model') || 'gpt-4o-mini';
-    } catch {
-      return 'gpt-4o-mini';
-    }
-  });
+  // Tự động thích ứng mạng (ABR - Adaptive Bitrate kiểu YouTube):
+  // Khi chọn 'auto', theo dõi WebRTC stats & packet loss để hạ xuống 360p khi mạng yếu và tự nâng lại khi mạng khỏe
+  useEffect(() => {
+    if (selectedResolution !== 'auto' || !isLive) return;
 
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-  const [tempProvider, setTempProvider] = useState<'modelapi' | 'gemini'>(aiProvider);
-  const [tempApiKey, setTempApiKey] = useState(aiApiKey);
-  const [tempBaseUrl, setTempBaseUrl] = useState(aiBaseUrl);
-  const [tempModel, setTempModel] = useState(aiModel);
+    let consecutiveGood = 0;
+    const interval = setInterval(async () => {
+      const pc = peerConnectionRef.current;
+      if (!pc || pc.connectionState !== 'connected') return;
 
-  const handleOpenSettings = () => {
-    setTempProvider(aiProvider);
-    setTempApiKey(aiApiKey);
-    setTempBaseUrl(aiBaseUrl);
-    setTempModel(aiModel);
-    setIsKeyModalOpen(true);
-  };
+      try {
+        const stats = await pc.getStats();
+        let packetsLost = 0;
+        let packetsReceived = 0;
+        let framesDropped = 0;
 
-  const handleSaveSettings = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    try {
-      localStorage.setItem('ai_provider', tempProvider);
-      localStorage.setItem('ai_api_key', tempApiKey.trim());
-      localStorage.setItem('ai_base_url', tempBaseUrl.trim());
-      localStorage.setItem('ai_model', tempModel.trim());
-      if (tempProvider === 'gemini') {
-        localStorage.setItem('gemini_api_key', tempApiKey.trim());
-      }
-    } catch {}
-    setAiProvider(tempProvider);
-    setAiApiKey(tempApiKey.trim());
-    setAiBaseUrl(tempBaseUrl.trim());
-    setAiModel(tempModel.trim());
-    setIsKeyModalOpen(false);
-  };
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'video') {
+            packetsLost = report.packetsLost || 0;
+            packetsReceived = report.packetsReceived || 0;
+            framesDropped = report.framesDropped || 0;
+          }
+        });
 
-  interface CardInfo {
-    index?: number;
-    code?: string;
-    display?: string;
-    rank?: string | null;
-    suit?: string | null;
-    suitEn?: string;
-    symbol?: string;
-    color?: 'red' | 'black' | 'gray';
-    status?: 'detected' | 'unseen';
-    confidence?: 'high' | 'medium' | 'low';
-  }
-
-  interface DetectResult {
-    totalCards: number;
-    summary: string;
-    cards: CardInfo[];
-    note?: string;
-    modelUsed?: string;
-    providerUsed?: string;
-  }
-
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectResult, setDetectResult] = useState<DetectResult | null>(null);
-  const [detectedImageThumb, setDetectedImageThumb] = useState<string | null>(null);
-  const [detectElapsedMs, setDetectElapsedMs] = useState<number | null>(null);
-  const [detectError, setDetectError] = useState<string | null>(null);
-  const [isResultOpen, setIsResultOpen] = useState(false);
-  const [copiedResult, setCopiedResult] = useState(false);
-
-  // --- Batch Card Snapping & Fast Detection States ---
-  const [capturedFrames, setCapturedFrames] = useState<string[]>([]);
-  const [batchResults, setBatchResults] = useState<CardInfo[] | null>(null);
-  const [batchElapsedMs, setBatchElapsedMs] = useState<number | null>(null);
-  const [isBatchSending, setIsBatchSending] = useState(false);
-  const [batchError, setBatchError] = useState<string | null>(null);
-
-  const captureFrame = (): string | null => {
-    try {
-      const preferredVideo = (!isLive && hasFrame)
-        ? replayVideoRef.current
-        : (isLive && hasLiveFrame ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current));
-
-      const video = (preferredVideo && preferredVideo.videoWidth > 0)
-        ? preferredVideo
-        : ([replayVideoRef.current, liveVideoRef.current].find(v => v && v.videoWidth > 0) || preferredVideo);
-
-      if (!video) {
-        console.warn('[LivePlayer] captureFrame: Không tìm thấy thẻ video nào trong DOM');
-        return null;
-      }
-
-      const vw = video.videoWidth || (video as any).naturalWidth || video.clientWidth || 1280;
-      const vh = video.videoHeight || (video as any).naturalHeight || video.clientHeight || 720;
-
-      if (vw <= 0 || vh <= 0) {
-        console.warn('[LivePlayer] captureFrame: Thẻ video chưa có frame hình hợp lệ (vw/vh <= 0)');
-        return null;
-      }
-
-      const canvas = document.createElement('canvas');
-      const rot = ((rotation % 360) + 360) % 360;
-      if (rot === 90 || rot === 270) {
-        canvas.width = vh;
-        canvas.height = vw;
-      } else {
-        canvas.width = vw;
-        canvas.height = vh;
-      }
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      if (isSharpBoost) {
-        ctx.filter = 'contrast(1.08) saturate(1.1) brightness(1.02)';
-      }
-
-      ctx.save();
-      if (rot === 90) {
-        ctx.translate(canvas.width, 0);
-        ctx.rotate((90 * Math.PI) / 180);
-      } else if (rot === 180) {
-        ctx.translate(canvas.width, canvas.height);
-        ctx.rotate((180 * Math.PI) / 180);
-      } else if (rot === 270) {
-        ctx.translate(0, canvas.height);
-        ctx.rotate((270 * Math.PI) / 180);
-      }
-
-      if (isFlipped) {
-        ctx.translate(vw, 0);
-        ctx.scale(-1, 1);
-      }
-
-      ctx.drawImage(video, 0, 0, vw, vh);
-      ctx.restore();
-
-      // Giới hạn max dimension 960px để nén base64 siêu nhẹ (<40KB/ảnh), upload cực nhanh
-      const maxDim = 960;
-      if (canvas.width > maxDim || canvas.height > maxDim) {
-        const resizeCanvas = document.createElement('canvas');
-        const ratio = Math.min(maxDim / canvas.width, maxDim / canvas.height);
-        resizeCanvas.width = Math.round(canvas.width * ratio);
-        resizeCanvas.height = Math.round(canvas.height * ratio);
-        const rCtx = resizeCanvas.getContext('2d');
-        if (rCtx) {
-          rCtx.imageSmoothingEnabled = true;
-          rCtx.imageSmoothingQuality = 'high';
-          rCtx.drawImage(canvas, 0, 0, resizeCanvas.width, resizeCanvas.height);
-          return resizeCanvas.toDataURL('image/jpeg', 0.90);
+        const lossRatio = packetsReceived > 0 ? packetsLost / (packetsLost + packetsReceived) : 0;
+        // Nếu phát hiện rớt gói mạng > 3% hoặc drop frame cao -> lập tức chuyển sang 360p để video không gián đoạn
+        if (lossRatio > 0.03 || framesDropped > 15) {
+          consecutiveGood = 0;
+          setAutoResolution((curr) => (curr !== '360p' ? '360p' : curr));
+        } else {
+          consecutiveGood++;
+          // Nếu mạng ổn định liên tục trong 12s -> nâng dần lên 720p
+          if (consecutiveGood >= 5) {
+            setAutoResolution('720p');
+          }
         }
-      }
+      } catch {}
+    }, 2500);
 
-      return canvas.toDataURL('image/jpeg', 0.90);
-    } catch (err: any) {
-      console.error('[LivePlayer] Lỗi captureFrame:', err);
-      return null;
-    }
-  };
-
-  const handleSnapCard = () => {
-    const dataUrl = captureFrame();
-    if (!dataUrl) return;
-    setCapturedFrames((prev) => {
-      if (prev.length >= 20) return prev;
-      return [...prev, dataUrl];
-    });
-    // Nếu có kết quả cũ thì reset để chuẩn bị phiên mới
-    if (batchResults) {
-      setBatchResults(null);
-      setBatchElapsedMs(null);
-    }
-  };
-
-  const handleRemoveSnap = useCallback((index: number) => {
-    setCapturedFrames((prev) => prev.filter((_, i) => i !== index));
-    setBatchResults(null);
-  }, []);
-
-  const handleClearSnaps = useCallback(() => {
-    setCapturedFrames([]);
-    setBatchResults(null);
-    setBatchElapsedMs(null);
-    setBatchError(null);
-  }, []);
-
-  const handleSendBatch = async () => {
-    let imagesToSend = capturedFrames;
-    if (imagesToSend.length === 0) {
-      const single = captureFrame();
-      if (!single) {
-        setBatchError('Không thể chụp hình từ video. Hãy đảm bảo video đang phát.');
-        setIsResultOpen(true);
-        return;
-      }
-      imagesToSend = [single];
-      setCapturedFrames([single]);
-    }
-
-    setIsBatchSending(true);
-    setBatchError(null);
-    setIsResultOpen(true);
-
-    try {
-      // Gửi mảng ảnh riêng biệt chất lượng cao để AI nhìn rõ từng mép bài và chất
-      const res = await fetch('/api/ai/batch-detect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imagesBase64: imagesToSend,
-          apiKey: aiApiKey || undefined
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Lỗi nhận diện từ AI.');
-      }
-
-      setBatchResults(data.cards || []);
-      setBatchElapsedMs(data.elapsedMs || null);
-    } catch (err: any) {
-      console.error('[Batch AI] Lỗi:', err);
-      setBatchError(err.message || 'Lỗi khi kết nối tới máy chủ AI.');
-    } finally {
-      setIsBatchSending(false);
-    }
-  };
-
-  const copyBatchResult = () => {
-    if (!batchResults || batchResults.length === 0) return;
-    const text = batchResults
-      .map((c) => (c.status === 'unseen' || c.code === 'NONE' ? 'Không thấy' : (c.display || `${c.rank}${c.symbol}`)))
-      .join(', ');
-    navigator.clipboard.writeText(text);
-    setCopiedResult(true);
-    setTimeout(() => setCopiedResult(false), 2000);
-  };
-
-  const handleDetectCards = async () => {
-    // Gọi thẳng quy trình gửi batch
-    await handleSendBatch();
-  };
-
-  const copyDetectResult = () => {
-    copyBatchResult();
-  };
+    return () => clearInterval(interval);
+  }, [selectedResolution, isLive]);
 
   useEffect(() => {
     if (!isResMenuOpen) return;
@@ -1075,9 +800,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     ? (() => {
         try {
           const endpoint = new URL(detectedServerUrl);
-          const pathKey = selectedResolution === '360p'
+          const pathKey = activeResolution === '360p'
             ? `${stream.streamKey}_ultra`
-            : (selectedResolution === '480p' ? `${stream.streamKey}_low` : stream.streamKey);
+            : (activeResolution === '480p' ? `${stream.streamKey}_low` : stream.streamKey);
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
             if (typeof window !== 'undefined' && window.location.hostname) {
@@ -2193,16 +1918,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return;
     }
 
-    if (e.key === 'c' || e.key === 'C') {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable)) {
-        return;
-      }
-      e.preventDefault();
-      handleSnapCard();
-      return;
-    }
-
     if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       toggleFullscreen();
@@ -2931,13 +2646,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </span>
         </div>
 
-        {/* Hàng ảnh chụp đang chờ gửi (memoized, không bị re-render khi tua) */}
-        <CapturedFramesStrip
-          frames={capturedFrames}
-          onRemove={handleRemoveSnap}
-          onClear={handleClearSnaps}
-        />
-
         {/* Action Controls */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-1.5 pt-0.5">
           <div className="flex items-center justify-between sm:justify-start space-x-1 sm:space-x-1.5">
@@ -3066,64 +2774,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </button>
 
-            {/* Cụm công cụ AI: Chụp -> Gom ảnh -> Gửi */}
-            <div className="inline-flex items-center rounded-xl bg-gradient-to-r from-purple-950/80 to-indigo-950/80 p-0.5 border border-purple-500/40 shadow-sm space-x-0.5">
-              {/* Nút Chụp ảnh lưu vào queue */}
-              <button
-                type="button"
-                onClick={handleSnapCard}
-                disabled={isBatchSending}
-                className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50"
-                title="Chụp lưu lại hình ảnh (Phím C)"
-              >
-                <Camera className="w-3.5 h-3.5 text-amber-300" />
-                <span>Chụp{capturedFrames.length > 0 ? ` (${capturedFrames.length})` : ''}</span>
-              </button>
 
-              {/* Nút Gửi: Luôn sáng và sẵn sàng khi đã có ảnh */}
-              {capturedFrames.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleSendBatch}
-                  disabled={isBatchSending}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50 animate-pulse"
-                  title="Đóng gói tất cả ảnh đã chụp gửi AI nhận diện"
-                >
-                  {isBatchSending ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Send className="w-3.5 h-3.5 text-amber-200" />
-                  )}
-                  <span>{isBatchSending ? 'Đang gửi...' : `Gửi (${capturedFrames.length})`}</span>
-                </button>
-              )}
-
-              {/* Nút Xoá queue nếu có ảnh */}
-              {capturedFrames.length > 0 && !isBatchSending && (
-                <button
-                  type="button"
-                  onClick={handleClearSnaps}
-                  className="p-1 rounded-md text-slate-400 hover:text-red-400 hover:bg-red-950/30 text-xs transition-colors"
-                  title="Xoá tất cả ảnh đã chụp"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Nút Cài đặt Key */}
-              <button
-                type="button"
-                onClick={handleOpenSettings}
-                className={`p-1 rounded-md text-xs transition-colors ml-0.5 ${
-                  aiApiKey
-                    ? 'text-purple-300 hover:text-white hover:bg-purple-800/50'
-                    : 'text-amber-400 hover:text-amber-200 hover:bg-amber-800/50 animate-bounce'
-                }`}
-                title={aiApiKey ? `Cài đặt AI (${aiProvider === 'modelapi' ? 'modelapi.vn' : 'Gemini'})` : 'Chưa có API Key - Bấm để cấu hình'}
-              >
-                <Key className="w-3.5 h-3.5" />
-              </button>
-            </div>
 
             {onFinishRound && (
               <button
@@ -3264,7 +2915,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </button>
 
-            {/* Menu Chọn Độ Phân Giải (HD 720p / SD 480p / 360p Siêu Mượt) */}
+            {/* Menu Chọn Độ Phân Giải (Chuẩn YouTube: Tự Động Thích Ứng / HD 720p / SD 480p / 360p Siêu Mượt) */}
             <div ref={resMenuRef} className="relative flex items-center space-x-1 flex-shrink-0">
               <button
                 type="button"
@@ -3272,17 +2923,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   e.stopPropagation();
                   setIsResMenuOpen(!isResMenuOpen);
                 }}
-                className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center space-x-1 transition-all cursor-pointer shadow-sm active:scale-95 ${
-                  selectedResolution === '360p'
-                    ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500/50'
-                    : (selectedResolution === '480p'
-                        ? 'bg-amber-600/30 text-amber-300 border-amber-500/50'
-                        : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40')
+                className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-sm active:scale-95 ${
+                  selectedResolution === 'auto'
+                    ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/50'
+                    : (selectedResolution === '360p'
+                        ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500/50'
+                        : (selectedResolution === '480p'
+                            ? 'bg-amber-600/30 text-amber-300 border-amber-500/50'
+                            : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40'))
                 }`}
-                title="Chọn độ phân giải (360p siêu nhẹ mượt, 480p cân bằng, 720p sắc nét - tất cả đều 60fps)"
+                title="Chọn chất lượng video (Tự động thích ứng mạng như YouTube hoặc cố định 720p/480p/360p 60fps)"
               >
+                <Settings className={`w-3.5 h-3.5 ${isResMenuOpen ? 'animate-spin' : ''}`} />
                 <span>
-                  {selectedResolution === '360p' ? '360p 60fps' : (selectedResolution === '480p' ? '480p 60fps' : '720p 60fps')}
+                  {selectedResolution === 'auto'
+                    ? `Tự động (${autoResolution})`
+                    : `${selectedResolution} 60fps`}
                 </span>
               </button>
 
@@ -3300,20 +2956,45 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                     }}
                   />
                   <div
-                    className="absolute bottom-full right-0 mb-2 w-52 bg-slate-900/98 backdrop-blur-xl border border-cyan-500/50 rounded-xl shadow-2xl p-1 z-[101] space-y-0.5 animate-fadeIn"
+                    className="absolute bottom-full right-0 mb-2 w-56 bg-slate-900/98 backdrop-blur-xl border border-cyan-500/50 rounded-xl shadow-2xl p-1 z-[101] space-y-0.5 animate-fadeIn"
                     onClick={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-slate-400 px-2 py-1 border-b border-white/10 uppercase tracking-wider flex items-center justify-between">
-                      <span>Độ phân giải (Full 60fps)</span>
-                      <span className="text-cyan-400 font-mono">Live</span>
+                      <span>Chất lượng video</span>
+                      <span className="text-cyan-400 font-mono">YouTube ABR</span>
                     </div>
                     <div className="py-0.5 space-y-0.5">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          setSelectedResolution('auto');
+                          try { localStorage.setItem('player_resolution', 'auto'); } catch {}
+                          setIsResMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                          selectedResolution === 'auto'
+                            ? 'bg-indigo-600 text-white font-bold shadow-sm'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center space-x-1.5">
+                            <span>Tự động (Auto)</span>
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-400 text-black font-black uppercase">Khuyên dùng</span>
+                          </div>
+                          <div className="text-[10px] text-indigo-200 opacity-80">Mạng yếu tự giảm 360p, mạnh tự nâng 720p</div>
+                        </div>
+                        {selectedResolution === 'auto' && <span className="text-amber-300 font-black text-xs">✓</span>}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setSelectedResolution('720p');
+                          try { localStorage.setItem('player_resolution', '720p'); } catch {}
                           setIsResMenuOpen(false);
                         }}
                         className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
@@ -3324,7 +3005,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                       >
                         <div>
                           <div>HD (720p 60fps)</div>
-                          <div className="text-[10px] text-cyan-200 opacity-80">Sắc nét nhất</div>
+                          <div className="text-[10px] text-cyan-200 opacity-80">Sắc nét cao, dành cho mạng tốt</div>
                         </div>
                         {selectedResolution === '720p' && <span className="text-amber-300 font-black text-xs">✓</span>}
                       </button>
@@ -3334,6 +3015,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedResolution('480p');
+                          try { localStorage.setItem('player_resolution', '480p'); } catch {}
                           setIsResMenuOpen(false);
                         }}
                         className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
@@ -3343,8 +3025,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                         }`}
                       >
                         <div>
-                          <div>SD (480p 60fps)</div>
-                          <div className="text-[10px] text-amber-200 opacity-80">Mượt mà, siêu nhẹ dữ liệu</div>
+                          <div>SD (480p 60fps - Nét Lanczos)</div>
+                          <div className="text-[10px] text-amber-200 opacity-80">Cân bằng độ nét và tải mạng</div>
                         </div>
                         {selectedResolution === '480p' && <span className="text-amber-300 font-black text-xs">✓</span>}
                       </button>
@@ -3354,6 +3036,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedResolution('360p');
+                          try { localStorage.setItem('player_resolution', '360p'); } catch {}
                           setIsResMenuOpen(false);
                         }}
                         className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center justify-between transition-colors cursor-pointer ${
@@ -3367,7 +3050,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                             <span>Siêu Mượt (360p 60fps)</span>
                             <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-400 text-black font-black uppercase">Nhẹ</span>
                           </div>
-                          <div className="text-[10px] text-emerald-200 opacity-80">Mạng 3G/yếu mượt 100%, không cắt frame</div>
+                          <div className="text-[10px] text-emerald-200 opacity-80">Mạng 3G/yếu mượt 100%, không bị khựng</div>
                         </div>
                         {selectedResolution === '360p' && <span className="text-amber-300 font-black text-xs">✓</span>}
                       </button>
@@ -3515,393 +3198,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 Xong
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Cài Đặt AI & API Key */}
-      {isKeyModalOpen && (
-        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-purple-500/40 rounded-2xl max-w-sm sm:max-w-md w-full p-4 sm:p-5 space-y-3.5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 rounded-xl bg-purple-600/30 border border-purple-500/40 flex items-center justify-center text-purple-300">
-                  <Key className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm text-white">Cài đặt AI Nhận Diện Bài</h3>
-                  <p className="text-[11px] text-slate-400">Chọn API trung gian hoặc Google Gemini chính thống</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsKeyModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveSettings} className="space-y-3">
-              {/* Chọn Nhà Cung Cấp (Provider) */}
-              <div>
-                <label className="text-xs font-bold text-slate-200 block mb-1.5">
-                  Lựa chọn dịch vụ AI:
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTempProvider('modelapi')}
-                    className={`px-2.5 py-2 rounded-xl border text-xs font-medium flex flex-col items-center justify-center space-y-1 transition-all ${
-                      tempProvider === 'modelapi'
-                        ? 'bg-purple-600/30 text-purple-200 border-purple-500 shadow-sm ring-1 ring-purple-400'
-                        : 'bg-slate-950/60 text-slate-400 border-white/10 hover:bg-slate-800'
-                    }`}
-                  >
-                    <span className="font-bold flex items-center space-x-1">
-                      <span>🇻🇳 modelapi.vn</span>
-                    </span>
-                    <span className="text-[10px] text-slate-400">API Trung Gian (VN)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setTempProvider('gemini')}
-                    className={`px-2.5 py-2 rounded-xl border text-xs font-medium flex flex-col items-center justify-center space-y-1 transition-all ${
-                      tempProvider === 'gemini'
-                        ? 'bg-purple-600/30 text-purple-200 border-purple-500 shadow-sm ring-1 ring-purple-400'
-                        : 'bg-slate-950/60 text-slate-400 border-white/10 hover:bg-slate-800'
-                    }`}
-                  >
-                    <span className="font-bold flex items-center space-x-1">
-                      <span>⚡ Google Gemini</span>
-                    </span>
-                    <span className="text-[10px] text-slate-400">Chính Thống (~800ms)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Cấu hình cho modelapi.vn */}
-              {tempProvider === 'modelapi' ? (
-                <div className="space-y-2.5 bg-slate-950/60 p-3 rounded-xl border border-white/5">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      API Base URL:
-                    </label>
-                    <input
-                      type="text"
-                      value={tempBaseUrl}
-                      onChange={(e) => setTempBaseUrl(e.target.value)}
-                      placeholder="https://modelapi.vn/v1"
-                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] font-bold text-slate-300">
-                        Tên Model:
-                      </label>
-                      <div className="flex items-center space-x-1">
-                        {['gpt-4o-mini', 'gemini-1.5-flash', 'gemini-2.0-flash'].map((m) => (
-                          <button
-                            key={m}
-                            type="button"
-                            onClick={() => setTempModel(m)}
-                            className={`text-[9px] px-1.5 py-0.5 rounded font-mono transition-colors ${
-                              tempModel === m ? 'bg-purple-600 text-white font-bold' : 'bg-slate-800 text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            {m}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <input
-                      type="text"
-                      value={tempModel}
-                      onChange={(e) => setTempModel(e.target.value)}
-                      placeholder="gpt-4o-mini"
-                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
-                    />
-                    <span className="text-[10px] text-slate-500 italic block mt-0.5">
-                      Khuyên dùng: <strong>gpt-4o-mini</strong> (siêu nhanh, rẻ, nhận diện bài cực chuẩn)
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      API Key (modelapi.vn):
-                    </label>
-                    <input
-                      type="password"
-                      value={tempApiKey}
-                      onChange={(e) => setTempApiKey(e.target.value)}
-                      placeholder="sk-..."
-                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
-                    />
-                  </div>
-
-                  <div className="text-[10px] text-slate-400 pt-1 border-t border-white/5">
-                    💡 Đăng ký và nạp tiền VNĐ dễ dàng tại <a href="https://modelapi.vn" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline font-bold">modelapi.vn</a>.
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2.5 bg-slate-950/60 p-3 rounded-xl border border-white/5">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      Google Gemini API Key:
-                    </label>
-                    <input
-                      type="password"
-                      value={tempApiKey}
-                      onChange={(e) => setTempApiKey(e.target.value)}
-                      placeholder="AIzaSy... hoặc AQ...."
-                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
-                    />
-                  </div>
-
-                  <div className="text-[10px] text-slate-400 space-y-1">
-                    <p className="text-emerald-300 font-medium">⚡ Tối ưu tốc độ cao:</p>
-                    <p>
-                      Hệ thống tự động chọn model nhẹ & nhanh nhất mà key của bạn hỗ trợ (ưu tiên <strong>gemini-3.5-flash-lite</strong> tốc độ ~800ms).
-                    </p>
-                    <p>
-                      Lấy key miễn phí tại <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline font-bold">aistudio.google.com</a>.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex items-center justify-end space-x-2 pt-1 border-t border-white/10">
-                <button
-                  type="button"
-                  onClick={() => setIsKeyModalOpen(false)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-purple-600/30 active:scale-95"
-                >
-                  Lưu Cài Đặt
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Popup Hiển Thị Kết Quả */}
-      {isResultOpen && (
-        <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-purple-500/50 rounded-2xl max-w-lg w-full p-4 sm:p-5 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-purple-600/40">
-                  <Sparkles className="w-4 h-4 text-amber-300" />
-                </div>
-                <div>
-                  <div className="flex items-center space-x-2">
-                    <h3 className="font-bold text-sm text-white">AI Nhận Diện</h3>
-                    {batchElapsedMs && (
-                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        ⚡ {(batchElapsedMs / 1000).toFixed(2)}s
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    Gemini Flash Lite • 1 Request Đóng Gói
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsResultOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Trạng thái đang nhận diện */}
-            {isBatchSending && (
-              <div className="py-8 flex flex-col items-center justify-center space-y-3 text-center">
-                <div className="relative">
-                  <Loader2 className="w-10 h-10 animate-spin text-purple-400" />
-                  <Sparkles className="w-4 h-4 text-amber-300 absolute -top-1 -right-1 animate-pulse" />
-                </div>
-                <div className="space-y-1">
-                  <div className="font-bold text-sm text-white">
-                    Đang xử lý {capturedFrames.length > 0 ? `${capturedFrames.length} ảnh` : ''}...
-                  </div>
-                  <div className="text-xs text-purple-300">Nhận diện siêu tốc song song trong 1 request</div>
-                </div>
-              </div>
-            )}
-
-            {/* Lỗi khi nhận diện */}
-            {!isBatchSending && batchError && (
-              <div className="p-3.5 bg-rose-950/40 border border-rose-500/40 rounded-xl space-y-2.5">
-                <div className="text-xs text-rose-300 font-medium">
-                  ⚠️ {batchError}
-                </div>
-                <div className="flex items-center space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsResultOpen(false);
-                      handleOpenSettings();
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center space-x-1"
-                  >
-                    <Key className="w-3.5 h-3.5" />
-                    <span>Cài đặt AI & API Key</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSendBatch}
-                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
-                  >
-                    Thử lại
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Hiển thị kết quả */}
-            {!isBatchSending && !batchError && batchResults && (
-              <div className="space-y-3.5">
-                {/* Header thanh tóm tắt */}
-                <div className="flex items-center justify-between bg-slate-950/60 p-2.5 rounded-xl border border-white/5">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs font-bold text-slate-300">
-                      Tổng cộng: <span className="text-amber-300 font-mono text-sm">{batchResults.length} ảnh</span>
-                    </span>
-                    {batchElapsedMs && (
-                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        ⚡ {batchElapsedMs}ms
-                      </span>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={copyBatchResult}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm ${
-                      copiedResult
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-800 hover:bg-slate-700 text-purple-300 border border-purple-500/30'
-                    }`}
-                  >
-                    {copiedResult ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedResult ? 'Đã chép!' : 'Sao chép'}</span>
-                  </button>
-                </div>
-
-                {/* Danh sách thẻ kết quả */}
-                {batchResults.length > 0 ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 max-h-[50vh] overflow-y-auto pr-1">
-                    {batchResults.map((item, idx) => {
-                      const isUnseen = item.status === 'unseen' || item.code === 'NONE';
-                      const isRed = item.color === 'red' || item.suit === 'Heart' || item.suit === 'Diamond';
-                      const thumb = capturedFrames[idx];
-
-                      return (
-                        <div
-                          key={idx}
-                          className={`rounded-xl border p-2 flex flex-col justify-between items-center transition-all select-none ${
-                            isUnseen
-                              ? 'bg-slate-950/90 border-slate-700/60'
-                              : 'bg-white border-slate-200 shadow-md'
-                          }`}
-                          style={{ minHeight: '110px' }}
-                        >
-                          {/* Hàng trên: Số thứ tự + Ảnh chụp góc thu nhỏ */}
-                          <div className="w-full flex items-center justify-between mb-1">
-                            <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                              isUnseen ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-700'
-                            }`}>
-                              #{idx + 1}
-                            </span>
-                            {thumb && (
-                              <img
-                                src={thumb}
-                                alt={`#${idx + 1}`}
-                                className="w-9 h-6 object-cover rounded border border-white/20"
-                              />
-                            )}
-                          </div>
-
-                          {/* Chính giữa: Token hiển thị */}
-                          {isUnseen ? (
-                            <div className="my-auto py-2 text-center">
-                              <span className="text-xs font-semibold text-slate-400 bg-slate-900/90 px-2 py-1 rounded-md border border-slate-700/60 inline-block">
-                                Không thấy
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="my-auto py-1 text-center">
-                              <div className={`text-2xl sm:text-3xl font-black font-mono leading-none tracking-tight ${isRed ? 'text-red-600' : 'text-slate-950'}`}>
-                                {item.display || `${item.rank}${item.symbol}`}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Hàng dưới: Badge trạng thái */}
-                          <div className="w-full text-center pt-1 border-t border-slate-100/10">
-                            <span className={`text-[11px] font-bold ${
-                              isUnseen ? 'text-slate-500' : (isRed ? 'text-red-600' : 'text-slate-800')
-                            }`}>
-                              {isUnseen ? '—' : (item.display || `${item.rank}${item.symbol}`)}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-center py-6 text-slate-400 text-xs bg-slate-950/40 rounded-xl border border-white/5 space-y-2">
-                    <p>Không có dữ liệu.</p>
-                  </div>
-                )}
-
-                {/* Chuỗi tóm tắt dạng text để copy nhanh */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-purple-500/20 flex items-center justify-between">
-                  <div className="text-xs font-mono font-bold text-amber-300 truncate mr-2">
-                    {batchResults
-                      .map((c) => (c.status === 'unseen' || c.code === 'NONE' ? 'Không thấy' : (c.display || `${c.rank}${c.symbol}`)))
-                      .join(', ')}
-                  </div>
-                  <span className="text-[10px] text-slate-500 uppercase font-mono flex-shrink-0">Tóm tắt</span>
-                </div>
-
-                {/* Footer Buttons */}
-                <div className="flex items-center justify-between pt-2 border-t border-white/10">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleClearSnaps();
-                      setIsResultOpen(false);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 text-xs font-medium flex items-center space-x-1.5 transition-colors border border-purple-500/30"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Phiên mới</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsResultOpen(false)}
-                    className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors"
-                  >
-                    Đóng
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
