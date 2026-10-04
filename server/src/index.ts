@@ -110,10 +110,35 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   next(err);
 });
 
+// Realtime: mọi thao tác ghi (POST/PUT/PATCH/DELETE) thành công trên admin/license -> báo cho trang admin tự cập nhật.
+// Xóa / khóa tài khoản -> báo 'account_revoked' tới user đó và ngắt socket của họ ngay.
+const realtimeUserChanges: express.RequestHandler = (req, res, next) => {
+  if (req.method === 'GET') return next();
+  const fullPath = req.baseUrl + req.path;
+  res.on('finish', () => {
+    if (res.statusCode >= 400) return;
+    io.to('room_admin').emit('users_changed', { path: fullPath, method: req.method, at: Date.now() });
+
+    const m = fullPath.match(/^\/api\/admin\/users\/([^/]+)(?:\/(toggle-block|reset-device|reset-password))?$/);
+    if (!m) return;
+    const userId = m[1];
+    const action = m[2];
+    const revoked =
+      (req.method === 'DELETE' && !action) ||
+      (req.method === 'POST' && action === 'toggle-block' && db.getUserById(userId)?.isBlocked === true) ||
+      (req.method === 'POST' && action === 'reset-password');
+    if (revoked) {
+      io.to(`room_${userId}`).emit('account_revoked', { userId, reason: action || 'deleted' });
+      io.in(`room_${userId}`).disconnectSockets(true);
+    }
+  });
+  next();
+};
+
 // API Routes
 app.use('/api/auth', authRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/license', licenseRouter);
+app.use('/api/admin', realtimeUserChanges, adminRouter);
+app.use('/api/license', realtimeUserChanges, licenseRouter);
 app.use('/api/stream', streamRouter);
 app.use('/api/ai', aiRouter);
 

@@ -126,6 +126,16 @@ export const App: React.FC = () => {
       setViewerBlocked(true);
     });
 
+    // Realtime: admin thay đổi tài khoản/bản quyền -> tự tải lại danh sách, không cần reload trang
+    newSocket.on('users_changed', () => {
+      if (token) fetchAdminUsers(token);
+    });
+
+    // Tài khoản bị xóa/khóa/reset mật khẩu -> đăng xuất ngay
+    newSocket.on('account_revoked', () => {
+      handleLogout();
+    });
+
     return () => {
       newSocket.disconnect();
     };
