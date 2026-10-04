@@ -914,65 +914,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setBatchError(null);
   };
 
-  const stitchFrames = async (frames: string[]): Promise<string | null> => {
-    try {
-      if (frames.length === 0) return null;
-      if (frames.length === 1) return frames[0];
-
-      const loadedImages = await Promise.all(
-        frames.map(
-          (src) =>
-            new Promise<HTMLImageElement>((resolve, reject) => {
-              const img = new Image();
-              img.onload = () => resolve(img);
-              img.onerror = () => reject(new Error('Lỗi tải ảnh để ghép'));
-              img.src = src;
-            })
-        )
-      );
-
-      const targetHeight = 240;
-      const scaledDims = loadedImages.map((img) => {
-        const h = img.naturalHeight || img.height || 240;
-        const w = img.naturalWidth || img.width || 320;
-        const scale = targetHeight / h;
-        return {
-          w: Math.max(80, Math.round(w * scale)),
-          h: targetHeight
-        };
-      });
-
-      const totalWidth = scaledDims.reduce((acc, d) => acc + d.w, 0);
-      const canvas = document.createElement('canvas');
-      canvas.width = totalWidth;
-      canvas.height = targetHeight;
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return frames[0];
-
-      let currentX = 0;
-      for (let i = 0; i < loadedImages.length; i++) {
-        const img = loadedImages[i];
-        const { w, h } = scaledDims[i];
-        ctx.drawImage(img, currentX, 0, w, h);
-
-        // Vẽ thẻ số góc (#1, #2, #3...) để AI phân biệt chính xác
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-        ctx.fillRect(currentX, 0, 36, 24);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = 'bold 15px sans-serif';
-        ctx.fillText(`#${i + 1}`, currentX + 6, 17);
-
-        currentX += w;
-      }
-
-      return canvas.toDataURL('image/jpeg', 0.85);
-    } catch (err) {
-      console.warn('[stitchFrames] Ghép ảnh không thành công, dùng ảnh gốc:', err);
-      return null;
-    }
-  };
-
   const handleSendBatch = async () => {
     let imagesToSend = capturedFrames;
     if (imagesToSend.length === 0) {
@@ -991,15 +932,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsResultOpen(true);
 
     try {
-      // Tối ưu siêu tốc: Ghép các frame thành 1 dải ngang duy nhất (Sprite Strip)
-      const stitched = await stitchFrames(imagesToSend);
-
+      // Gửi mảng ảnh riêng biệt chất lượng cao để AI nhìn rõ từng mép bài và chất
       const res = await fetch('/api/ai/batch-detect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stitchedImageBase64: stitched || undefined,
-          count: imagesToSend.length,
           imagesBase64: imagesToSend,
           apiKey: aiApiKey || undefined
         })

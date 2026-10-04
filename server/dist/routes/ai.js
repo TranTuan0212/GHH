@@ -275,44 +275,21 @@ exports.aiRouter.post('/batch-detect', async (req, res) => {
                 message: 'Chưa cấu hình Gemini API Key. Vui lòng bấm biểu tượng 🔑 trên giao diện để nhập Key.'
             });
         }
-        let parts = [];
-        if (stitchedImageBase64) {
-            // TỐI ƯU SIÊU TỐC: Dải ảnh ngang đã ghép các ô từ trái sang phải
-            const clean = stitchedImageBase64.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
-            const promptText = `Ảnh này gồm đúng ${totalCount} ô theo thứ tự từ trái sang phải, có đánh số #1 đến #${totalCount}.
-Quan sát từng ô theo thứ tự từ 1 đến ${totalCount}:
-- Nếu thấy quân và chất (ngửa hoặc hé góc), ghi mã ngắn (vd: AS, KH, QD, JC, 10S). S=Spade, H=Heart, D=Diamond, C=Club.
-- Nếu úp hoàn toàn hoặc không thấy rõ, BẮT BUỘC ghi "NONE". TUYỆT ĐỐI KHÔNG ĐOÁN MÒ.
-Trả về DUY NHẤT một mảng JSON gồm đúng ${totalCount} phần tử chuỗi:
-["AS", "NONE", "9H"]`;
-            parts = [
-                { text: promptText },
-                {
-                    inline_data: {
-                        mime_type: 'image/jpeg',
-                        data: clean
-                    }
-                }
-            ];
-        }
-        else {
-            // Fallback: Nếu gửi mảng nhiều ảnh rời
-            const promptText = `Dưới đây là ${totalCount} bức ảnh, theo thứ tự từ 1 đến ${totalCount}.
+        const promptText = `Dưới đây là ${totalCount} bức ảnh theo thứ tự từ 1 đến ${totalCount}.
 Quan sát kỹ từng ảnh:
-- Nếu nhìn thấy rõ quân và chất (mặt ngửa hoặc hé gầm/mép dưới), trả về mã ngắn (vd: AS, 9H, 10S, KD). S=Spade, H=Heart, D=Diamond, C=Club.
+- Nếu nhìn thấy rõ quân và chất (mặt ngửa hoặc hé gầm/mép góc), trả về mã ngắn (vd: AS, 9H, 10S, KD). S=Spade, H=Heart, D=Diamond, C=Club.
 - Nếu ảnh nào bài úp hoàn toàn hoặc không nhìn thấy rõ, BẮT BUỘC ghi "NONE". TUYỆT ĐỐI KHÔNG ĐOÁN MÒ.
 Trả về DUY NHẤT một mảng JSON gồm đúng ${totalCount} phần tử chuỗi:
 ["AS", "NONE", "9H"]`;
-            parts = [{ text: promptText }];
-            for (const img of (imagesBase64 || [])) {
-                const clean = img.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
-                parts.push({
-                    inline_data: {
-                        mime_type: 'image/jpeg',
-                        data: clean
-                    }
-                });
-            }
+        const parts = [{ text: promptText }];
+        for (const img of (imagesBase64 || [])) {
+            const clean = img.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
+            parts.push({
+                inline_data: {
+                    mime_type: 'image/jpeg',
+                    data: clean
+                }
+            });
         }
         const payload = {
             contents: [{ parts }],
