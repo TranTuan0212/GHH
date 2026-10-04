@@ -84,7 +84,7 @@ export function adminMiddleware(req: AuthRequest, res: Response, next: Function)
 
 // POST /api/auth/login
 authRouter.post('/login', (req: Request, res: Response) => {
-  const { username, password, platform, deviceUuid, deviceModel } = req.body;
+  const { username, password, platform, deviceUuid, deviceModel, appType, deviceFingerprint } = req.body;
 
   if (!username || !password) {
     return res.status(400).json({ error: 'Vui lòng nhập Username và Password.' });
@@ -110,17 +110,28 @@ authRouter.post('/login', (req: Request, res: Response) => {
 
   let boundDevice = null;
 
-  // Requirement 8a: Single mobile device binding for Live Streaming
-  if (platform === 'mobile') {
+  // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
+  const effectiveAppType: 'APP_LIVE' | 'APP_INPUT' | null = 
+    appType === 'APP_INPUT' ? 'APP_INPUT' :
+    (appType === 'APP_LIVE' || platform === 'mobile') ? 'APP_LIVE' : null;
+
+  if (effectiveAppType) {
     if (!deviceUuid) {
       return res.status(400).json({ error: 'Thiếu định danh phần cứng thiết bị (deviceUuid).' });
     }
     try {
-      boundDevice = db.bindLiveDevice(user.id, deviceUuid, deviceModel || 'iOS Device');
+      boundDevice = db.bindDevice(
+        user.id,
+        deviceUuid,
+        deviceModel || (effectiveAppType === 'APP_LIVE' ? 'iOS Live Device' : 'iOS Input Device'),
+        effectiveAppType,
+        deviceFingerprint
+      );
     } catch (err: any) {
       return res.status(403).json({ error: err.message });
     }
   }
+
 
   const token = jwt.sign(
     {

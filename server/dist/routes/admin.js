@@ -96,14 +96,20 @@ exports.adminRouter.post('/users/:id/toggle-block', (req, res) => {
         isBlocked: updated?.isBlocked
     });
 });
-// POST /api/admin/users/:id/reset-device - Reset device binding
+// POST /api/admin/users/:id/reset-device - Reset device binding (hỗ trợ reset riêng Live hoặc Input)
 exports.adminRouter.post('/users/:id/reset-device', (req, res) => {
     const user = db_1.db.getUserById(req.params.id);
     if (!user) {
         return res.status(404).json({ error: 'Tài khoản không tồn tại.' });
     }
+    const { appType } = req.body;
+    if (appType === 'APP_LIVE' || appType === 'APP_INPUT') {
+        db_1.db.resetUserDeviceByType(user.id, appType);
+        const label = appType === 'APP_LIVE' ? 'máy Live' : 'máy Nhập';
+        return res.json({ message: `Đã reset liên kết ${label} thành công.` });
+    }
     db_1.db.resetUserDevice(user.id);
-    res.json({ message: 'Đã reset gán thiết bị điện thoại thành công. User có thể gán iPhone mới.' });
+    res.json({ message: 'Đã reset toàn bộ thiết bị đã liên kết thành công. User có thể gán máy mới.' });
 });
 // DELETE /api/admin/users/:id
 exports.adminRouter.delete('/users/:id', (req, res) => {

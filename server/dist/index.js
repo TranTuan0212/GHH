@@ -15,6 +15,7 @@ const auth_1 = require("./routes/auth");
 const admin_1 = require("./routes/admin");
 const stream_1 = require("./routes/stream");
 const ai_1 = require("./routes/ai");
+const license_1 = require("./routes/license");
 const db_1 = require("./db");
 const mediaServer_1 = require("./mediaServer");
 const network_1 = require("./utils/network");
@@ -107,6 +108,7 @@ app.use((err, req, res, next) => {
 // API Routes
 app.use('/api/auth', auth_1.authRouter);
 app.use('/api/admin', admin_1.adminRouter);
+app.use('/api/license', license_1.licenseRouter);
 app.use('/api/stream', stream_1.streamRouter);
 app.use('/api/ai', ai_1.aiRouter);
 // Health check

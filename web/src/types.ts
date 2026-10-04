@@ -15,6 +15,8 @@ export interface UserDevice {
   userId: string;
   deviceUuid: string;
   deviceModel: string;
+  appType?: 'APP_LIVE' | 'APP_INPUT';
+  deviceFingerprint?: string;
   isLiveDevice: boolean;
   lastLogin: string;
 }

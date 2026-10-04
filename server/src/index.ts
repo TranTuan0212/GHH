@@ -10,6 +10,7 @@ import { authRouter, JWT_SECRET } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { aiRouter } from './routes/ai';
+import { licenseRouter } from './routes/license';
 import { db } from './db';
 import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
@@ -112,8 +113,10 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // API Routes
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/license', licenseRouter);
 app.use('/api/stream', streamRouter);
 app.use('/api/ai', aiRouter);
+
 
 // Health check
 app.get('/api/health', (req, res) => {

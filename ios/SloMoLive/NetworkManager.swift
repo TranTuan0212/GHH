@@ -87,9 +87,12 @@ public class NetworkManager: ObservableObject {
             "username": username,
             "password": password,
             "platform": "mobile",
+            "appType": "APP_LIVE",
             "deviceUuid": deviceUUID,
-            "deviceModel": "iPhone (iOS Native)"
+            "deviceModel": DeviceBindingManager.shared.getDeviceModelName(),
+            "deviceFingerprint": DeviceBindingManager.shared.getDeviceFingerprint()
         ]
+
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

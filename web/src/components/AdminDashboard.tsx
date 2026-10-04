@@ -23,7 +23,10 @@ import {
   Archive,
   Terminal,
   HelpCircle,
-  Sparkles
+  Sparkles,
+  Copy,
+  Check,
+  Mic
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -278,13 +281,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Reset Device
-  const handleResetDevice = async (userId: string) => {
-    if (!window.confirm('Bạn có chắc chắn muốn Reset gán thiết bị điện thoại cho User này không?')) return;
+  // Reset Device (hỗ trợ reset riêng Live hoặc Nhập)
+  const handleResetDevice = async (userId: string, appType?: 'APP_LIVE' | 'APP_INPUT') => {
+    const label = appType === 'APP_LIVE' ? 'máy Live' : appType === 'APP_INPUT' ? 'máy Nhập' : 'toàn bộ thiết bị';
+    if (!window.confirm(`Bạn có chắc chắn muốn Reset gán ${label} cho User này không?`)) return;
     try {
       const res = await fetch(`/api/admin/users/${userId}/reset-device`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ appType })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -295,6 +303,99 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       showMsg(err.message, 'error');
     }
   };
+
+  // Voice Licenses State
+  interface VoiceLicItem {
+    id: string;
+    deviceFingerprint: string;
+    deviceModel: string;
+    licenseKey: string;
+    registeredAt: string;
+    expiresAt: string;
+    isLifetime: boolean;
+    isUsed: boolean;
+    isExpired: boolean;
+    status: string;
+    activatedAt?: string;
+  }
+  const [voiceLicenses, setVoiceLicenses] = useState<VoiceLicItem[]>([]);
+  const [voiceFp, setVoiceFp] = useState('');
+  const [voiceDuration, setVoiceDuration] = useState('30');
+  const [voiceModel, setVoiceModel] = useState('');
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const [createdKeyResult, setCreatedKeyResult] = useState<any>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const fetchVoiceLicenses = async () => {
+    try {
+      const res = await fetch('/api/license/admin/list', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.licenses) {
+        setVoiceLicenses(data.licenses);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchVoiceLicenses();
+  }, [token]);
+
+  const handleCreateVoiceKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!voiceFp.trim()) return;
+    setVoiceLoading(true);
+    try {
+      const res = await fetch('/api/license/admin/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          deviceFingerprint: voiceFp.trim(),
+          daysValid: voiceDuration === 'LIFETIME' ? -1 : parseInt(voiceDuration),
+          deviceModel: voiceModel.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setCreatedKeyResult(data);
+      showMsg('Tạo Key kích hoạt giọng nói thành công!', 'success');
+      setVoiceFp('');
+      setVoiceModel('');
+      fetchVoiceLicenses();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    } finally {
+      setVoiceLoading(false);
+    }
+  };
+
+  const handleDeleteVoiceLicense = async (id: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn xóa bản quyền này?')) return;
+    try {
+      const res = await fetch(`/api/license/admin/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showMsg('Đã xóa bản quyền thành công.', 'success');
+      fetchVoiceLicenses();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    }
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(id);
+    setTimeout(() => setCopiedKey(null), 2500);
+  };
+
 
   // Delete User
   const handleDeleteUser = async (userId: string) => {
@@ -724,14 +825,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <th className="py-3 px-4">Tài khoản</th>
                 <th className="py-3 px-4">Quyền</th>
                 <th className="py-3 px-4">Ngày Hết Hạn</th>
-                <th className="py-3 px-4">Thiết Bị Gán Live</th>
+                <th className="py-3 px-4">Thiết Bị (1 Live + 2 Nhập)</th>
                 <th className="py-3 px-4">Trạng Thái</th>
                 <th className="py-3 px-4 text-right">Thao Tác Admin</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {users.map((u) => {
-                const liveDevice = u.devices?.find((d) => d.isLiveDevice);
+                const liveDevice = u.devices?.find((d) => d.isLiveDevice || d.appType === 'APP_LIVE');
+                const inputDevices = u.devices?.filter((d) => d.appType === 'APP_INPUT') || [];
                 const isExpired = new Date(u.expiresAt) < new Date();
 
                 return (
@@ -760,18 +862,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-4 text-xs font-mono">
-                      {liveDevice ? (
-                        <div className="flex items-center space-x-1.5 text-emerald-400">
-                          <Smartphone className="w-3.5 h-3.5" />
-                          <span title={liveDevice.deviceUuid}>
-                            {liveDevice.deviceModel} ({liveDevice.deviceUuid.substring(0, 8)}...)
+                    <td className="py-3.5 px-4 text-xs font-mono space-y-2">
+                      {/* Live Device: Tối đa 1 máy */}
+                      <div className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded-lg border border-white/5">
+                        <div className="flex items-center space-x-1.5 overflow-hidden">
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            LIVE
                           </span>
+                          {liveDevice ? (
+                            <span className="text-emerald-400 font-semibold truncate text-[11px]" title={liveDevice.deviceUuid}>
+                              {liveDevice.deviceModel} ({liveDevice.deviceUuid.substring(0, 6)}...)
+                            </span>
+                          ) : (
+                            <span className="text-slate-500 italic text-[11px]">Trống</span>
+                          )}
                         </div>
-                      ) : (
-                        <span className="text-slate-500 italic">Chưa gán iPhone</span>
-                      )}
+                        {liveDevice && (
+                          <button
+                            onClick={() => handleResetDevice(u.id, 'APP_LIVE')}
+                            className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all ml-1 shrink-0"
+                            title="Reset máy Live"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Input Devices: Tối đa 2 máy */}
+                      <div className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded-lg border border-white/5">
+                        <div className="flex flex-col space-y-0.5 overflow-hidden">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                              NHẬP ({inputDevices.length}/2)
+                            </span>
+                            {inputDevices.length === 0 && (
+                              <span className="text-slate-500 italic text-[11px]">Trống</span>
+                            )}
+                          </div>
+                          {inputDevices.map((d, idx) => (
+                            <span key={d.id || idx} className="text-purple-300 text-[11px] font-mono truncate" title={d.deviceUuid}>
+                              #{idx + 1} {d.deviceModel} ({d.deviceUuid.substring(0, 6)}...)
+                            </span>
+                          ))}
+                        </div>
+                        {inputDevices.length > 0 && (
+                          <button
+                            onClick={() => handleResetDevice(u.id, 'APP_INPUT')}
+                            className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all ml-1 shrink-0"
+                            title="Reset máy Nhập"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
                     </td>
+
 
                     <td className="py-3.5 px-4">
                       {u.isBlocked ? (
@@ -864,6 +1009,219 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </table>
         </div>
       </div>
+
+      {/* 🎙️ Voice Licenses Management Section */}
+      <div className="glass-panel p-4 sm:p-6 rounded-2xl border border-white/5 space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-white/5">
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold text-white flex items-center space-x-2">
+              <Mic className="w-5 h-5 text-indigo-400" />
+              <span>Quản Lý Bản Quyền Giọng Nói (App Nhập Bài)</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Admin tạo Key kích hoạt riêng biệt theo Mã định danh phần cứng của từng máy. Xác thực lần đầu cần mạng, sau đó dùng Offline 100%.
+            </p>
+          </div>
+          <button
+            onClick={fetchVoiceLicenses}
+            className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center space-x-1.5 self-start md:self-auto transition-all"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Làm Mới</span>
+          </button>
+        </div>
+
+        {/* Form Tạo Key Mới */}
+        <form onSubmit={handleCreateVoiceKey} className="bg-slate-900/60 p-4 rounded-xl border border-white/5 space-y-3">
+          <div className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center space-x-1.5">
+            <Key className="w-4 h-4" />
+            <span>Tạo Key Mở Giọng Nói Theo Máy</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                Mã Định Danh Máy (Device Fingerprint) *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="AGI-XXXX-YYYY-ZZZZ-WWWW-CCCC"
+                value={voiceFp}
+                onChange={(e) => setVoiceFp(e.target.value.toUpperCase())}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono text-xs focus:border-indigo-500 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                Tên Thiết Bị (Ghi nhớ model)
+              </label>
+              <input
+                type="text"
+                placeholder="VD: iPhone 13 Pro (Khách A)"
+                value={voiceModel}
+                onChange={(e) => setVoiceModel(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs focus:border-indigo-500 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                Thời Hạn Bản Quyền *
+              </label>
+              <select
+                value={voiceDuration}
+                onChange={(e) => setVoiceDuration(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs focus:border-indigo-500 outline-none"
+              >
+                <option value="30">30 Ngày (1 Tháng)</option>
+                <option value="90">90 Ngày (3 Tháng)</option>
+                <option value="180">180 Ngày (6 Tháng)</option>
+                <option value="365">365 Ngày (1 Năm)</option>
+                <option value="LIFETIME">Vĩnh Viễn (Lifetime)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end pt-1">
+            <button
+              type="submit"
+              disabled={voiceLoading || !voiceFp.trim()}
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-indigo-600/30 flex items-center space-x-2 transition-all disabled:opacity-50"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>{voiceLoading ? 'Đang tạo Key...' : 'Tạo Key Bản Quyền'}</span>
+            </button>
+          </div>
+        </form>
+
+        {/* Kết quả Key vừa tạo */}
+        {createdKeyResult && (
+          <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-emerald-400 flex items-center space-x-1.5">
+                <Check className="w-4 h-4" />
+                <span>Đã Tạo Key Thành Công Cho Máy: {createdKeyResult.deviceModel}</span>
+              </div>
+              <div className="text-xs text-slate-300 mt-1">
+                Hạn dùng: <strong className="text-white font-mono">{createdKeyResult.isLifetime ? 'Vĩnh viễn' : new Date(createdKeyResult.expiresAt).toLocaleDateString('vi-VN')}</strong>
+              </div>
+              <div className="mt-2 font-mono text-sm sm:text-base font-bold text-emerald-300 bg-slate-950/80 px-3 py-1.5 rounded-lg border border-emerald-500/30 select-all inline-block">
+                {createdKeyResult.licenseKey}
+              </div>
+            </div>
+            <button
+              onClick={() => copyToClipboard(createdKeyResult.licenseKey, 'created')}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-lg shadow-emerald-600/30 self-stretch md:self-auto justify-center"
+            >
+              {copiedKey === 'created' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              <span>{copiedKey === 'created' ? 'Đã Sao Chép!' : 'Sao Chép Key'}</span>
+            </button>
+          </div>
+        )}
+
+        {/* Bảng Danh Sách License Key */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm text-slate-300">
+            <thead className="bg-slate-900/80 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-white/5">
+              <tr>
+                <th className="py-3 px-4">Thiết Bị</th>
+                <th className="py-3 px-4">Mã Định Danh Máy</th>
+                <th className="py-3 px-4">Key Bản Quyền</th>
+                <th className="py-3 px-4">Ngày Cấp</th>
+                <th className="py-3 px-4">Ngày Hết Hạn</th>
+                <th className="py-3 px-4">Trạng Thái</th>
+                <th className="py-3 px-4 text-right">Xóa</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {voiceLicenses.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-6 text-center text-slate-500 italic">
+                    Chưa có Key bản quyền nào được tạo.
+                  </td>
+                </tr>
+              ) : (
+                voiceLicenses.map((lic) => (
+                  <tr key={lic.id} className="hover:bg-slate-800/40 transition-all font-mono text-xs">
+                    <td className="py-3.5 px-4 font-sans font-semibold text-white">
+                      {lic.deviceModel || 'iOS Device'}
+                    </td>
+
+                    <td className="py-3.5 px-4 font-mono text-purple-300">
+                      <div className="flex items-center space-x-1">
+                        <span title={lic.deviceFingerprint}>{lic.deviceFingerprint}</span>
+                        <button
+                          onClick={() => copyToClipboard(lic.deviceFingerprint, `fp-${lic.id}`)}
+                          className="p-1 hover:text-white"
+                          title="Sao chép mã máy"
+                        >
+                          {copiedKey === `fp-${lic.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                        </button>
+                      </div>
+                    </td>
+
+                    <td className="py-3.5 px-4 font-mono text-amber-300 font-bold">
+                      <div className="flex items-center space-x-1">
+                        <span>{lic.licenseKey}</span>
+                        <button
+                          onClick={() => copyToClipboard(lic.licenseKey, `key-${lic.id}`)}
+                          className="p-1 hover:text-white"
+                          title="Sao chép Key"
+                        >
+                          {copiedKey === `key-${lic.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                        </button>
+                      </div>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-slate-400">
+                      {new Date(lic.registeredAt).toLocaleDateString('vi-VN')}
+                    </td>
+
+                    <td className="py-3.5 px-4 font-bold">
+                      {lic.isLifetime ? (
+                        <span className="text-purple-400">Vĩnh viễn</span>
+                      ) : (
+                        <span className={lic.isExpired ? 'text-red-400' : 'text-slate-300'}>
+                          {new Date(lic.expiresAt).toLocaleDateString('vi-VN')}
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="py-3.5 px-4 font-sans">
+                      {!lic.isUsed ? (
+                        <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[11px] font-bold">
+                          Chưa Kích Hoạt
+                        </span>
+                      ) : lic.isExpired ? (
+                        <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/30 text-[11px] font-bold">
+                          Đã Hết Hạn
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold">
+                          Đang Hoạt Động
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="py-3.5 px-4 text-right">
+                      <button
+                        onClick={() => handleDeleteVoiceLicense(lic.id)}
+                        className="p-1.5 rounded bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/30 transition-all"
+                        title="Xóa Key"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
 
       {/* Create User Modal */}
       {showCreateModal && (

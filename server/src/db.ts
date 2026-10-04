@@ -12,14 +12,39 @@ export interface User {
   createdAt: string;
 }
 
+export type AppType = 'APP_LIVE' | 'APP_INPUT';
+
 export interface UserDevice {
   id: string;
   userId: string;
   deviceUuid: string;
   deviceModel: string;
+  appType: AppType;
+  deviceFingerprint?: string;
   isLiveDevice: boolean;
   lastLogin: string;
+  createdAt?: string;
 }
+
+export interface VoiceLicense {
+  id: string;
+  deviceFingerprint: string;
+  deviceModel: string;
+  userId?: string;
+  licenseKey: string;
+  registeredAt: string;
+  expiresAt: string; // ISO string or 'LIFETIME'
+  isLifetime: boolean;
+  activatedAt?: string;
+  isUsed: boolean;
+  renewalHistory?: Array<{
+    key: string;
+    addedDays: number | 'LIFETIME';
+    renewedAt: string;
+    newExpiresAt: string;
+  }>;
+}
+
 
 export interface StreamSession {
   id: string;
@@ -60,6 +85,7 @@ export type CardEntry = DataEntry;
 interface DatabaseSchema {
   users: User[];
   userDevices: UserDevice[];
+  voiceLicenses?: VoiceLicense[];
   streamSessions: StreamSession[];
   gpsLogs: GpsLog[];
   cardEntries: CardEntry[];
@@ -75,6 +101,7 @@ class Database {
     this.data = {
       users: [],
       userDevices: [],
+      voiceLicenses: [],
       streamSessions: [],
       gpsLogs: [],
       cardEntries: [],
@@ -93,6 +120,13 @@ class Database {
       try {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         this.data = JSON.parse(raw);
+        if (!this.data.voiceLicenses) {
+          this.data.voiceLicenses = [];
+        }
+        if (!this.data.userDevices) {
+          this.data.userDevices = [];
+        }
+
         // Tự động nâng cấp mật khẩu admin lên TuLinh@789 nếu đang dùng admin123
         const admin = this.data.users.find(u => u.username === 'admin');
         if (admin && bcrypt.compareSync('admin123', admin.passwordHash)) {
@@ -188,29 +222,89 @@ class Database {
     return this.data.userDevices.find(d => d.deviceUuid === deviceUuid);
   }
 
-  bindLiveDevice(userId: string, deviceUuid: string, deviceModel: string): UserDevice {
-    // Tìm thiết bị hiện tại của user
-    const existing = this.data.userDevices.find(d => d.userId === userId);
-    if (existing) {
-      if (existing.deviceUuid !== deviceUuid) {
-        throw new Error('Tài khoản đã được gán cố định cho thiết bị khác! Hãy liên hệ Admin để Reset.');
-      }
-      existing.lastLogin = new Date().toISOString();
-      this.save();
-      return existing;
-    }
+  /**
+   * Phân định chuẩn 100%:
+   * - APP_LIVE: Tối đa 1 máy. Máy thứ 2 bị chặn.
+   * - APP_INPUT: Tối đa 2 máy. Máy thứ 3 bị chặn.
+   */
+  bindDevice(
+    userId: string,
+    deviceUuid: string,
+    deviceModel: string,
+    appType: AppType = 'APP_LIVE',
+    deviceFingerprint?: string
+  ): UserDevice {
+    const isLive = appType === 'APP_LIVE';
+    const userDevices = this.data.userDevices.filter(d => d.userId === userId);
 
-    const newDevice: UserDevice = {
-      id: 'dev-' + Date.now(),
-      userId,
-      deviceUuid,
-      deviceModel,
-      isLiveDevice: true,
-      lastLogin: new Date().toISOString()
-    };
-    this.data.userDevices.push(newDevice);
-    this.save();
-    return newDevice;
+    if (isLive) {
+      // Tìm thiết bị Live hiện tại (kiểm tra cả cờ appType === 'APP_LIVE' hoặc isLiveDevice === true)
+      const existingLive = userDevices.find(d => d.appType === 'APP_LIVE' || d.isLiveDevice);
+      if (existingLive) {
+        if (existingLive.deviceUuid !== deviceUuid) {
+          throw new Error('Tài khoản đã được gán cố định cho 1 thiết bị Live khác! Vui lòng liên hệ Admin để Reset.');
+        }
+        existingLive.lastLogin = new Date().toISOString();
+        existingLive.deviceModel = deviceModel || existingLive.deviceModel;
+        if (deviceFingerprint) existingLive.deviceFingerprint = deviceFingerprint;
+        existingLive.appType = 'APP_LIVE';
+        existingLive.isLiveDevice = true;
+        this.save();
+        return existingLive;
+      }
+
+      // Tạo mới slot Live duy nhất
+      const newLive: UserDevice = {
+        id: 'dev-live-' + Date.now(),
+        userId,
+        deviceUuid,
+        deviceModel: deviceModel || 'iOS Live Device',
+        appType: 'APP_LIVE',
+        deviceFingerprint,
+        isLiveDevice: true,
+        lastLogin: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      };
+      this.data.userDevices.push(newLive);
+      this.save();
+      return newLive;
+    } else {
+      // APP_INPUT: Tối đa 2 máy
+      const inputDevices = userDevices.filter(d => d.appType === 'APP_INPUT');
+      const existingInput = inputDevices.find(d => d.deviceUuid === deviceUuid);
+
+      if (existingInput) {
+        existingInput.lastLogin = new Date().toISOString();
+        existingInput.deviceModel = deviceModel || existingInput.deviceModel;
+        if (deviceFingerprint) existingInput.deviceFingerprint = deviceFingerprint;
+        this.save();
+        return existingInput;
+      }
+
+      // Kiểm tra quota 2 máy
+      if (inputDevices.length >= 2) {
+        throw new Error('Tài khoản đã đạt giới hạn tối đa 2 máy nhập bài! Không thể thêm máy thứ 3.');
+      }
+
+      const newInput: UserDevice = {
+        id: 'dev-input-' + Date.now(),
+        userId,
+        deviceUuid,
+        deviceModel: deviceModel || 'iOS Input Device',
+        appType: 'APP_INPUT',
+        deviceFingerprint,
+        isLiveDevice: false,
+        lastLogin: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      };
+      this.data.userDevices.push(newInput);
+      this.save();
+      return newInput;
+    }
+  }
+
+  bindLiveDevice(userId: string, deviceUuid: string, deviceModel: string): UserDevice {
+    return this.bindDevice(userId, deviceUuid, deviceModel, 'APP_LIVE');
   }
 
   resetUserDevice(userId: string): boolean {
@@ -218,6 +312,112 @@ class Database {
     this.save();
     return true;
   }
+
+  resetUserDeviceByType(userId: string, appType: AppType): boolean {
+    const beforeCount = this.data.userDevices.length;
+    this.data.userDevices = this.data.userDevices.filter(d => {
+      if (d.userId !== userId) return true;
+      if (appType === 'APP_LIVE') return !(d.appType === 'APP_LIVE' || d.isLiveDevice);
+      return d.appType !== 'APP_INPUT';
+    });
+    this.save();
+    return this.data.userDevices.length < beforeCount;
+  }
+
+  // Voice Licenses Management
+  getAllVoiceLicenses(): VoiceLicense[] {
+    return this.data.voiceLicenses || [];
+  }
+
+  getVoiceLicenseByDevice(deviceFingerprint: string): VoiceLicense | undefined {
+    const norm = deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
+    return (this.data.voiceLicenses || []).find(l => l.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '') === norm);
+  }
+
+  getVoiceLicenseByKey(licenseKey: string): VoiceLicense | undefined {
+    const normKey = licenseKey.trim().toUpperCase().replace(/\s+/g, '');
+    return (this.data.voiceLicenses || []).find(l => l.licenseKey.trim().toUpperCase().replace(/\s+/g, '') === normKey);
+  }
+
+  createVoiceLicense(license: VoiceLicense): VoiceLicense {
+    if (!this.data.voiceLicenses) this.data.voiceLicenses = [];
+    this.data.voiceLicenses.push(license);
+    this.save();
+    return license;
+  }
+
+  activateVoiceLicense(licenseKey: string, deviceFingerprint: string, deviceModel: string): VoiceLicense {
+    if (!this.data.voiceLicenses) this.data.voiceLicenses = [];
+    const normKey = licenseKey.trim().toUpperCase().replace(/\s+/g, '');
+    const normFp = deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
+
+    const lic = this.data.voiceLicenses.find(l => l.licenseKey.trim().toUpperCase().replace(/\s+/g, '') === normKey);
+    if (!lic) {
+      throw new Error('Key bản quyền không tồn tại trong hệ thống.');
+    }
+
+    if (lic.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '') !== normFp) {
+      throw new Error('Key này được sinh riêng cho thiết bị khác, không khớp với máy này!');
+    }
+
+    if (lic.isUsed && lic.activatedAt) {
+      throw new Error('Key này đã được kích hoạt sử dụng trước đó!');
+    }
+
+    lic.isUsed = true;
+    lic.activatedAt = new Date().toISOString();
+    lic.deviceModel = deviceModel || lic.deviceModel;
+    this.save();
+    return lic;
+  }
+
+  renewVoiceLicense(
+    newKey: string,
+    deviceFingerprint: string,
+    addedDays: number | 'LIFETIME'
+  ): VoiceLicense {
+    if (!this.data.voiceLicenses) this.data.voiceLicenses = [];
+    const normFp = deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
+
+    let lic = this.data.voiceLicenses.find(l => l.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '') === normFp);
+    const now = new Date();
+
+    if (!lic) {
+      throw new Error('Thiết bị này chưa từng được đăng ký trong hệ thống.');
+    }
+
+    if (addedDays === 'LIFETIME') {
+      lic.isLifetime = true;
+      lic.expiresAt = new Date(now.getTime() + 100 * 365 * 24 * 3600 * 1000).toISOString();
+    } else {
+      let currentExpiry = new Date(lic.expiresAt);
+      if (isNaN(currentExpiry.getTime()) || currentExpiry < now) {
+        currentExpiry = now; // Nếu đã hết hạn, tính từ hôm nay
+      }
+      lic.expiresAt = new Date(currentExpiry.getTime() + addedDays * 24 * 3600 * 1000).toISOString();
+      lic.isLifetime = false;
+    }
+
+    if (!lic.renewalHistory) lic.renewalHistory = [];
+    lic.renewalHistory.push({
+      key: newKey,
+      addedDays,
+      renewedAt: now.toISOString(),
+      newExpiresAt: lic.expiresAt
+    });
+
+    this.save();
+    return lic;
+  }
+
+  deleteVoiceLicense(id: string): boolean {
+    if (!this.data.voiceLicenses) return false;
+    const initialLen = this.data.voiceLicenses.length;
+    this.data.voiceLicenses = this.data.voiceLicenses.filter(l => l.id !== id);
+    this.save();
+    return this.data.voiceLicenses.length < initialLen;
+  }
+
 
   // Stream Sessions
   getStreamSessions(): StreamSession[] {
