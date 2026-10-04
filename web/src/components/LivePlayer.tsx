@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
 import { Socket } from 'socket.io-client';
@@ -94,6 +94,57 @@ interface LivePlayerProps {
   finishRoundTrigger?: number;
   onFullscreenChange?: (isFullscreen: boolean) => void;
 }
+
+interface CapturedFramesStripProps {
+  frames: string[];
+  onRemove: (index: number) => void;
+  onClear: () => void;
+}
+
+const CapturedFramesStrip: React.FC<CapturedFramesStripProps> = React.memo(({ frames, onRemove, onClear }) => {
+  if (frames.length === 0) return null;
+  return (
+    <div className="flex items-center space-x-2 px-2 py-1.5 bg-purple-950/60 border border-purple-500/40 rounded-xl overflow-x-auto no-scrollbar animate-fadeIn">
+      <span className="text-[11px] font-bold text-purple-200 flex-shrink-0">
+        Đã chụp ({frames.length}):
+      </span>
+      <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar py-0.5">
+        {frames.map((thumb, idx) => (
+          <div key={idx} className="relative group flex-shrink-0">
+            <img
+              src={thumb}
+              alt={`#${idx + 1}`}
+              className="w-12 h-8 object-cover rounded-md border border-purple-400/60 shadow-sm"
+              loading="lazy"
+            />
+            <span className="absolute bottom-0 left-0 bg-black/80 text-[9px] font-mono font-bold text-purple-200 px-1 rounded-tr">
+              #{idx + 1}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(idx);
+              }}
+              className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center text-[10px] shadow leading-none font-bold cursor-pointer"
+              title="Xoá ảnh này"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onClear}
+        className="text-[10px] text-slate-400 hover:text-red-400 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 font-medium flex-shrink-0 transition-colors cursor-pointer"
+        title="Xoá tất cả"
+      >
+        Xoá hết
+      </button>
+    </div>
+  );
+});
 
 export const LivePlayer: React.FC<LivePlayerProps> = ({
   stream,
@@ -900,19 +951,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   };
 
-  const handleRemoveSnap = (index: number) => {
+  const handleRemoveSnap = useCallback((index: number) => {
     setCapturedFrames((prev) => prev.filter((_, i) => i !== index));
-    if (batchResults) {
-      setBatchResults(null);
-    }
-  };
+    setBatchResults(null);
+  }, []);
 
-  const handleClearSnaps = () => {
+  const handleClearSnaps = useCallback(() => {
     setCapturedFrames([]);
     setBatchResults(null);
     setBatchElapsedMs(null);
     setBatchError(null);
-  };
+  }, []);
 
   const handleSendBatch = async () => {
     let imagesToSend = capturedFrames;
@@ -2535,7 +2584,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             position: 'absolute',
             inset: 0
           }}
-          crossOrigin="anonymous"
           playsInline
           muted={true}
         />
@@ -2590,7 +2638,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out'
             }}
-            crossOrigin="anonymous"
             playsInline
             muted={isMuted}
             autoPlay
@@ -2847,47 +2894,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </span>
         </div>
 
-        {/* Hàng ảnh chụp đang chờ gửi */}
-        {capturedFrames.length > 0 && (
-          <div className="flex items-center space-x-2 px-2 py-1.5 bg-purple-950/60 border border-purple-500/40 rounded-xl overflow-x-auto no-scrollbar animate-fadeIn">
-            <span className="text-[11px] font-bold text-purple-200 flex-shrink-0">
-              Đã chụp ({capturedFrames.length}):
-            </span>
-            <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar py-0.5">
-              {capturedFrames.map((thumb, idx) => (
-                <div key={idx} className="relative group flex-shrink-0">
-                  <img
-                    src={thumb}
-                    alt={`#${idx + 1}`}
-                    className="w-12 h-8 object-cover rounded-md border border-purple-400/60 shadow-sm"
-                  />
-                  <span className="absolute bottom-0 left-0 bg-black/80 text-[9px] font-mono font-bold text-purple-200 px-1 rounded-tr">
-                    #{idx + 1}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRemoveSnap(idx);
-                    }}
-                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center text-[10px] shadow leading-none font-bold"
-                    title="Xoá ảnh này"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={handleClearSnaps}
-              className="text-[10px] text-slate-400 hover:text-red-400 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 font-medium flex-shrink-0 transition-colors"
-              title="Xoá tất cả"
-            >
-              Xoá hết
-            </button>
-          </div>
-        )}
+        {/* Hàng ảnh chụp đang chờ gửi (memoized, không bị re-render khi tua) */}
+        <CapturedFramesStrip
+          frames={capturedFrames}
+          onRemove={handleRemoveSnap}
+          onClear={handleClearSnaps}
+        />
 
         {/* Action Controls */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-1.5 pt-0.5">
