@@ -710,22 +710,64 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const resMenuRef = useRef<HTMLDivElement | null>(null);
 
   // --- AI Card Detection States & Functions ---
-  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+  const [aiProvider, setAiProvider] = useState<'modelapi' | 'gemini'>(() => {
     try {
-      return localStorage.getItem('gemini_api_key') || '';
+      return (localStorage.getItem('ai_provider') as any) || 'modelapi';
+    } catch {
+      return 'modelapi';
+    }
+  });
+  const [aiApiKey, setAiApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('ai_api_key') || localStorage.getItem('gemini_api_key') || '';
     } catch {
       return '';
     }
   });
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState(geminiApiKey);
+  const [aiBaseUrl, setAiBaseUrl] = useState<string>(() => {
+    try {
+      return localStorage.getItem('ai_base_url') || 'https://modelapi.vn/v1';
+    } catch {
+      return 'https://modelapi.vn/v1';
+    }
+  });
+  const [aiModel, setAiModel] = useState<string>(() => {
+    try {
+      return localStorage.getItem('ai_model') || 'gpt-4o-mini';
+    } catch {
+      return 'gpt-4o-mini';
+    }
+  });
 
-  const handleSaveApiKey = (e?: React.FormEvent) => {
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [tempProvider, setTempProvider] = useState<'modelapi' | 'gemini'>(aiProvider);
+  const [tempApiKey, setTempApiKey] = useState(aiApiKey);
+  const [tempBaseUrl, setTempBaseUrl] = useState(aiBaseUrl);
+  const [tempModel, setTempModel] = useState(aiModel);
+
+  const handleOpenSettings = () => {
+    setTempProvider(aiProvider);
+    setTempApiKey(aiApiKey);
+    setTempBaseUrl(aiBaseUrl);
+    setTempModel(aiModel);
+    setIsKeyModalOpen(true);
+  };
+
+  const handleSaveSettings = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     try {
-      localStorage.setItem('gemini_api_key', tempApiKey.trim());
+      localStorage.setItem('ai_provider', tempProvider);
+      localStorage.setItem('ai_api_key', tempApiKey.trim());
+      localStorage.setItem('ai_base_url', tempBaseUrl.trim());
+      localStorage.setItem('ai_model', tempModel.trim());
+      if (tempProvider === 'gemini') {
+        localStorage.setItem('gemini_api_key', tempApiKey.trim());
+      }
     } catch {}
-    setGeminiApiKey(tempApiKey.trim());
+    setAiProvider(tempProvider);
+    setAiApiKey(tempApiKey.trim());
+    setAiBaseUrl(tempBaseUrl.trim());
+    setAiModel(tempModel.trim());
     setIsKeyModalOpen(false);
   };
 
@@ -745,6 +787,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     summary: string;
     cards: CardInfo[];
     note?: string;
+    modelUsed?: string;
+    providerUsed?: string;
   }
 
   const [isDetecting, setIsDetecting] = useState(false);
@@ -845,7 +889,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageBase64: dataUrl,
-          apiKey: geminiApiKey || undefined
+          provider: aiProvider,
+          apiKey: aiApiKey || undefined,
+          baseUrl: aiBaseUrl || undefined,
+          model: aiModel || undefined
         })
       });
 
@@ -2866,16 +2913,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
               <button
                 type="button"
-                onClick={() => {
-                  setTempApiKey(geminiApiKey);
-                  setIsKeyModalOpen(true);
-                }}
+                onClick={handleOpenSettings}
                 className={`p-1 rounded-md text-xs transition-colors ml-0.5 ${
-                  geminiApiKey
+                  aiApiKey
                     ? 'text-purple-300 hover:text-white hover:bg-purple-800/50'
                     : 'text-amber-400 hover:text-amber-200 hover:bg-amber-800/50 animate-bounce'
                 }`}
-                title={geminiApiKey ? 'Cài đặt Gemini API Key (Đã lưu key)' : 'Chưa có API Key - Bấm để nhập Key'}
+                title={aiApiKey ? `Cài đặt AI (${aiProvider === 'modelapi' ? 'modelapi.vn' : 'Gemini'})` : 'Chưa có API Key - Bấm để cấu hình'}
               >
                 <Key className="w-3.5 h-3.5" />
               </button>
@@ -3275,18 +3319,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </div>
       )}
 
-      {/* Modal Cài Đặt Gemini API Key */}
+      {/* Modal Cài Đặt AI & API Key */}
       {isKeyModalOpen && (
         <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-purple-500/40 rounded-2xl max-w-sm sm:max-w-md w-full p-4 sm:p-5 space-y-3 shadow-2xl">
+          <div className="bg-slate-900 border border-purple-500/40 rounded-2xl max-w-sm sm:max-w-md w-full p-4 sm:p-5 space-y-3.5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 rounded-xl bg-purple-600/30 border border-purple-500/40 flex items-center justify-center text-purple-300">
                   <Key className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-white">Cài đặt Gemini API Key</h3>
-                  <p className="text-[11px] text-slate-400">Dùng cho tính năng AI nhận diện lá bài</p>
+                  <h3 className="font-bold text-sm text-white">Cài đặt AI Nhận Diện Bài</h3>
+                  <p className="text-[11px] text-slate-400">Chọn API trung gian hoặc Google Gemini chính thống</p>
                 </div>
               </div>
               <button
@@ -3298,28 +3342,136 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSaveApiKey} className="space-y-3">
+            <form onSubmit={handleSaveSettings} className="space-y-3">
+              {/* Chọn Nhà Cung Cấp (Provider) */}
               <div>
-                <label className="text-xs font-bold text-slate-200 block mb-1">
-                  Google Gemini API Key:
+                <label className="text-xs font-bold text-slate-200 block mb-1.5">
+                  Lựa chọn dịch vụ AI:
                 </label>
-                <input
-                  type="password"
-                  value={tempApiKey}
-                  onChange={(e) => setTempApiKey(e.target.value)}
-                  placeholder="AIzaSy..."
-                  autoFocus
-                  className="w-full bg-slate-950 text-white font-mono text-xs px-3 py-2 rounded-xl border border-purple-500/40 focus:outline-none focus:border-purple-400 placeholder:text-slate-600"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTempProvider('modelapi')}
+                    className={`px-2.5 py-2 rounded-xl border text-xs font-medium flex flex-col items-center justify-center space-y-1 transition-all ${
+                      tempProvider === 'modelapi'
+                        ? 'bg-purple-600/30 text-purple-200 border-purple-500 shadow-sm ring-1 ring-purple-400'
+                        : 'bg-slate-950/60 text-slate-400 border-white/10 hover:bg-slate-800'
+                    }`}
+                  >
+                    <span className="font-bold flex items-center space-x-1">
+                      <span>🇻🇳 modelapi.vn</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400">API Trung Gian (VN)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTempProvider('gemini')}
+                    className={`px-2.5 py-2 rounded-xl border text-xs font-medium flex flex-col items-center justify-center space-y-1 transition-all ${
+                      tempProvider === 'gemini'
+                        ? 'bg-purple-600/30 text-purple-200 border-purple-500 shadow-sm ring-1 ring-purple-400'
+                        : 'bg-slate-950/60 text-slate-400 border-white/10 hover:bg-slate-800'
+                    }`}
+                  >
+                    <span className="font-bold flex items-center space-x-1">
+                      <span>⚡ Google Gemini</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400">Chính Thống (~800ms)</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="text-[11px] text-slate-400 bg-slate-950/60 p-2.5 rounded-xl border border-white/5 space-y-1">
-                <p className="text-slate-300 font-medium">💡 Cách lấy API Key miễn phí:</p>
-                <p>
-                  Truy cập <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline font-bold">aistudio.google.com</a>, đăng nhập tài khoản Google và bấm <strong>Get API key</strong> để tạo key (hoàn toàn miễn phí).
-                </p>
-                <p className="text-slate-400 italic">Key này sẽ được lưu an toàn trực tiếp trên trình duyệt của bạn.</p>
-              </div>
+              {/* Cấu hình cho modelapi.vn */}
+              {tempProvider === 'modelapi' ? (
+                <div className="space-y-2.5 bg-slate-950/60 p-3 rounded-xl border border-white/5">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      API Base URL:
+                    </label>
+                    <input
+                      type="text"
+                      value={tempBaseUrl}
+                      onChange={(e) => setTempBaseUrl(e.target.value)}
+                      placeholder="https://modelapi.vn/v1"
+                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-slate-300">
+                        Tên Model:
+                      </label>
+                      <div className="flex items-center space-x-1">
+                        {['gpt-4o-mini', 'gemini-1.5-flash', 'gemini-2.0-flash'].map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setTempModel(m)}
+                            className={`text-[9px] px-1.5 py-0.5 rounded font-mono transition-colors ${
+                              tempModel === m ? 'bg-purple-600 text-white font-bold' : 'bg-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      value={tempModel}
+                      onChange={(e) => setTempModel(e.target.value)}
+                      placeholder="gpt-4o-mini"
+                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
+                    />
+                    <span className="text-[10px] text-slate-500 italic block mt-0.5">
+                      Khuyên dùng: <strong>gpt-4o-mini</strong> (siêu nhanh, rẻ, nhận diện bài cực chuẩn)
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      API Key (modelapi.vn):
+                    </label>
+                    <input
+                      type="password"
+                      value={tempApiKey}
+                      onChange={(e) => setTempApiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+
+                  <div className="text-[10px] text-slate-400 pt-1 border-t border-white/5">
+                    💡 Đăng ký và nạp tiền VNĐ dễ dàng tại <a href="https://modelapi.vn" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline font-bold">modelapi.vn</a>.
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2.5 bg-slate-950/60 p-3 rounded-xl border border-white/5">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      Google Gemini API Key:
+                    </label>
+                    <input
+                      type="password"
+                      value={tempApiKey}
+                      onChange={(e) => setTempApiKey(e.target.value)}
+                      placeholder="AIzaSy... hoặc AQ...."
+                      className="w-full bg-slate-900 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/40 focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+
+                  <div className="text-[10px] text-slate-400 space-y-1">
+                    <p className="text-emerald-300 font-medium">⚡ Tối ưu tốc độ cao:</p>
+                    <p>
+                      Hệ thống tự động chọn model nhẹ & nhanh nhất mà key của bạn hỗ trợ (ưu tiên <strong>gemini-3.5-flash-lite</strong> tốc độ ~800ms).
+                    </p>
+                    <p>
+                      Lấy key miễn phí tại <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline font-bold">aistudio.google.com</a>.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-end space-x-2 pt-1 border-t border-white/10">
                 <button
@@ -3333,7 +3485,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   type="submit"
                   className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-purple-600/30 active:scale-95"
                 >
-                  Lưu Key
+                  Lưu Cài Đặt
                 </button>
               </div>
             </form>
@@ -3360,7 +3512,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-400">Google Gemini 1.5 Flash Vision</p>
+                  <p className="text-[11px] text-slate-400">
+                    {detectResult?.providerUsed || (aiProvider === 'modelapi' ? 'modelapi.vn' : 'Google Gemini')} • {detectResult?.modelUsed || aiModel}
+                  </p>
                 </div>
               </div>
               <button
@@ -3403,13 +3557,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                     type="button"
                     onClick={() => {
                       setIsResultOpen(false);
-                      setTempApiKey(geminiApiKey);
-                      setIsKeyModalOpen(true);
+                      handleOpenSettings();
                     }}
                     className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center space-x-1"
                   >
                     <Key className="w-3.5 h-3.5" />
-                    <span>Cài đặt Gemini API Key</span>
+                    <span>Cài đặt AI & API Key</span>
                   </button>
                   <button
                     type="button"
