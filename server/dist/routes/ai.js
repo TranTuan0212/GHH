@@ -217,10 +217,142 @@ exports.aiRouter.post('/detect-cards', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('[AI Route] Lỗi nhận diện bài:', error);
+        console.error('[AI Route] Lỗi nhận diện:', error);
         return res.status(500).json({
             success: false,
-            message: error?.message || 'Lỗi server khi nhận diện lá bài.'
+            message: error?.message || 'Lỗi server khi nhận diện.'
         });
+    }
+});
+function parseCardCode(code) {
+    const c = (code || '').trim().toUpperCase();
+    if (c === 'NONE' || c === 'NULL' || c === 'UNKNOWN' || c === '' || c === 'KHONG_THAY') {
+        return {
+            code: 'NONE',
+            display: 'Không thấy',
+            rank: null,
+            suit: null,
+            symbol: '?',
+            color: 'gray',
+            status: 'unseen'
+        };
+    }
+    const suitChar = c.slice(-1);
+    const rank = c.slice(0, -1);
+    const suitMap = {
+        'S': { symbol: '♠', color: 'black', suit: 'Spade' },
+        'H': { symbol: '♥', color: 'red', suit: 'Heart' },
+        'D': { symbol: '♦', color: 'red', suit: 'Diamond' },
+        'C': { symbol: '♣', color: 'black', suit: 'Club' }
+    };
+    const sInfo = suitMap[suitChar] || { symbol: suitChar, color: 'black', suit: suitChar };
+    return {
+        code: c,
+        display: `${rank}${sInfo.symbol}`,
+        rank,
+        suit: sInfo.suit,
+        symbol: sInfo.symbol,
+        color: sInfo.color,
+        status: 'detected'
+    };
+}
+/**
+ * POST /api/ai/batch-detect
+ * Đóng gói nhiều ảnh gửi trong 1 request duy nhất tới Gemini Flash Lite, phản hồi siêu tốc (< 2s)
+ */
+exports.aiRouter.post('/batch-detect', async (req, res) => {
+    const startTime = Date.now();
+    try {
+        const { imagesBase64, apiKey: clientApiKey } = req.body;
+        if (!imagesBase64 || !Array.isArray(imagesBase64) || imagesBase64.length === 0) {
+            return res.status(400).json({ success: false, message: 'Thiếu mảng ảnh (imagesBase64).' });
+        }
+        const apiKey = (clientApiKey && clientApiKey.trim()) || process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(400).json({
+                success: false,
+                message: 'Chưa cấu hình Gemini API Key. Vui lòng bấm biểu tượng 🔑 trên giao diện để nhập Key.'
+            });
+        }
+        const promptText = `Dưới đây là ${imagesBase64.length} bức ảnh, theo thứ tự từ 1 đến ${imagesBase64.length}.
+Quan sát kỹ từng ảnh:
+- Nếu nhìn thấy rõ quân và chất (mặt ngửa hoặc hé gầm/mép dưới), trả về mã ngắn (vd: AS, 9H, 10S, KD). S=Spade, H=Heart, D=Diamond, C=Club.
+- Nếu ảnh nào bài úp hoàn toàn hoặc không nhìn thấy rõ, BẮT BUỘC ghi "NONE". TUYỆT ĐỐI KHÔNG ĐOÁN MÒ.
+Trả về DUY NHẤT một mảng JSON gồm đúng ${imagesBase64.length} phần tử chuỗi:
+["AS", "NONE", "9H"]`;
+        const parts = [{ text: promptText }];
+        for (const img of imagesBase64) {
+            const clean = img.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
+            parts.push({
+                inline_data: {
+                    mime_type: 'image/jpeg',
+                    data: clean
+                }
+            });
+        }
+        const payload = {
+            contents: [{ parts }],
+            generationConfig: {
+                temperature: 0.0,
+                response_mime_type: 'application/json',
+                maxOutputTokens: Math.max(100, imagesBase64.length * 15)
+            }
+        };
+        const modelsToTry = [
+            'gemini-flash-lite-latest',
+            'gemini-3.5-flash-lite',
+            'gemini-flash-latest',
+            'gemini-2.5-flash-lite'
+        ];
+        let lastError = null;
+        let responseData = null;
+        let usedModel = '';
+        for (const model of modelsToTry) {
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+                const apiRes = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const json = await apiRes.json();
+                if (!apiRes.ok) {
+                    lastError = json?.error?.message || `HTTP ${apiRes.status}`;
+                    continue;
+                }
+                responseData = json;
+                usedModel = model;
+                break;
+            }
+            catch (err) {
+                lastError = err?.message || err;
+            }
+        }
+        if (!responseData) {
+            return res.status(502).json({ success: false, message: `Lỗi Gemini API: ${lastError}` });
+        }
+        const rawText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
+        let rawList = [];
+        try {
+            rawList = JSON.parse(rawText);
+        }
+        catch {
+            const cleaned = (rawText || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+            rawList = JSON.parse(cleaned);
+        }
+        const cards = imagesBase64.map((_, i) => {
+            const code = rawList[i] || 'NONE';
+            return { index: i + 1, ...parseCardCode(code) };
+        });
+        return res.json({
+            success: true,
+            elapsedMs: Date.now() - startTime,
+            modelUsed: usedModel,
+            cards
+        });
+    }
+    catch (error) {
+        console.error('[Batch AI Route] Lỗi:', error);
+        return res.status(500).json({ success: false, message: error?.message || 'Lỗi server.' });
     }
 });

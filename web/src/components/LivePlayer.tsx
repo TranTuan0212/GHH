@@ -30,7 +30,8 @@ import {
   Sparkles,
   Key,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Send
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -772,13 +773,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   };
 
   interface CardInfo {
-    rank: string;
-    suit: string;
-    suitEn: string;
-    symbol: string;
-    code: string;
-    display: string;
-    color: 'red' | 'black';
+    index?: number;
+    code?: string;
+    display?: string;
+    rank?: string | null;
+    suit?: string | null;
+    suitEn?: string;
+    symbol?: string;
+    color?: 'red' | 'black' | 'gray';
+    status?: 'detected' | 'unseen';
     confidence?: 'high' | 'medium' | 'low';
   }
 
@@ -799,16 +802,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [isResultOpen, setIsResultOpen] = useState(false);
   const [copiedResult, setCopiedResult] = useState(false);
 
+  // --- Batch Card Snapping & Fast Detection States ---
+  const [capturedFrames, setCapturedFrames] = useState<string[]>([]);
+  const [batchResults, setBatchResults] = useState<CardInfo[] | null>(null);
+  const [batchElapsedMs, setBatchElapsedMs] = useState<number | null>(null);
+  const [isBatchSending, setIsBatchSending] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+
   const captureFrame = (): string | null => {
     try {
-      // Xác định thẻ video đang hoạt động hiển thị trên màn hình:
-      // - Đang tua (!isLive) hoặc replay đang có frame: lấy thẻ replayVideoRef (màn to)
-      // - Đang xem trực tiếp (isLive): lấy thẻ liveVideoRef
       const preferredVideo = (!isLive && hasFrame)
         ? replayVideoRef.current
         : (isLive && hasLiveFrame ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current));
 
-      // Fallback: chọn thẻ nào thực tế đã render kích thước hình ảnh (videoWidth > 0)
       const video = (preferredVideo && preferredVideo.videoWidth > 0)
         ? preferredVideo
         : ([replayVideoRef.current, liveVideoRef.current].find(v => v && v.videoWidth > 0) || preferredVideo);
@@ -818,7 +824,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         return null;
       }
 
-      // Lấy kích thước thực tế của frame hình đang phát
       const vw = video.videoWidth || (video as any).naturalWidth || video.clientWidth || 1280;
       const vh = video.videoHeight || (video as any).naturalHeight || video.clientHeight || 720;
 
@@ -860,63 +865,114 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       ctx.drawImage(video, 0, 0, vw, vh);
       ctx.restore();
 
-      return canvas.toDataURL('image/jpeg', 0.92);
+      // Giới hạn max dimension 960px để nén base64 siêu nhẹ (<40KB/ảnh), upload cực nhanh
+      const maxDim = 960;
+      if (canvas.width > maxDim || canvas.height > maxDim) {
+        const resizeCanvas = document.createElement('canvas');
+        const ratio = Math.min(maxDim / canvas.width, maxDim / canvas.height);
+        resizeCanvas.width = Math.round(canvas.width * ratio);
+        resizeCanvas.height = Math.round(canvas.height * ratio);
+        const rCtx = resizeCanvas.getContext('2d');
+        if (rCtx) {
+          rCtx.drawImage(canvas, 0, 0, resizeCanvas.width, resizeCanvas.height);
+          return resizeCanvas.toDataURL('image/jpeg', 0.88);
+        }
+      }
+
+      return canvas.toDataURL('image/jpeg', 0.88);
     } catch (err: any) {
       console.error('[LivePlayer] Lỗi captureFrame:', err);
       return null;
     }
   };
 
-  const handleDetectCards = async () => {
-    if (isDetecting) return;
-    setDetectError(null);
-    setCopiedResult(false);
+  const handleSnapCard = () => {
+    const dataUrl = captureFrame();
+    if (!dataUrl) return;
+    setCapturedFrames((prev) => {
+      if (prev.length >= 20) return prev;
+      return [...prev, dataUrl];
+    });
+    // Nếu có kết quả cũ thì reset để chuẩn bị phiên mới
+    if (batchResults) {
+      setBatchResults(null);
+      setBatchElapsedMs(null);
+    }
+  };
 
-    try {
-      const dataUrl = captureFrame();
-      if (!dataUrl) {
-        setDetectError('Không thể chụp hình từ video. Hãy chắc chắn video đang mở và có hình ảnh hiển thị.');
+  const handleRemoveSnap = (index: number) => {
+    setCapturedFrames((prev) => prev.filter((_, i) => i !== index));
+    if (batchResults) {
+      setBatchResults(null);
+    }
+  };
+
+  const handleClearSnaps = () => {
+    setCapturedFrames([]);
+    setBatchResults(null);
+    setBatchElapsedMs(null);
+    setBatchError(null);
+  };
+
+  const handleSendBatch = async () => {
+    let imagesToSend = capturedFrames;
+    if (imagesToSend.length === 0) {
+      const single = captureFrame();
+      if (!single) {
+        setBatchError('Không thể chụp hình từ video. Hãy đảm bảo video đang phát.');
         setIsResultOpen(true);
         return;
       }
+      imagesToSend = [single];
+      setCapturedFrames([single]);
+    }
 
-      setDetectedImageThumb(dataUrl);
-      setIsDetecting(true);
-      setIsResultOpen(true);
+    setIsBatchSending(true);
+    setBatchError(null);
+    setIsResultOpen(true);
 
-      const res = await fetch('/api/ai/detect-cards', {
+    try {
+      const res = await fetch('/api/ai/batch-detect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageBase64: dataUrl,
-          provider: aiProvider,
-          apiKey: aiApiKey || undefined,
-          baseUrl: aiBaseUrl || undefined,
-          model: aiModel || undefined
+          imagesBase64: imagesToSend,
+          apiKey: aiApiKey || undefined
         })
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Lỗi nhận diện bài từ AI.');
+        throw new Error(data.message || 'Lỗi nhận diện từ AI.');
       }
 
-      setDetectResult(data.result);
-      setDetectElapsedMs(data.elapsedMs);
+      setBatchResults(data.cards || []);
+      setBatchElapsedMs(data.elapsedMs || null);
     } catch (err: any) {
-      console.error('Lỗi nhận diện bài:', err);
-      setDetectError(err.message || 'Lỗi khi kết nối tới máy chủ AI.');
+      console.error('[Batch AI] Lỗi:', err);
+      setBatchError(err.message || 'Lỗi khi kết nối tới máy chủ AI.');
     } finally {
-      setIsDetecting(false);
+      setIsBatchSending(false);
     }
   };
 
-  const copyDetectResult = () => {
-    if (!detectResult) return;
-    const text = detectResult.summary || detectResult.cards.map(c => c.display || `${c.rank}${c.symbol}`).join(', ');
+  const copyBatchResult = () => {
+    if (!batchResults || batchResults.length === 0) return;
+    const text = batchResults
+      .map((c) => (c.status === 'unseen' || c.code === 'NONE' ? 'Không thấy' : (c.display || `${c.rank}${c.symbol}`)))
+      .join(', ');
     navigator.clipboard.writeText(text);
     setCopiedResult(true);
     setTimeout(() => setCopiedResult(false), 2000);
+  };
+
+  const handleDetectCards = async () => {
+    // Gọi thẳng quy trình gửi batch
+    await handleSendBatch();
+  };
+
+  const copyDetectResult = () => {
+    copyBatchResult();
   };
 
   useEffect(() => {
@@ -2060,7 +2116,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         return;
       }
       e.preventDefault();
-      handleDetectCards();
+      handleSnapCard();
       return;
     }
 
@@ -2790,6 +2846,48 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </span>
         </div>
 
+        {/* Hàng ảnh chụp đang chờ gửi */}
+        {capturedFrames.length > 0 && (
+          <div className="flex items-center space-x-2 px-2 py-1.5 bg-purple-950/60 border border-purple-500/40 rounded-xl overflow-x-auto no-scrollbar animate-fadeIn">
+            <span className="text-[11px] font-bold text-purple-200 flex-shrink-0">
+              Đã chụp ({capturedFrames.length}):
+            </span>
+            <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar py-0.5">
+              {capturedFrames.map((thumb, idx) => (
+                <div key={idx} className="relative group flex-shrink-0">
+                  <img
+                    src={thumb}
+                    alt={`#${idx + 1}`}
+                    className="w-12 h-8 object-cover rounded-md border border-purple-400/60 shadow-sm"
+                  />
+                  <span className="absolute bottom-0 left-0 bg-black/80 text-[9px] font-mono font-bold text-purple-200 px-1 rounded-tr">
+                    #{idx + 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveSnap(idx);
+                    }}
+                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center text-[10px] shadow leading-none font-bold"
+                    title="Xoá ảnh này"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleClearSnaps}
+              className="text-[10px] text-slate-400 hover:text-red-400 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 font-medium flex-shrink-0 transition-colors"
+              title="Xoá tất cả"
+            >
+              Xoá hết
+            </button>
+          </div>
+        )}
+
         {/* Action Controls */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-1.5 pt-0.5">
           <div className="flex items-center justify-between sm:justify-start space-x-1 sm:space-x-1.5">
@@ -2894,23 +2992,51 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </button>
 
-            {/* Nút Nhận diện lá bài qua AI Gemini */}
-            <div className="inline-flex items-center rounded-xl bg-gradient-to-r from-purple-950/70 to-indigo-950/70 p-0.5 border border-purple-500/40 shadow-sm">
+            {/* Cụm công cụ AI: Chụp -> Gom ảnh -> Gửi */}
+            <div className="inline-flex items-center rounded-xl bg-gradient-to-r from-purple-950/80 to-indigo-950/80 p-0.5 border border-purple-500/40 shadow-sm space-x-0.5">
+              {/* Nút Chụp ảnh lưu vào queue */}
               <button
                 type="button"
-                onClick={handleDetectCards}
-                disabled={isDetecting}
-                className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50"
-                title="Chụp frame hiện tại và AI nhận diện lá bài + chất bài (Phím tắt C)"
+                onClick={handleSnapCard}
+                disabled={isBatchSending}
+                className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                title="Chụp lưu lại hình ảnh (Phím C)"
               >
-                {isDetecting ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-200" />
-                ) : (
-                  <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
-                )}
-                <span>{isDetecting ? 'Đang đọc...' : 'Nhận Diện Bài'}</span>
+                <Camera className="w-3.5 h-3.5 text-amber-300" />
+                <span>Chụp{capturedFrames.length > 0 ? ` (${capturedFrames.length})` : ''}</span>
               </button>
 
+              {/* Nút Gửi: Luôn sáng và sẵn sàng khi đã có ảnh */}
+              {capturedFrames.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleSendBatch}
+                  disabled={isBatchSending}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50 animate-pulse"
+                  title="Đóng gói tất cả ảnh đã chụp gửi AI nhận diện"
+                >
+                  {isBatchSending ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5 text-amber-200" />
+                  )}
+                  <span>{isBatchSending ? 'Đang gửi...' : `Gửi (${capturedFrames.length})`}</span>
+                </button>
+              )}
+
+              {/* Nút Xoá queue nếu có ảnh */}
+              {capturedFrames.length > 0 && !isBatchSending && (
+                <button
+                  type="button"
+                  onClick={handleClearSnaps}
+                  className="p-1 rounded-md text-slate-400 hover:text-red-400 hover:bg-red-950/30 text-xs transition-colors"
+                  title="Xoá tất cả ảnh đã chụp"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* Nút Cài đặt Key */}
               <button
                 type="button"
                 onClick={handleOpenSettings}
@@ -3493,7 +3619,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </div>
       )}
 
-      {/* Modal Popup Hiển Thị Kết Quả Nhận Diện Lá Bài */}
+      {/* Modal Popup Hiển Thị Kết Quả */}
       {isResultOpen && (
         <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
           <div className="bg-slate-900 border border-purple-500/50 rounded-2xl max-w-lg w-full p-4 sm:p-5 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -3505,15 +3631,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 </div>
                 <div>
                   <div className="flex items-center space-x-2">
-                    <h3 className="font-bold text-sm text-white">AI Nhận Diện Lá Bài</h3>
-                    {detectElapsedMs && (
+                    <h3 className="font-bold text-sm text-white">AI Nhận Diện</h3>
+                    {batchElapsedMs && (
                       <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        ⚡ {detectElapsedMs}ms
+                        ⚡ {(batchElapsedMs / 1000).toFixed(2)}s
                       </span>
                     )}
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    {detectResult?.providerUsed || (aiProvider === 'modelapi' ? 'modelapi.vn' : 'Google Gemini')} • {detectResult?.modelUsed || aiModel}
+                    Gemini Flash Lite • 1 Request Đóng Gói
                   </p>
                 </div>
               </div>
@@ -3527,30 +3653,26 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             </div>
 
             {/* Trạng thái đang nhận diện */}
-            {isDetecting && (
+            {isBatchSending && (
               <div className="py-8 flex flex-col items-center justify-center space-y-3 text-center">
                 <div className="relative">
                   <Loader2 className="w-10 h-10 animate-spin text-purple-400" />
                   <Sparkles className="w-4 h-4 text-amber-300 absolute -top-1 -right-1 animate-pulse" />
                 </div>
                 <div className="space-y-1">
-                  <div className="font-bold text-sm text-white">Đang phân tích khung hình...</div>
-                  <div className="text-xs text-slate-400">AI đang quét mặt số và chất bài (Hearts, Diamonds, Clubs, Spades)</div>
-                </div>
-                {detectedImageThumb && (
-                  <div className="w-48 h-28 rounded-xl overflow-hidden border border-white/10 shadow-inner mt-2 opacity-50 relative">
-                    <img src={detectedImageThumb} alt="Frame snapshot" className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-purple-900/30 animate-pulse" />
+                  <div className="font-bold text-sm text-white">
+                    Đang xử lý {capturedFrames.length > 0 ? `${capturedFrames.length} ảnh` : ''}...
                   </div>
-                )}
+                  <div className="text-xs text-purple-300">Nhận diện siêu tốc song song trong 1 request</div>
+                </div>
               </div>
             )}
 
             {/* Lỗi khi nhận diện */}
-            {!isDetecting && detectError && (
+            {!isBatchSending && batchError && (
               <div className="p-3.5 bg-rose-950/40 border border-rose-500/40 rounded-xl space-y-2.5">
                 <div className="text-xs text-rose-300 font-medium">
-                  ⚠️ {detectError}
+                  ⚠️ {batchError}
                 </div>
                 <div className="flex items-center space-x-2">
                   <button
@@ -3566,7 +3688,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={handleDetectCards}
+                    onClick={handleSendBatch}
                     className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
                   >
                     Thử lại
@@ -3575,30 +3697,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               </div>
             )}
 
-            {/* Hiển thị kết quả lá bài */}
-            {!isDetecting && !detectError && detectResult && (
+            {/* Hiển thị kết quả */}
+            {!isBatchSending && !batchError && batchResults && (
               <div className="space-y-3.5">
-                {/* Ảnh chụp thu nhỏ & Tổng số lá bài */}
+                {/* Header thanh tóm tắt */}
                 <div className="flex items-center justify-between bg-slate-950/60 p-2.5 rounded-xl border border-white/5">
-                  <div className="flex items-center space-x-3">
-                    {detectedImageThumb && (
-                      <div className="w-20 h-12 rounded-lg overflow-hidden border border-white/10 flex-shrink-0">
-                        <img src={detectedImageThumb} alt="Snapshot" className="w-full h-full object-cover" />
-                      </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-bold text-slate-300">
+                      Tổng cộng: <span className="text-amber-300 font-mono text-sm">{batchResults.length} ảnh</span>
+                    </span>
+                    {batchElapsedMs && (
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        ⚡ {batchElapsedMs}ms
+                      </span>
                     )}
-                    <div>
-                      <div className="text-xs font-bold text-slate-200">
-                        Phát hiện: <span className="text-amber-300 font-mono text-sm">{detectResult.totalCards} lá bài</span>
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        {detectResult.cards.length > 0 ? 'Thứ tự từ trái sang phải:' : 'Không thấy lá bài nào rõ ràng'}
-                      </div>
-                    </div>
                   </div>
 
                   <button
                     type="button"
-                    onClick={copyDetectResult}
+                    onClick={copyBatchResult}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm ${
                       copiedResult
                         ? 'bg-emerald-600 text-white'
@@ -3610,32 +3727,61 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   </button>
                 </div>
 
-                {/* Danh sách quân bài trực quan (Card Layout) */}
-                {detectResult.cards && detectResult.cards.length > 0 ? (
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 py-1">
-                    {detectResult.cards.map((card, idx) => {
-                      const isRed = card.color === 'red' || card.suit === 'Cơ' || card.suit === 'Rô' || card.suitEn === 'HEART' || card.suitEn === 'DIAMOND';
+                {/* Danh sách thẻ kết quả */}
+                {batchResults.length > 0 ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                    {batchResults.map((item, idx) => {
+                      const isUnseen = item.status === 'unseen' || item.code === 'NONE';
+                      const isRed = item.color === 'red' || item.suit === 'Heart' || item.suit === 'Diamond';
+                      const thumb = capturedFrames[idx];
+
                       return (
                         <div
                           key={idx}
-                          className="bg-white rounded-xl shadow-lg border border-slate-300 p-2 flex flex-col justify-between items-center select-none transform hover:scale-105 transition-transform"
-                          style={{ minHeight: '100px' }}
+                          className={`rounded-xl border p-2 flex flex-col justify-between items-center transition-all select-none ${
+                            isUnseen
+                              ? 'bg-slate-950/90 border-slate-700/60'
+                              : 'bg-white border-slate-200 shadow-md'
+                          }`}
+                          style={{ minHeight: '110px' }}
                         >
-                          {/* Góc trên: Rank + Biểu tượng nhỏ */}
-                          <div className={`w-full flex items-center justify-between font-black font-mono leading-none ${isRed ? 'text-red-600' : 'text-slate-900'}`}>
-                            <span className="text-base">{card.rank}</span>
-                            <span className="text-sm">{card.symbol}</span>
+                          {/* Hàng trên: Số thứ tự + Ảnh chụp góc thu nhỏ */}
+                          <div className="w-full flex items-center justify-between mb-1">
+                            <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                              isUnseen ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              #{idx + 1}
+                            </span>
+                            {thumb && (
+                              <img
+                                src={thumb}
+                                alt={`#${idx + 1}`}
+                                className="w-9 h-6 object-cover rounded border border-white/20"
+                              />
+                            )}
                           </div>
 
-                          {/* Chính giữa: Biểu tượng chất to nổi bật */}
-                          <div className={`text-3xl font-black leading-none my-1 ${isRed ? 'text-red-600' : 'text-slate-900'}`}>
-                            {card.symbol}
-                          </div>
+                          {/* Chính giữa: Token hiển thị */}
+                          {isUnseen ? (
+                            <div className="my-auto py-2 text-center">
+                              <span className="text-xs font-semibold text-slate-400 bg-slate-900/90 px-2 py-1 rounded-md border border-slate-700/60 inline-block">
+                                Không thấy
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="my-auto py-1 text-center">
+                              <div className={`text-2xl sm:text-3xl font-black font-mono leading-none tracking-tight ${isRed ? 'text-red-600' : 'text-slate-950'}`}>
+                                {item.display || `${item.rank}${item.symbol}`}
+                              </div>
+                            </div>
+                          )}
 
-                          {/* Đáy quân bài: Tên tiếng Việt */}
-                          <div className="w-full text-center border-t border-slate-100 pt-1">
-                            <span className="text-[10px] font-bold text-slate-700 block truncate">
-                              {card.display || `${card.rank} ${card.suit}`}
+                          {/* Hàng dưới: Badge trạng thái */}
+                          <div className="w-full text-center pt-1 border-t border-slate-100/10">
+                            <span className={`text-[11px] font-bold ${
+                              isUnseen ? 'text-slate-500' : (isRed ? 'text-red-600' : 'text-slate-800')
+                            }`}>
+                              {isUnseen ? '—' : (item.display || `${item.rank}${item.symbol}`)}
                             </span>
                           </div>
                         </div>
@@ -3644,36 +3790,32 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   </div>
                 ) : (
                   <div className="text-center py-6 text-slate-400 text-xs bg-slate-950/40 rounded-xl border border-white/5 space-y-2">
-                    <p>Không nhận diện được lá bài nào trong khung hình này.</p>
-                    <p className="text-[11px] text-slate-500">Mẹo: Bạn hãy tua video đến đúng frame mà lá bài mở rõ nhất rồi bấm lại.</p>
+                    <p>Không có dữ liệu.</p>
                   </div>
                 )}
 
                 {/* Chuỗi tóm tắt dạng text để copy nhanh */}
-                {detectResult.summary && (
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-purple-500/20 flex items-center justify-between">
-                    <div className="text-xs font-mono font-bold text-amber-300 truncate mr-2">
-                      {detectResult.summary}
-                    </div>
-                    <span className="text-[10px] text-slate-500 uppercase font-mono">Dữ liệu text</span>
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-purple-500/20 flex items-center justify-between">
+                  <div className="text-xs font-mono font-bold text-amber-300 truncate mr-2">
+                    {batchResults
+                      .map((c) => (c.status === 'unseen' || c.code === 'NONE' ? 'Không thấy' : (c.display || `${c.rank}${c.symbol}`)))
+                      .join(', ')}
                   </div>
-                )}
-
-                {detectResult.note && (
-                  <div className="text-[11px] text-slate-400 italic">
-                    💡 Ghi chú: {detectResult.note}
-                  </div>
-                )}
+                  <span className="text-[10px] text-slate-500 uppercase font-mono flex-shrink-0">Tóm tắt</span>
+                </div>
 
                 {/* Footer Buttons */}
                 <div className="flex items-center justify-between pt-2 border-t border-white/10">
                   <button
                     type="button"
-                    onClick={handleDetectCards}
+                    onClick={() => {
+                      handleClearSnaps();
+                      setIsResultOpen(false);
+                    }}
                     className="px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 text-xs font-medium flex items-center space-x-1.5 transition-colors border border-purple-500/30"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Chụp & Nhận diện lại</span>
+                    <span>Phiên mới</span>
                   </button>
 
                   <button
@@ -3692,3 +3834,4 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     </div>
   );
 };
+

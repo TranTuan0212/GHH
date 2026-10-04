@@ -49,3 +49,10 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 xcuserdata/
 server/media/
+
+# Test scripts & benchmarks
+test_*
+benchmark_*
+server/ai/
+view_images.html
+
