@@ -334,6 +334,7 @@ struct ContentView: View {
             if networkManager.isAuthenticated {
                 locationManager.requestPermissions()
                 cameraManager.setupCamera { _ in }
+                networkManager.fetchUserProfile()
             }
             // 1. Bấm 3 lần GIẢM âm lượng -> Mở sáng màn hình
             VolumeObserver.shared.onTripleVolumeDown = {
@@ -375,8 +376,7 @@ struct ContentView: View {
 final class BlackScreenManager {
     static let shared = BlackScreenManager()
     private var blackWindow: UIWindow?
-    private var backgroundObserver: NSObjectProtocol?
-    private var resignActiveObserver: NSObjectProtocol?
+    private var lockObserver: NSObjectProtocol?
 
     private init() {}
 
@@ -404,39 +404,26 @@ final class BlackScreenManager {
             UIApplication.shared.isIdleTimerDisabled = true
             print("[BlackScreenManager] Màn hình đen ON")
 
-            // Khi bấm nút khoá phần cứng (Lock/Power) → willResignActive hoặc didEnterBackground → tự out app ngay lập tức (exit(0))
-            let exitOnLockAction: (Notification) -> Void = { [weak self] _ in
+            // Khi bấm nút NGUỒN khoá màn hình vật lý (Power Lock) → protectedDataWillBecomeUnavailable → tự out app ngay lập tức (exit(0))
+            // KHÔNG bắt willResignActive để người dùng có thể vuốt mép màn hình 2-3 lần giống như game mà không bị out nhầm
+            self.lockObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.protectedDataWillBecomeUnavailableNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
                 guard self?.blackWindow != nil else { return }
-                print("[BlackScreenManager] Bấm nút khoá màn hình khi đang ở màn đen → Thoát app ngay lập tức!")
+                print("[BlackScreenManager] Bấm nút khoá nguồn vật lý → Thoát app ngay lập tức!")
                 exit(0)
             }
-
-            self.resignActiveObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.willResignActiveNotification,
-                object: nil,
-                queue: .main,
-                using: exitOnLockAction
-            )
-
-            self.backgroundObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.didEnterBackgroundNotification,
-                object: nil,
-                queue: .main,
-                using: exitOnLockAction
-            )
         }
     }
 
     func hide() {
         DispatchQueue.main.async {
             // Tháo observer trước khi ẩn để không tự exit khi hide() được gọi tường minh
-            if let obs = self.backgroundObserver {
+            if let obs = self.lockObserver {
                 NotificationCenter.default.removeObserver(obs)
-                self.backgroundObserver = nil
-            }
-            if let obs = self.resignActiveObserver {
-                NotificationCenter.default.removeObserver(obs)
-                self.resignActiveObserver = nil
+                self.lockObserver = nil
             }
             self.blackWindow?.resignKey()
             self.blackWindow?.isHidden = true

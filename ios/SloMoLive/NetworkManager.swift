@@ -50,6 +50,11 @@ public class NetworkManager: ObservableObject {
             self.currentUserId = UserDefaults.standard.string(forKey: "saved_user_id")
             self.userExpiresAt = UserDefaults.standard.string(forKey: "saved_user_expires_at")
             self.isAuthenticated = true
+
+            // Tự động làm mới hạn dùng và thông tin tài khoản từ máy chủ
+            DispatchQueue.main.async {
+                self.fetchUserProfile()
+            }
         }
     }
 
@@ -174,9 +179,49 @@ public class NetworkManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "saved_user_expires_at")
     }
 
+    /// Tải lại thông tin User và hạn dùng mới nhất từ máy chủ qua GET /api/auth/me
+    public func fetchUserProfile(completion: ((Bool) -> Void)? = nil) {
+        guard let token = self.authToken, !token.isEmpty else {
+            completion?(false)
+            return
+        }
+        let clean = NetworkManager.normalizeServerURL(serverURL)
+        guard let url = URL(string: "\(clean)/api/auth/me") else {
+            completion?(false)
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 8.0
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self, let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let user = json["user"] as? [String: Any] else {
+                completion?(false)
+                return
+            }
+            DispatchQueue.main.async {
+                if let exp = user["expiresAt"] as? String {
+                    self.userExpiresAt = exp
+                    UserDefaults.standard.set(exp, forKey: "saved_user_expires_at")
+                }
+                if let uname = user["username"] as? String {
+                    self.currentUsername = uname
+                    UserDefaults.standard.set(uname, forKey: "saved_username")
+                }
+                completion?(true)
+            }
+        }.resume()
+    }
+
     /// Định dạng thời gian hết hạn thân thiện (Ví dụ: Còn 29 ngày 14 giờ / Vĩnh viễn)
     public func getRemainingTimeText() -> String {
         guard let expStr = userExpiresAt, !expStr.isEmpty else {
+            return "Đang tải hạn dùng..."
+        }
+        if expStr == "LIFETIME" {
             return "Vĩnh viễn (Lifetime)"
         }
         let isoFormatter = ISO8601DateFormatter()
