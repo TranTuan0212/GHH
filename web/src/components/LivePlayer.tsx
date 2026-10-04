@@ -740,46 +740,66 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const resMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Tự động thích ứng mạng (ABR - Adaptive Bitrate kiểu YouTube):
-  // Khi chọn 'auto', theo dõi WebRTC stats & packet loss để hạ xuống 360p khi mạng yếu và tự nâng lại khi mạng khỏe
+  // Khi chọn 'auto', theo dõi WebRTC stats delta để hạ xuống 360p khi mạng yếu và tự nâng lại khi mạng khỏe
   useEffect(() => {
-    if (selectedResolution !== 'auto' || !isLive) return;
+    if (selectedResolution !== 'auto') return;
 
+    let lastPacketsLost = -1;
+    let lastPacketsReceived = -1;
+    let consecutiveBad = 0;
     let consecutiveGood = 0;
+
     const interval = setInterval(async () => {
       const pc = peerConnectionRef.current;
       if (!pc || pc.connectionState !== 'connected') return;
 
       try {
         const stats = await pc.getStats();
-        let packetsLost = 0;
-        let packetsReceived = 0;
-        let framesDropped = 0;
+        let currentLost = 0;
+        let currentRecv = 0;
 
         stats.forEach((report) => {
           if (report.type === 'inbound-rtp' && report.kind === 'video') {
-            packetsLost = report.packetsLost || 0;
-            packetsReceived = report.packetsReceived || 0;
-            framesDropped = report.framesDropped || 0;
+            currentLost = report.packetsLost || 0;
+            currentRecv = report.packetsReceived || 0;
           }
         });
 
-        const lossRatio = packetsReceived > 0 ? packetsLost / (packetsLost + packetsReceived) : 0;
-        // Nếu phát hiện rớt gói mạng > 3% hoặc drop frame cao -> lập tức chuyển sang 360p để video không gián đoạn
-        if (lossRatio > 0.03 || framesDropped > 15) {
+        // Lần đầu tiên ghi nhận mốc gốc để tính delta, tránh nhảy nhầm do số tích lũy ban đầu
+        if (lastPacketsLost < 0 || lastPacketsReceived < 0) {
+          lastPacketsLost = currentLost;
+          lastPacketsReceived = currentRecv;
+          return;
+        }
+
+        const deltaLost = Math.max(0, currentLost - lastPacketsLost);
+        const deltaRecv = Math.max(0, currentRecv - lastPacketsReceived);
+        lastPacketsLost = currentLost;
+        lastPacketsReceived = currentRecv;
+
+        const totalDelta = deltaLost + deltaRecv;
+        const lossRatio = totalDelta > 20 ? deltaLost / totalDelta : 0;
+
+        // Nếu rớt gói > 5% trong 2 chu kỳ liên tiếp (~6s) -> hạ xuống 360p để chống khựng
+        if (lossRatio > 0.05) {
+          consecutiveBad++;
           consecutiveGood = 0;
-          setAutoResolution((curr) => (curr !== '360p' ? '360p' : curr));
+          if (consecutiveBad >= 2) {
+            setAutoResolution('360p');
+          }
         } else {
+          consecutiveBad = 0;
           consecutiveGood++;
-          // Nếu mạng ổn định liên tục trong 12s -> nâng dần lên 720p
+          // Nếu mạng ổn định liên tục trong 15s (5 chu kỳ không rớt gói) -> nâng lên 720p
           if (consecutiveGood >= 5) {
             setAutoResolution('720p');
           }
         }
       } catch {}
-    }, 2500);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [selectedResolution, isLive]);
+  }, [selectedResolution]);
 
   useEffect(() => {
     if (!isResMenuOpen) return;
@@ -2342,7 +2362,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             - Khi LIVE: Màn hình to toàn bộ.
             - Khi TUA: Cửa sổ PiP nhỏ có thể kéo thả di chuyển tự do (sang trái/phải), chỉnh to/nhỏ linh hoạt */}
         <div
-          data-pip-window={!isLive && hasLiveFrame ? 'true' : undefined}
+          data-pip-window={!isLive ? 'true' : undefined}
           onMouseDown={(e) => {
             if (!isLive) {
               e.preventDefault();
@@ -2355,7 +2375,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             }
           }}
           style={
-            !isLive && hasLiveFrame
+            !isLive
               ? {
                   position: 'absolute',
                   left: pipPos ? `${pipPos.xPercent}%` : undefined,
@@ -2371,17 +2391,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           className={`select-none ${
             isLive
               ? 'absolute inset-0 w-full h-full z-10 pointer-events-auto'
-              : (hasLiveFrame
-                  ? 'aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black group ring-4 ring-black/70 shadow-black'
-                  : 'opacity-0 pointer-events-none absolute')
+              : 'aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black group ring-4 ring-black/70 shadow-black'
           } ${isPipDragging ? '' : 'transition-[top,left] duration-150 ease-out'}`}
           title={!isLive ? 'Kéo để di chuyển, chạm để về Live' : undefined}
         >
           <video
             ref={liveVideoRef}
-            className={`w-full h-full object-contain bg-black pointer-events-none ${
-              isLive && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
-            }`}
+            className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
               transform: isLive
                 ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
@@ -2396,7 +2412,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           />
 
           {/* Huy hiệu và thanh công cụ điều khiển trên màn nhỏ PiP */}
-          {!isLive && hasLiveFrame && (
+          {!isLive && (
             <>
               {/* Nhãn LIVE nhấp nháy ở góc trên-trái */}
               <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider pointer-events-none">
