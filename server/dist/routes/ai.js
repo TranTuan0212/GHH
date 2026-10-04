@@ -76,8 +76,14 @@ Các quy tắc nhận diện:
                 response_mime_type: 'application/json'
             }
         };
-        // Thử gọi gemini-1.5-flash trước, nếu lỗi thì thử gemini-2.0-flash hoặc gemini-2.5-flash
-        const modelsToTry = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
+        // Danh sách model tự động thích ứng với Google Gemini API (ưu tiên các model Flash siêu nhanh)
+        const modelsToTry = [
+            'gemini-3.5-flash-lite',
+            'gemini-3.5-flash',
+            'gemini-3-flash-preview',
+            'gemini-2.5-flash',
+            'gemini-1.5-flash'
+        ];
         let lastError = null;
         let responseData = null;
         for (const model of modelsToTry) {
