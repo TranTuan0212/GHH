@@ -14,6 +14,7 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const auth_1 = require("./routes/auth");
 const admin_1 = require("./routes/admin");
 const stream_1 = require("./routes/stream");
+const ai_1 = require("./routes/ai");
 const db_1 = require("./db");
 const mediaServer_1 = require("./mediaServer");
 const network_1 = require("./utils/network");
@@ -79,7 +80,7 @@ io.use((socket, next) => {
 });
 const PORT = parseInt(process.env.PORT || '4000');
 app.use((0, cors_1.default)());
-app.use(express_1.default.json({ limit: '10mb' }));
+app.use(express_1.default.json({ limit: '25mb' }));
 // TEMP DEBUG LOGGING — giúp xác định request /api có tới server không, tới qua host nào,
 // và mất bao lâu để trả response. Xoá sau khi debug xong.
 app.use((req, res, next) => {
@@ -107,6 +108,7 @@ app.use((err, req, res, next) => {
 app.use('/api/auth', auth_1.authRouter);
 app.use('/api/admin', admin_1.adminRouter);
 app.use('/api/stream', stream_1.streamRouter);
+app.use('/api/ai', ai_1.aiRouter);
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', serverTime: new Date().toISOString() });

@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken';
 import { authRouter, JWT_SECRET } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
+import { aiRouter } from './routes/ai';
 import { db } from './db';
 import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
@@ -82,7 +83,7 @@ setStreamEndedHandler((streamKey) => {
 const PORT = parseInt(process.env.PORT || '4000');
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 // TEMP DEBUG LOGGING — giúp xác định request /api có tới server không, tới qua host nào,
 // và mất bao lâu để trả response. Xoá sau khi debug xong.
@@ -112,6 +113,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/stream', streamRouter);
+app.use('/api/ai', aiRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {

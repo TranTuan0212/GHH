@@ -26,7 +26,11 @@ import {
   Minimize,
   ArrowLeftRight,
   Move,
-  ZoomIn
+  ZoomIn,
+  Sparkles,
+  Key,
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import { StreamSession } from '../types';
 
@@ -704,6 +708,144 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [selectedResolution, setSelectedResolution] = useState<'720p' | '480p' | '360p'>('720p');
   const [isResMenuOpen, setIsResMenuOpen] = useState(false);
   const resMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // --- AI Card Detection States & Functions ---
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('gemini_api_key') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState(geminiApiKey);
+
+  const handleSaveApiKey = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    try {
+      localStorage.setItem('gemini_api_key', tempApiKey.trim());
+    } catch {}
+    setGeminiApiKey(tempApiKey.trim());
+    setIsKeyModalOpen(false);
+  };
+
+  interface CardInfo {
+    rank: string;
+    suit: string;
+    suitEn: string;
+    symbol: string;
+    code: string;
+    display: string;
+    color: 'red' | 'black';
+    confidence?: 'high' | 'medium' | 'low';
+  }
+
+  interface DetectResult {
+    totalCards: number;
+    summary: string;
+    cards: CardInfo[];
+    note?: string;
+  }
+
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectResult, setDetectResult] = useState<DetectResult | null>(null);
+  const [detectedImageThumb, setDetectedImageThumb] = useState<string | null>(null);
+  const [detectElapsedMs, setDetectElapsedMs] = useState<number | null>(null);
+  const [detectError, setDetectError] = useState<string | null>(null);
+  const [isResultOpen, setIsResultOpen] = useState(false);
+  const [copiedResult, setCopiedResult] = useState(false);
+
+  const captureFrame = (): string | null => {
+    const video = replayVideoRef.current || liveVideoRef.current;
+    if (!video || video.readyState < 2) return null;
+
+    const vw = video.videoWidth || 1280;
+    const vh = video.videoHeight || 720;
+    const canvas = document.createElement('canvas');
+
+    const rot = ((rotation % 360) + 360) % 360;
+    if (rot === 90 || rot === 270) {
+      canvas.width = vh;
+      canvas.height = vw;
+    } else {
+      canvas.width = vw;
+      canvas.height = vh;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.save();
+    if (rot === 90) {
+      ctx.translate(canvas.width, 0);
+      ctx.rotate((90 * Math.PI) / 180);
+    } else if (rot === 180) {
+      ctx.translate(canvas.width, canvas.height);
+      ctx.rotate((180 * Math.PI) / 180);
+    } else if (rot === 270) {
+      ctx.translate(0, canvas.height);
+      ctx.rotate((270 * Math.PI) / 180);
+    }
+
+    if (isFlipped) {
+      ctx.translate(vw, 0);
+      ctx.scale(-1, 1);
+    }
+
+    ctx.drawImage(video, 0, 0, vw, vh);
+    ctx.restore();
+
+    return canvas.toDataURL('image/jpeg', 0.92);
+  };
+
+  const handleDetectCards = async () => {
+    if (isDetecting) return;
+    setDetectError(null);
+    setCopiedResult(false);
+
+    const dataUrl = captureFrame();
+    if (!dataUrl) {
+      setDetectError('Không thể chụp hình từ video. Hãy chắc chắn video đang mở và hiển thị.');
+      setIsResultOpen(true);
+      return;
+    }
+
+    setDetectedImageThumb(dataUrl);
+    setIsDetecting(true);
+    setIsResultOpen(true);
+
+    try {
+      const res = await fetch('/api/ai/detect-cards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: dataUrl,
+          apiKey: geminiApiKey || undefined
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Lỗi nhận diện bài từ AI.');
+      }
+
+      setDetectResult(data.result);
+      setDetectElapsedMs(data.elapsedMs);
+    } catch (err: any) {
+      console.error('Lỗi nhận diện bài:', err);
+      setDetectError(err.message || 'Lỗi khi kết nối tới máy chủ AI.');
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
+  const copyDetectResult = () => {
+    if (!detectResult) return;
+    const text = detectResult.summary || detectResult.cards.map(c => c.display || `${c.rank}${c.symbol}`).join(', ');
+    navigator.clipboard.writeText(text);
+    setCopiedResult(true);
+    setTimeout(() => setCopiedResult(false), 2000);
+  };
 
   useEffect(() => {
     if (!isResMenuOpen) return;
@@ -1840,6 +1982,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return;
     }
 
+    if (e.key === 'c' || e.key === 'C') {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      handleDetectCards();
+      return;
+    }
+
     if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       toggleFullscreen();
@@ -2668,6 +2820,40 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </button>
 
+            {/* Nút Nhận diện lá bài qua AI Gemini */}
+            <div className="inline-flex items-center rounded-xl bg-gradient-to-r from-purple-950/70 to-indigo-950/70 p-0.5 border border-purple-500/40 shadow-sm">
+              <button
+                type="button"
+                onClick={handleDetectCards}
+                disabled={isDetecting}
+                className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                title="Chụp frame hiện tại và AI nhận diện lá bài + chất bài (Phím tắt C)"
+              >
+                {isDetecting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-200" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                )}
+                <span>{isDetecting ? 'Đang đọc...' : 'Nhận Diện Bài'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTempApiKey(geminiApiKey);
+                  setIsKeyModalOpen(true);
+                }}
+                className={`p-1 rounded-md text-xs transition-colors ml-0.5 ${
+                  geminiApiKey
+                    ? 'text-purple-300 hover:text-white hover:bg-purple-800/50'
+                    : 'text-amber-400 hover:text-amber-200 hover:bg-amber-800/50 animate-bounce'
+                }`}
+                title={geminiApiKey ? 'Cài đặt Gemini API Key (Đã lưu key)' : 'Chưa có API Key - Bấm để nhập Key'}
+              >
+                <Key className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             {onFinishRound && (
               <button
                 type="button"
@@ -3058,6 +3244,268 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 Xong
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Cài Đặt Gemini API Key */}
+      {isKeyModalOpen && (
+        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-purple-500/40 rounded-2xl max-w-sm sm:max-w-md w-full p-4 sm:p-5 space-y-3 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-xl bg-purple-600/30 border border-purple-500/40 flex items-center justify-center text-purple-300">
+                  <Key className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Cài đặt Gemini API Key</h3>
+                  <p className="text-[11px] text-slate-400">Dùng cho tính năng AI nhận diện lá bài</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsKeyModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveApiKey} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-200 block mb-1">
+                  Google Gemini API Key:
+                </label>
+                <input
+                  type="password"
+                  value={tempApiKey}
+                  onChange={(e) => setTempApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  autoFocus
+                  className="w-full bg-slate-950 text-white font-mono text-xs px-3 py-2 rounded-xl border border-purple-500/40 focus:outline-none focus:border-purple-400 placeholder:text-slate-600"
+                />
+              </div>
+
+              <div className="text-[11px] text-slate-400 bg-slate-950/60 p-2.5 rounded-xl border border-white/5 space-y-1">
+                <p className="text-slate-300 font-medium">💡 Cách lấy API Key miễn phí:</p>
+                <p>
+                  Truy cập <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline font-bold">aistudio.google.com</a>, đăng nhập tài khoản Google và bấm <strong>Get API key</strong> để tạo key (hoàn toàn miễn phí).
+                </p>
+                <p className="text-slate-400 italic">Key này sẽ được lưu an toàn trực tiếp trên trình duyệt của bạn.</p>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-1 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setIsKeyModalOpen(false)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-purple-600/30 active:scale-95"
+                >
+                  Lưu Key
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Popup Hiển Thị Kết Quả Nhận Diện Lá Bài */}
+      {isResultOpen && (
+        <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-purple-500/50 rounded-2xl max-w-lg w-full p-4 sm:p-5 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-purple-600/40">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="font-bold text-sm text-white">AI Nhận Diện Lá Bài</h3>
+                    {detectElapsedMs && (
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        ⚡ {detectElapsedMs}ms
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400">Google Gemini 1.5 Flash Vision</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsResultOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Trạng thái đang nhận diện */}
+            {isDetecting && (
+              <div className="py-8 flex flex-col items-center justify-center space-y-3 text-center">
+                <div className="relative">
+                  <Loader2 className="w-10 h-10 animate-spin text-purple-400" />
+                  <Sparkles className="w-4 h-4 text-amber-300 absolute -top-1 -right-1 animate-pulse" />
+                </div>
+                <div className="space-y-1">
+                  <div className="font-bold text-sm text-white">Đang phân tích khung hình...</div>
+                  <div className="text-xs text-slate-400">AI đang quét mặt số và chất bài (Hearts, Diamonds, Clubs, Spades)</div>
+                </div>
+                {detectedImageThumb && (
+                  <div className="w-48 h-28 rounded-xl overflow-hidden border border-white/10 shadow-inner mt-2 opacity-50 relative">
+                    <img src={detectedImageThumb} alt="Frame snapshot" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-purple-900/30 animate-pulse" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Lỗi khi nhận diện */}
+            {!isDetecting && detectError && (
+              <div className="p-3.5 bg-rose-950/40 border border-rose-500/40 rounded-xl space-y-2.5">
+                <div className="text-xs text-rose-300 font-medium">
+                  ⚠️ {detectError}
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsResultOpen(false);
+                      setTempApiKey(geminiApiKey);
+                      setIsKeyModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center space-x-1"
+                  >
+                    <Key className="w-3.5 h-3.5" />
+                    <span>Cài đặt Gemini API Key</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDetectCards}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
+                  >
+                    Thử lại
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Hiển thị kết quả lá bài */}
+            {!isDetecting && !detectError && detectResult && (
+              <div className="space-y-3.5">
+                {/* Ảnh chụp thu nhỏ & Tổng số lá bài */}
+                <div className="flex items-center justify-between bg-slate-950/60 p-2.5 rounded-xl border border-white/5">
+                  <div className="flex items-center space-x-3">
+                    {detectedImageThumb && (
+                      <div className="w-20 h-12 rounded-lg overflow-hidden border border-white/10 flex-shrink-0">
+                        <img src={detectedImageThumb} alt="Snapshot" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div>
+                      <div className="text-xs font-bold text-slate-200">
+                        Phát hiện: <span className="text-amber-300 font-mono text-sm">{detectResult.totalCards} lá bài</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {detectResult.cards.length > 0 ? 'Thứ tự từ trái sang phải:' : 'Không thấy lá bài nào rõ ràng'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={copyDetectResult}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm ${
+                      copiedResult
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-800 hover:bg-slate-700 text-purple-300 border border-purple-500/30'
+                    }`}
+                  >
+                    {copiedResult ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedResult ? 'Đã chép!' : 'Sao chép'}</span>
+                  </button>
+                </div>
+
+                {/* Danh sách quân bài trực quan (Card Layout) */}
+                {detectResult.cards && detectResult.cards.length > 0 ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 py-1">
+                    {detectResult.cards.map((card, idx) => {
+                      const isRed = card.color === 'red' || card.suit === 'Cơ' || card.suit === 'Rô' || card.suitEn === 'HEART' || card.suitEn === 'DIAMOND';
+                      return (
+                        <div
+                          key={idx}
+                          className="bg-white rounded-xl shadow-lg border border-slate-300 p-2 flex flex-col justify-between items-center select-none transform hover:scale-105 transition-transform"
+                          style={{ minHeight: '100px' }}
+                        >
+                          {/* Góc trên: Rank + Biểu tượng nhỏ */}
+                          <div className={`w-full flex items-center justify-between font-black font-mono leading-none ${isRed ? 'text-red-600' : 'text-slate-900'}`}>
+                            <span className="text-base">{card.rank}</span>
+                            <span className="text-sm">{card.symbol}</span>
+                          </div>
+
+                          {/* Chính giữa: Biểu tượng chất to nổi bật */}
+                          <div className={`text-3xl font-black leading-none my-1 ${isRed ? 'text-red-600' : 'text-slate-900'}`}>
+                            {card.symbol}
+                          </div>
+
+                          {/* Đáy quân bài: Tên tiếng Việt */}
+                          <div className="w-full text-center border-t border-slate-100 pt-1">
+                            <span className="text-[10px] font-bold text-slate-700 block truncate">
+                              {card.display || `${card.rank} ${card.suit}`}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-6 text-slate-400 text-xs bg-slate-950/40 rounded-xl border border-white/5 space-y-2">
+                    <p>Không nhận diện được lá bài nào trong khung hình này.</p>
+                    <p className="text-[11px] text-slate-500">Mẹo: Bạn hãy tua video đến đúng frame mà lá bài mở rõ nhất rồi bấm lại.</p>
+                  </div>
+                )}
+
+                {/* Chuỗi tóm tắt dạng text để copy nhanh */}
+                {detectResult.summary && (
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-purple-500/20 flex items-center justify-between">
+                    <div className="text-xs font-mono font-bold text-amber-300 truncate mr-2">
+                      {detectResult.summary}
+                    </div>
+                    <span className="text-[10px] text-slate-500 uppercase font-mono">Dữ liệu text</span>
+                  </div>
+                )}
+
+                {detectResult.note && (
+                  <div className="text-[11px] text-slate-400 italic">
+                    💡 Ghi chú: {detectResult.note}
+                  </div>
+                )}
+
+                {/* Footer Buttons */}
+                <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                  <button
+                    type="button"
+                    onClick={handleDetectCards}
+                    className="px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 text-xs font-medium flex items-center space-x-1.5 transition-colors border border-purple-500/30"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Chụp & Nhận diện lại</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsResultOpen(false)}
+                    className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors"
+                  >
+                    Đóng
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
