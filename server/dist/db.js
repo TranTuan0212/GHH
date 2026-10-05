@@ -228,13 +228,29 @@ class Database {
     }
     resetUserDeviceByType(userId, appType) {
         const beforeCount = this.data.userDevices.length;
+        const removedFingerprints = new Set();
         this.data.userDevices = this.data.userDevices.filter(d => {
             if (d.userId !== userId)
                 return true;
             if (appType === 'APP_LIVE')
                 return !(d.appType === 'APP_LIVE' || d.isLiveDevice);
-            return d.appType !== 'APP_INPUT';
+            if (d.appType === 'APP_INPUT') {
+                if (d.deviceFingerprint)
+                    removedFingerprints.add(d.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, ''));
+                return false;
+            }
+            return true;
         });
+        // Nếu reset máy Nhập, dọn dẹp các License chưa kích hoạt (isUsed === false) của thiết bị này để tránh kẹt key cũ
+        if (appType === 'APP_INPUT' && this.data.voiceLicenses && removedFingerprints.size > 0) {
+            this.data.voiceLicenses = this.data.voiceLicenses.filter(lic => {
+                const norm = lic.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
+                if (removedFingerprints.has(norm) && !lic.isUsed) {
+                    return false;
+                }
+                return true;
+            });
+        }
         this.save();
         return this.data.userDevices.length < beforeCount;
     }

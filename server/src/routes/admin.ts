@@ -39,6 +39,7 @@ adminRouter.get('/users', (req: AuthRequest, res: Response) => {
       const devExpiresAt = d.expiresAt || u.expiresAt;
       const devCountdown = formatRemaining(devExpiresAt);
       let voiceLic = null;
+      let effectiveVoiceKey = d.voiceKey;
       if (d.deviceFingerprint) {
         const lic = db.getVoiceLicenseByDevice(d.deviceFingerprint);
         if (lic) {
@@ -48,11 +49,13 @@ adminRouter.get('/users', (req: AuthRequest, res: Response) => {
             isLifetime: lic.isLifetime,
             isUsed: lic.isUsed
           };
+          effectiveVoiceKey = lic.licenseKey;
         }
       }
 
       return {
         ...d,
+        voiceKey: effectiveVoiceKey,
         activatedAt: d.activatedAt || d.createdAt || u.createdAt,
         expiresAt: devExpiresAt,
         countdown: devCountdown.text,

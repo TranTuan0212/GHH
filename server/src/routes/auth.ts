@@ -175,6 +175,7 @@ authRouter.post('/login', (req: Request, res: Response) => {
             boundDevice.voiceUnlocked = false;
           }
         }
+        db.save();
       }
     } catch (err: any) {
       return res.status(403).json({ error: err.message });

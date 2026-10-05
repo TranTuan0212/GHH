@@ -137,6 +137,7 @@ exports.authRouter.post('/login', (req, res) => {
                         boundDevice.voiceUnlocked = false;
                     }
                 }
+                db_1.db.save();
             }
         }
         catch (err) {

@@ -353,6 +353,7 @@ export const App: React.FC = () => {
             activeStream={activeStream}
             token={token}
             onRefreshUsers={() => fetchAdminUsers(token)}
+            socket={socket}
           />
         ) : (
           <div className="space-y-2.5">

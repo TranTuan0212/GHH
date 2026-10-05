@@ -136,7 +136,7 @@ const realtimeUserChanges: express.RequestHandler = (req, res, next) => {
 };
 
 // API Routes
-app.use('/api/auth', authRouter);
+app.use('/api/auth', realtimeUserChanges, authRouter);
 app.use('/api/admin', realtimeUserChanges, adminRouter);
 app.use('/api/license', realtimeUserChanges, licenseRouter);
 app.use('/api/stream', streamRouter);
@@ -373,6 +373,11 @@ io.on('connection', (socket) => {
   const user = (socket as any).user;
   console.log(`[Socket] Client connected: ${socket.id} | User: ${user ? `${user.username} (${user.role})` : 'Anonymous'}`);
 
+  // Admin tự động tham gia phòng quản trị ngay khi vừa kết nối, không chờ join_room
+  if (user?.role === 'ADMIN') {
+    socket.join('room_admin');
+  }
+
   const canControlRoom = (targetRoomId: string): boolean => {
     if (!user) return false;
     return user.role === 'ADMIN' || user.id === targetRoomId;
@@ -389,9 +394,9 @@ io.on('connection', (socket) => {
     // Nếu là ADMIN: được phép chuyển sang bất kỳ phòng nào; nếu là USER thường: cố định ở phòng của chính mình
     const roomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
 
-    // Rời tất cả phòng cũ trước khi vào phòng mới
+    // Rời tất cả phòng cũ trước khi vào phòng mới (giữ lại room_admin nếu là Admin)
     Array.from(socket.rooms).forEach((r) => {
-      if (r !== socket.id) socket.leave(r);
+      if (r !== socket.id && r !== 'room_admin') socket.leave(r);
     });
 
     // Dọn viewer tracking ở phòng cũ nếu có

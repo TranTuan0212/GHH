@@ -41,6 +41,7 @@ interface AdminDashboardProps {
   activeStream: StreamSession | null;
   token: string;
   onRefreshUsers: () => void;
+  socket?: any;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -48,7 +49,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   currentGps,
   activeStream,
   token,
-  onRefreshUsers
+  onRefreshUsers,
+  socket
 }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newUsername, setNewUsername] = useState('');
@@ -381,6 +383,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     fetchVoiceLicenses();
   }, [token]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleChanged = () => {
+      fetchVoiceLicenses();
+    };
+    socket.on('users_changed', handleChanged);
+    return () => {
+      socket.off('users_changed', handleChanged);
+    };
+  }, [socket]);
 
   const handleCreateVoiceKey = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1207,22 +1220,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     </span>
                                   </div>
 
-                                  {d.voiceKey && (
-                                    <div className="flex items-center justify-between text-[11px] text-amber-300 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30 font-mono">
-                                      <div className="truncate">
-                                        <span className="text-slate-400 font-sans text-[10px]">Key gửi khách: </span>
-                                        <strong className="text-amber-200">{d.voiceKey}</strong>
+                                  {(() => {
+                                    const displayKey = d.voiceKey || d.voiceLicense?.licenseKey;
+                                    if (!displayKey) return null;
+                                    return (
+                                      <div className="flex items-center justify-between text-[11px] text-amber-300 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30 font-mono">
+                                        <div className="truncate">
+                                          <span className="text-slate-400 font-sans text-[10px]">Key gửi khách: </span>
+                                          <strong className="text-amber-200">{displayKey}</strong>
+                                        </div>
+                                        <button
+                                          onClick={() => copyToClipboard(displayKey, `key-dev-${d.id}`)}
+                                          className="p-1 hover:text-white shrink-0 ml-1.5 bg-amber-500/20 hover:bg-amber-500/30 rounded text-amber-200 flex items-center space-x-1 text-[10px] font-sans font-semibold cursor-pointer"
+                                          title="Sao chép Key gửi cho khách"
+                                        >
+                                          {copiedKey === `key-dev-${d.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                          <span>{copiedKey === `key-dev-${d.id}` ? 'Đã chép!' : 'Chép Key'}</span>
+                                        </button>
                                       </div>
-                                      <button
-                                        onClick={() => copyToClipboard(d.voiceKey!, `key-dev-${d.id}`)}
-                                        className="p-1 hover:text-white shrink-0 ml-1.5 bg-amber-500/20 hover:bg-amber-500/30 rounded text-amber-200 flex items-center space-x-1 text-[10px] font-sans font-semibold cursor-pointer"
-                                        title="Sao chép Key gửi cho khách"
-                                      >
-                                        {copiedKey === `key-dev-${d.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                        <span>{copiedKey === `key-dev-${d.id}` ? 'Đã chép!' : 'Chép Key'}</span>
-                                      </button>
-                                    </div>
-                                  )}
+                                    );
+                                  })()}
 
                                   <div className="flex items-center justify-between text-[10px] text-slate-400">
                                     <span>Active: {formatDateTime(d.activatedAt)}</span>
