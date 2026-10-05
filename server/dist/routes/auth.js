@@ -99,9 +99,9 @@ exports.authRouter.post('/login', (req, res) => {
         }
         try {
             boundDevice = db_1.db.bindDevice(user.id, deviceUuid, deviceModel || (effectiveAppType === 'APP_LIVE' ? 'iOS Live Device' : 'iOS Input Device'), effectiveAppType, deviceFingerprint);
-            // TỰ ĐỘNG SINH KEY BẢN QUYỀN THEO MÁY KHI ĐĂNG NHẬP (Chờ khách nhập key để kích hoạt)
+            // TỰ ĐỘNG SINH KEY BẢN QUYỀN THEO MÁY VÀ TÀI KHOẢN KHI ĐĂNG NHẬP (Chờ khách nhập key để kích hoạt)
             if (effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
-                voiceLicense = db_1.db.getVoiceLicenseByDevice(deviceFingerprint);
+                voiceLicense = db_1.db.getVoiceLicenseByDevice(deviceFingerprint, user.id);
                 const now = new Date();
                 const userExpires = new Date(user.expiresAt);
                 const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));

@@ -61,7 +61,7 @@ licenseRouter.post('/activate', (req: Request, res: Response) => {
   }
 
   const normFp = normalizeFingerprint(deviceFingerprint);
-  const normKey = licenseKey.trim().toUpperCase().replace(/\s+/g, '');
+  const normKey = licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   // 1. Kiểm tra cấu trúc mã máy và Checksum bảo vệ
   if (!verifyDeviceFingerprint(normFp)) {
@@ -93,16 +93,23 @@ licenseRouter.post('/activate', (req: Request, res: Response) => {
     });
   }
 
-  // 5. Kiểm tra Key đã được kích hoạt trước đó chưa
+  // 5. Kiểm tra thời hạn nếu Key này đã từng kích hoạt trước đó trên chính máy này
   if (existingLicense.isUsed && existingLicense.activatedAt) {
-    return res.status(409).json({
-      error: `Key này đã được kích hoạt trước đó vào lúc ${new Date(existingLicense.activatedAt).toLocaleString('vi-VN')}!`
-    });
+    const isExpired = !existingLicense.isLifetime && new Date(existingLicense.expiresAt) < new Date();
+    if (isExpired) {
+      return res.status(403).json({
+        error: `Key bản quyền của thiết bị này đã hết hạn vào ngày ${new Date(existingLicense.expiresAt).toLocaleDateString('vi-VN')}. Vui lòng liên hệ Admin để gia hạn!`
+      });
+    }
   }
 
   try {
+    const wasAlreadyUsed = existingLicense.isUsed;
     const activated = db.activateVoiceLicense(normKey, normFp, deviceModel);
     clearFailedAttempt(`${clientIp}_${normFp}`);
+
+    // Đồng bộ trạng thái mở khóa sang danh sách thiết bị
+    db.unlockDeviceVoice(normFp, activated.licenseKey);
 
     // Tạo Offline License Token có chữ ký số bí mật
     const licenseToken = generateOfflineLicenseToken(
@@ -114,7 +121,7 @@ licenseRouter.post('/activate', (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      message: 'Kích hoạt bản quyền giọng nói thành công!',
+      message: wasAlreadyUsed ? 'Khôi phục bản quyền giọng nói thành công!' : 'Kích hoạt bản quyền giọng nói thành công!',
       licenseToken,
       registeredAt: activated.registeredAt,
       expiresAt: activated.expiresAt,
@@ -141,7 +148,7 @@ licenseRouter.post('/renew', (req: Request, res: Response) => {
   }
 
   const normFp = normalizeFingerprint(deviceFingerprint);
-  const normKey = renewKey.trim().toUpperCase().replace(/\s+/g, '');
+  const normKey = renewKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   if (!verifyDeviceFingerprint(normFp)) {
     return res.status(400).json({ error: 'Mã định danh máy không hợp lệ.' });

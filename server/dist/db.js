@@ -134,6 +134,23 @@ class Database {
     getDeviceByUuid(deviceUuid) {
         return this.data.userDevices.find(d => d.deviceUuid === deviceUuid);
     }
+    unlockDeviceVoice(deviceFingerprint, licenseKey) {
+        const normFp = deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        let updated = false;
+        this.data.userDevices.forEach(d => {
+            if (d.deviceFingerprint) {
+                const dNorm = d.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+                if (dNorm === normFp) {
+                    d.voiceUnlocked = true;
+                    d.voiceKey = licenseKey;
+                    updated = true;
+                }
+            }
+        });
+        if (updated) {
+            this.save();
+        }
+    }
     /**
      * Phân định chuẩn 100%:
      * - APP_LIVE: Tối đa 1 máy. Máy thứ 2 bị chặn.
@@ -236,16 +253,16 @@ class Database {
                 return !(d.appType === 'APP_LIVE' || d.isLiveDevice);
             if (d.appType === 'APP_INPUT') {
                 if (d.deviceFingerprint)
-                    removedFingerprints.add(d.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, ''));
+                    removedFingerprints.add(d.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
                 return false;
             }
             return true;
         });
-        // Nếu reset máy Nhập, dọn dẹp các License chưa kích hoạt (isUsed === false) của thiết bị này để tránh kẹt key cũ
+        // Nếu reset máy Nhập của tài khoản này, dọn dẹp các License chưa kích hoạt của user này để cấp key mới tinh
         if (appType === 'APP_INPUT' && this.data.voiceLicenses && removedFingerprints.size > 0) {
             this.data.voiceLicenses = this.data.voiceLicenses.filter(lic => {
-                const norm = lic.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
-                if (removedFingerprints.has(norm) && !lic.isUsed) {
+                const norm = lic.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+                if (removedFingerprints.has(norm) && lic.userId === userId && !lic.isUsed) {
                     return false;
                 }
                 return true;
@@ -258,13 +275,24 @@ class Database {
     getAllVoiceLicenses() {
         return this.data.voiceLicenses || [];
     }
-    getVoiceLicenseByDevice(deviceFingerprint) {
-        const norm = deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
-        return (this.data.voiceLicenses || []).find(l => l.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '') === norm);
+    getVoiceLicenseByDevice(deviceFingerprint, userId) {
+        const norm = deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        return (this.data.voiceLicenses || []).find(l => {
+            const licNorm = l.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (licNorm !== norm)
+                return false;
+            if (userId && l.userId) {
+                return l.userId === userId;
+            }
+            return true;
+        });
     }
     getVoiceLicenseByKey(licenseKey) {
-        const normKey = licenseKey.trim().toUpperCase().replace(/\s+/g, '');
-        return (this.data.voiceLicenses || []).find(l => l.licenseKey.trim().toUpperCase().replace(/\s+/g, '') === normKey);
+        const cleanKey = licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        return (this.data.voiceLicenses || []).find(l => {
+            const lClean = l.licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            return lClean === cleanKey;
+        });
     }
     createVoiceLicense(license) {
         if (!this.data.voiceLicenses)
@@ -276,17 +304,24 @@ class Database {
     activateVoiceLicense(licenseKey, deviceFingerprint, deviceModel) {
         if (!this.data.voiceLicenses)
             this.data.voiceLicenses = [];
-        const normKey = licenseKey.trim().toUpperCase().replace(/\s+/g, '');
-        const normFp = deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
-        const lic = this.data.voiceLicenses.find(l => l.licenseKey.trim().toUpperCase().replace(/\s+/g, '') === normKey);
+        const cleanKey = licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const cleanFp = deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const lic = this.data.voiceLicenses.find(l => {
+            const lClean = l.licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            return lClean === cleanKey;
+        });
         if (!lic) {
-            throw new Error('Key bản quyền không tồn tại trong hệ thống.');
+            throw new Error('Mã Key kích hoạt không tồn tại trên hệ thống.');
         }
-        if (lic.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '') !== normFp) {
+        const licFp = lic.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (licFp !== cleanFp) {
             throw new Error('Key này được sinh riêng cho thiết bị khác, không khớp với máy này!');
         }
+        // Nếu đã kích hoạt trước đó trên chính thiết bị này: Cho phép khôi phục / kích hoạt lại an toàn
         if (lic.isUsed && lic.activatedAt) {
-            throw new Error('Key này đã được kích hoạt sử dụng trước đó!');
+            lic.deviceModel = deviceModel || lic.deviceModel;
+            this.save();
+            return lic;
         }
         lic.isUsed = true;
         lic.activatedAt = new Date().toISOString();
@@ -297,8 +332,8 @@ class Database {
     renewVoiceLicense(newKey, deviceFingerprint, addedDays) {
         if (!this.data.voiceLicenses)
             this.data.voiceLicenses = [];
-        const normFp = deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '');
-        let lic = this.data.voiceLicenses.find(l => l.deviceFingerprint.trim().toUpperCase().replace(/\s+/g, '') === normFp);
+        const normFp = deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        let lic = this.data.voiceLicenses.find(l => l.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '') === normFp);
         const now = new Date();
         if (!lic) {
             throw new Error('Thiết bị này chưa từng được đăng ký trong hệ thống.');

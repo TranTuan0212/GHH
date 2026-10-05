@@ -86,7 +86,7 @@ function verifyDeviceFingerprint(fingerprint) {
  * Normalizes fingerprint string (removes dashes, uppercase)
  */
 function normalizeFingerprint(fp) {
-    return fp.trim().toUpperCase().replace(/\s+/g, '');
+    return fp.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 /**
  * Generates an unguessable cryptographic Voice License Key locked to a specific device fingerprint.

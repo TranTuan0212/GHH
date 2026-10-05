@@ -12,6 +12,7 @@ const fs_1 = __importDefault(require("fs"));
 const child_process_1 = require("child_process");
 const db_1 = require("../db");
 const auth_1 = require("./auth");
+const cryptoLicense_1 = require("../utils/cryptoLicense");
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(auth_1.adminMiddleware);
 function formatRemaining(expiresAt) {
@@ -44,21 +45,50 @@ exports.adminRouter.get('/users', (req, res) => {
             const devCountdown = formatRemaining(devExpiresAt);
             let voiceLic = null;
             let effectiveVoiceKey = d.voiceKey;
-            if (d.deviceFingerprint) {
-                const lic = db_1.db.getVoiceLicenseByDevice(d.deviceFingerprint);
+            if (d.deviceFingerprint && d.appType === 'APP_INPUT') {
+                let lic = db_1.db.getVoiceLicenseByDevice(d.deviceFingerprint, u.id);
+                if (!lic && d.voiceKey) {
+                    lic = db_1.db.getVoiceLicenseByKey(d.voiceKey);
+                }
+                // TỰ ĐỘNG CHỮA LÀNH (Self-Healing):
+                // Nếu thiết bị hiển thị trên Web mà chưa có bản ghi trong bảng voiceLicenses của Server DB,
+                // lập tức tạo và lưu bản ghi License tương ứng để đảm bảo Key hiển thị 100% tồn tại và kích hoạt được.
+                if (!lic) {
+                    const now = new Date();
+                    const userExpires = new Date(u.expiresAt);
+                    const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));
+                    const keyToUse = d.voiceKey || (0, cryptoLicense_1.generateVoiceLicenseKey)(d.deviceFingerprint, daysRemaining);
+                    lic = db_1.db.createVoiceLicense({
+                        id: 'lic-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+                        deviceFingerprint: d.deviceFingerprint,
+                        deviceModel: d.deviceModel,
+                        userId: u.id,
+                        licenseKey: keyToUse,
+                        registeredAt: d.activatedAt || now.toISOString(),
+                        expiresAt: u.expiresAt,
+                        isLifetime: false,
+                        isUsed: false,
+                        activatedAt: undefined
+                    });
+                    d.voiceKey = keyToUse;
+                    db_1.db.save();
+                }
                 if (lic) {
+                    effectiveVoiceKey = lic.licenseKey;
+                    d.voiceKey = lic.licenseKey;
+                    d.voiceUnlocked = lic.isUsed;
                     voiceLic = {
                         licenseKey: lic.licenseKey,
                         expiresAt: lic.expiresAt,
                         isLifetime: lic.isLifetime,
                         isUsed: lic.isUsed
                     };
-                    effectiveVoiceKey = lic.licenseKey;
                 }
             }
             return {
                 ...d,
                 voiceKey: effectiveVoiceKey,
+                voiceUnlocked: d.voiceUnlocked,
                 activatedAt: d.activatedAt || d.createdAt || u.createdAt,
                 expiresAt: devExpiresAt,
                 countdown: devCountdown.text,

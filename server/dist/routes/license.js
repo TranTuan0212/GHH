@@ -48,7 +48,7 @@ exports.licenseRouter.post('/activate', (req, res) => {
         return res.status(400).json({ error: 'Vui lòng cung cấp licenseKey và deviceFingerprint.' });
     }
     const normFp = (0, cryptoLicense_1.normalizeFingerprint)(deviceFingerprint);
-    const normKey = licenseKey.trim().toUpperCase().replace(/\s+/g, '');
+    const normKey = licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     // 1. Kiểm tra cấu trúc mã máy và Checksum bảo vệ
     if (!(0, cryptoLicense_1.verifyDeviceFingerprint)(normFp)) {
         return res.status(400).json({
@@ -75,20 +75,26 @@ exports.licenseRouter.post('/activate', (req, res) => {
             error: 'Key này được cấp riêng cho thiết bị khác, không khớp với máy này!'
         });
     }
-    // 5. Kiểm tra Key đã được kích hoạt trước đó chưa
+    // 5. Kiểm tra thời hạn nếu Key này đã từng kích hoạt trước đó trên chính máy này
     if (existingLicense.isUsed && existingLicense.activatedAt) {
-        return res.status(409).json({
-            error: `Key này đã được kích hoạt trước đó vào lúc ${new Date(existingLicense.activatedAt).toLocaleString('vi-VN')}!`
-        });
+        const isExpired = !existingLicense.isLifetime && new Date(existingLicense.expiresAt) < new Date();
+        if (isExpired) {
+            return res.status(403).json({
+                error: `Key bản quyền của thiết bị này đã hết hạn vào ngày ${new Date(existingLicense.expiresAt).toLocaleDateString('vi-VN')}. Vui lòng liên hệ Admin để gia hạn!`
+            });
+        }
     }
     try {
+        const wasAlreadyUsed = existingLicense.isUsed;
         const activated = db_1.db.activateVoiceLicense(normKey, normFp, deviceModel);
         clearFailedAttempt(`${clientIp}_${normFp}`);
+        // Đồng bộ trạng thái mở khóa sang danh sách thiết bị
+        db_1.db.unlockDeviceVoice(normFp, activated.licenseKey);
         // Tạo Offline License Token có chữ ký số bí mật
         const licenseToken = (0, cryptoLicense_1.generateOfflineLicenseToken)(normFp, activated.registeredAt, activated.expiresAt, activated.isLifetime);
         return res.json({
             success: true,
-            message: 'Kích hoạt bản quyền giọng nói thành công!',
+            message: wasAlreadyUsed ? 'Khôi phục bản quyền giọng nói thành công!' : 'Kích hoạt bản quyền giọng nói thành công!',
             licenseToken,
             registeredAt: activated.registeredAt,
             expiresAt: activated.expiresAt,
@@ -113,7 +119,7 @@ exports.licenseRouter.post('/renew', (req, res) => {
         return res.status(400).json({ error: 'Vui lòng cung cấp renewKey và deviceFingerprint.' });
     }
     const normFp = (0, cryptoLicense_1.normalizeFingerprint)(deviceFingerprint);
-    const normKey = renewKey.trim().toUpperCase().replace(/\s+/g, '');
+    const normKey = renewKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!(0, cryptoLicense_1.verifyDeviceFingerprint)(normFp)) {
         return res.status(400).json({ error: 'Mã định danh máy không hợp lệ.' });
     }

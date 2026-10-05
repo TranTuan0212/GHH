@@ -91,7 +91,7 @@ export function verifyDeviceFingerprint(fingerprint: string): boolean {
  * Normalizes fingerprint string (removes dashes, uppercase)
  */
 export function normalizeFingerprint(fp: string): string {
-  return fp.trim().toUpperCase().replace(/\s+/g, '');
+  return fp.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 export interface LicenseKeyVerificationResult {

@@ -5,6 +5,7 @@ import fs from 'fs';
 import { exec, execFile } from 'child_process';
 import { db, User } from '../db';
 import { adminMiddleware, AuthRequest } from './auth';
+import { generateVoiceLicenseKey } from '../utils/cryptoLicense';
 
 export const adminRouter = Router();
 adminRouter.use(adminMiddleware);
@@ -40,22 +41,55 @@ adminRouter.get('/users', (req: AuthRequest, res: Response) => {
       const devCountdown = formatRemaining(devExpiresAt);
       let voiceLic = null;
       let effectiveVoiceKey = d.voiceKey;
-      if (d.deviceFingerprint) {
-        const lic = db.getVoiceLicenseByDevice(d.deviceFingerprint);
+
+      if (d.deviceFingerprint && d.appType === 'APP_INPUT') {
+        let lic = db.getVoiceLicenseByDevice(d.deviceFingerprint, u.id);
+        if (!lic && d.voiceKey) {
+          lic = db.getVoiceLicenseByKey(d.voiceKey);
+        }
+
+        // TỰ ĐỘNG CHỮA LÀNH (Self-Healing):
+        // Nếu thiết bị hiển thị trên Web mà chưa có bản ghi trong bảng voiceLicenses của Server DB,
+        // lập tức tạo và lưu bản ghi License tương ứng để đảm bảo Key hiển thị 100% tồn tại và kích hoạt được.
+        if (!lic) {
+          const now = new Date();
+          const userExpires = new Date(u.expiresAt);
+          const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));
+          const keyToUse = d.voiceKey || generateVoiceLicenseKey(d.deviceFingerprint, daysRemaining);
+
+          lic = db.createVoiceLicense({
+            id: 'lic-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+            deviceFingerprint: d.deviceFingerprint,
+            deviceModel: d.deviceModel,
+            userId: u.id,
+            licenseKey: keyToUse,
+            registeredAt: d.activatedAt || now.toISOString(),
+            expiresAt: u.expiresAt,
+            isLifetime: false,
+            isUsed: false,
+            activatedAt: undefined
+          });
+          d.voiceKey = keyToUse;
+          db.save();
+        }
+
         if (lic) {
+          effectiveVoiceKey = lic.licenseKey;
+          d.voiceKey = lic.licenseKey;
+          d.voiceUnlocked = lic.isUsed;
           voiceLic = {
             licenseKey: lic.licenseKey,
             expiresAt: lic.expiresAt,
             isLifetime: lic.isLifetime,
             isUsed: lic.isUsed
           };
-          effectiveVoiceKey = lic.licenseKey;
         }
       }
 
       return {
         ...d,
         voiceKey: effectiveVoiceKey,
+        voiceUnlocked: d.voiceUnlocked,
         activatedAt: d.activatedAt || d.createdAt || u.createdAt,
         expiresAt: devExpiresAt,
         countdown: devCountdown.text,
