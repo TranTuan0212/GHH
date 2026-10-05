@@ -94,6 +94,24 @@ export function normalizeFingerprint(fp: string): string {
   return fp.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+/**
+ * Formats fingerprint to standard canonical format: AGI-XXXX-YYYY-ZZZZ-WWWW-CCCC
+ * Required for exact match in iOS offline token verification
+ */
+export function formatCanonicalFingerprint(fp: string): string {
+  if (!fp || typeof fp !== 'string') return '';
+  const clean = fp.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.startsWith('AGI') && clean.length === 23) {
+    const p1 = clean.slice(3, 7);
+    const p2 = clean.slice(7, 11);
+    const p3 = clean.slice(11, 15);
+    const p4 = clean.slice(15, 19);
+    const cs = clean.slice(19, 23);
+    return `AGI-${p1}-${p2}-${p3}-${p4}-${cs}`;
+  }
+  return fp.trim().toUpperCase();
+}
+
 export interface LicenseKeyVerificationResult {
   valid: boolean;
   deviceFingerprint: string;
@@ -142,7 +160,7 @@ export function generateOfflineLicenseToken(
   isLifetime: boolean
 ): string {
   const payloadObj = {
-    fp: normalizeFingerprint(deviceFingerprint),
+    fp: formatCanonicalFingerprint(deviceFingerprint),
     reg: registeredAt,
     exp: expiresAt,
     life: isLifetime ? 1 : 0
@@ -185,7 +203,9 @@ export function verifyOfflineLicenseToken(
     const jsonStr = Buffer.from(payloadB64, 'base64url').toString('utf-8');
     const data = JSON.parse(jsonStr);
 
-    if (data.fp !== normalizeFingerprint(expectedDeviceFingerprint)) {
+    const dataFp = (data.fp || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const expFp = expectedDeviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (dataFp !== expFp) {
       return { valid: false, error: 'Token không khớp với thiết bị này.' };
     }
 
