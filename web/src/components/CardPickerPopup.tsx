@@ -61,21 +61,6 @@ const CARDS = [
   { rank: '0', label: '0', sublabel: 'Không thấy', color: 'text-orange-400', border: 'border-orange-500/40 hover:border-orange-300', bg: 'bg-gradient-to-b from-orange-950/60 to-slate-900' },
 ];
 
-const RO_CARDS = [
-  { rank: '1♦', num: '1', label: '1♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '2♦', num: '2', label: '2♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '3♦', num: '3', label: '3♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '4♦', num: '4', label: '4♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '5♦', num: '5', label: '5♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '6♦', num: '6', label: '6♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '7♦', num: '7', label: '7♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '8♦', num: '8', label: '8♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '9♦', num: '9', label: '9♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '10♦', num: '10', label: '10♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '11♦', num: '11', label: '11♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '12♦', num: '12', label: '12♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-  { rank: '13♦', num: '13', label: '13♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
-];
 
 export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   isOpen,
@@ -660,48 +645,6 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 Bấm số 1-13 hoặc 0 bên dưới để gán ngay
               </div>
             )}
-          </div>
-
-          {/* 1. DÃY CHẤT RÔ ♦ (MÀU ĐỎ) - TỪ 1♦ ĐẾN 13♦ (CÙNG ĐIỂM LUÔN THẮNG CHẤT THƯỜNG) */}
-          <div className="bg-slate-950/90 p-2 sm:p-2.5 rounded-xl border border-rose-500/40 shadow-inner space-y-1.5">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-[11px] font-black text-rose-400 flex items-center space-x-1">
-                <span className="text-sm">♦</span>
-                <span>DÃY CHẤT RÔ (ĐỎ) • CÙNG ĐIỂM LUÔN LỚN HƠN CHẤT THƯỜNG</span>
-              </span>
-              <span className="text-[10px] text-rose-300 font-mono font-bold bg-rose-950/80 px-1.5 py-0.2 rounded border border-rose-500/30">1♦ ➔ 13♦</span>
-            </div>
-            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
-              {RO_CARDS.map((card) => {
-                const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
-                return (
-                  <button
-                    key={card.rank}
-                    type="button"
-                    onClick={() => handleCardClick(card.rank)}
-                    className={`h-11 sm:h-12 rounded-xl flex items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden cursor-pointer ${
-                      card.bg
-                    } ${card.border} ${
-                      isCurrent
-                        ? 'ring-2 ring-rose-400 border-rose-400 scale-105 z-10 shadow-rose-500/40'
-                        : 'hover:scale-105 hover:border-rose-400'
-                    }`}
-                    title={`Chọn số ${card.rank} (Chất Rô Đỏ - Ưu tiên thắng)`}
-                  >
-                    <span className={`text-base sm:text-lg leading-none font-black tracking-tight ${card.color} drop-shadow-md flex items-center gap-0.5`}>
-                      <span>{card.num}</span>
-                      <span className="text-xs sm:text-sm text-rose-500 font-black">♦</span>
-                    </span>
-                    <div className="absolute inset-0 bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                  </button>
-                );
-              })}
-              {/* Ô thứ 14 trong grid 7x2: Huy hiệu chỉ dẫn Rô */}
-              <div className="h-11 sm:h-12 rounded-xl border border-rose-500/30 bg-rose-950/40 flex flex-col items-center justify-center text-center p-0.5 select-none">
-                <span className="text-[11px] font-black text-rose-300 leading-tight">Ưu Tiên</span>
-                <span className="text-[9px] text-rose-400 font-bold leading-tight">Chất Rô ♦</span>
-              </div>
-            </div>
           </div>
 
           {/* 2. DÃY SỐ THƯỜNG (1 -> 13 VÀ 0 KHÔNG THẤY) */}
