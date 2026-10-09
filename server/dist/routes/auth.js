@@ -11,7 +11,6 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
 const cryptoLicense_1 = require("../utils/cryptoLicense");
-const config_1 = require("../config");
 exports.authRouter = (0, express_1.Router)();
 // JWT_SECRET BẮT BUỘC lấy từ biến môi trường — không fallback về giá trị mặc định.
 // Trước đây hard-code 'SLOMO_240FPS_SECRET_KEY_2026' ngay trong source: bất kỳ ai đọc được
@@ -91,11 +90,8 @@ exports.authRouter.post('/login', (req, res) => {
     let boundDevice = null;
     let licenseToken = null;
     let voiceLicense = null;
-    if (!config_1.VOICE_LICENSE_ENABLED && appType === 'APP_INPUT') {
-        return res.status(403).json({ error: 'Chức năng máy Nhập và Giọng nói hiện đang tạm khóa trên hệ thống.' });
-    }
     // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
-    const effectiveAppType = (appType === 'APP_INPUT' && config_1.VOICE_LICENSE_ENABLED) ? 'APP_INPUT' :
+    const effectiveAppType = appType === 'APP_INPUT' ? 'APP_INPUT' :
         (appType === 'APP_LIVE' || platform === 'mobile') ? 'APP_LIVE' : null;
     if (effectiveAppType) {
         if (!deviceUuid) {
@@ -104,7 +100,7 @@ exports.authRouter.post('/login', (req, res) => {
         try {
             boundDevice = db_1.db.bindDevice(user.id, deviceUuid, deviceModel || (effectiveAppType === 'APP_LIVE' ? 'iOS Live Device' : 'iOS Input Device'), effectiveAppType, deviceFingerprint);
             // TỰ ĐỘNG SINH KEY BẢN QUYỀN THEO MÁY VÀ TÀI KHOẢN KHI ĐĂNG NHẬP (Chờ khách nhập key để kích hoạt)
-            if (config_1.VOICE_LICENSE_ENABLED && effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
+            if (effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
                 voiceLicense = db_1.db.getVoiceLicenseByDevice(deviceFingerprint, user.id);
                 const now = new Date();
                 const userExpires = new Date(user.expiresAt);

@@ -6,8 +6,8 @@ public class NetworkManager: ObservableObject {
     public static let shared = NetworkManager()
 
     // Cấu hình máy chủ gán cứng cố định (Ẩn hoàn toàn khỏi giao diện người dùng)
-    public static let defaultServerURL = "https://streamslo.date"
-    public static let defaultRtmpHost = "161.248.146.201"
+    public static let defaultServerURL = "https://slomoview.stream"
+    public static let defaultRtmpHost = "157.66.100.10"
     public static let defaultRtmpPort = "1935"
 
     @Published public var serverURL: String = defaultServerURL {
@@ -26,7 +26,7 @@ public class NetworkManager: ObservableObject {
     @Published public var hlsPlaylistUrl: String? = nil
     @Published public var errorMessage: String? = nil
 
-    /// Host & Port RTMP gán cứng vào VPS 161.248.146.201:1935
+    /// Host & Port RTMP gán cứng vào VPS 157.66.100.10:1935
     @Published public var customRtmpHost: String = defaultRtmpHost {
         didSet {
             UserDefaults.standard.set(customRtmpHost, forKey: "custom_rtmp_host")
@@ -40,7 +40,7 @@ public class NetworkManager: ObservableObject {
 
     private init() {
         let savedUrl = UserDefaults.standard.string(forKey: "saved_server_url")
-        if savedUrl == nil || savedUrl?.contains("157.66.100.10") == true || savedUrl?.contains("slomoview.stream") == true {
+        if savedUrl == nil || savedUrl?.contains("161.248.146.201") == true || savedUrl?.contains("streamslo.date") == true {
             self.serverURL = NetworkManager.defaultServerURL
             UserDefaults.standard.set(NetworkManager.defaultServerURL, forKey: "saved_server_url")
         } else {
@@ -48,7 +48,7 @@ public class NetworkManager: ObservableObject {
         }
 
         let savedHost = UserDefaults.standard.string(forKey: "custom_rtmp_host")
-        if savedHost == nil || savedHost == "157.66.100.10" || savedHost?.contains("slomoview.stream") == true {
+        if savedHost == nil || savedHost == "161.248.146.201" || savedHost?.contains("streamslo.date") == true {
             self.customRtmpHost = NetworkManager.defaultRtmpHost
             UserDefaults.standard.set(NetworkManager.defaultRtmpHost, forKey: "custom_rtmp_host")
         } else {

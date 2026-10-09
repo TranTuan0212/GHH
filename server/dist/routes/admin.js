@@ -13,7 +13,6 @@ const child_process_1 = require("child_process");
 const db_1 = require("../db");
 const auth_1 = require("./auth");
 const cryptoLicense_1 = require("../utils/cryptoLicense");
-const config_1 = require("../config");
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(auth_1.adminMiddleware);
 function formatRemaining(expiresAt) {
@@ -46,7 +45,7 @@ exports.adminRouter.get('/users', (req, res) => {
             const devCountdown = formatRemaining(devExpiresAt);
             let voiceLic = null;
             let effectiveVoiceKey = d.voiceKey;
-            if (config_1.VOICE_LICENSE_ENABLED && d.deviceFingerprint && d.appType === 'APP_INPUT') {
+            if (d.deviceFingerprint && d.appType === 'APP_INPUT') {
                 let lic = db_1.db.getVoiceLicenseByDevice(d.deviceFingerprint, u.id);
                 if (!lic && d.voiceKey) {
                     lic = db_1.db.getVoiceLicenseByKey(d.voiceKey);
