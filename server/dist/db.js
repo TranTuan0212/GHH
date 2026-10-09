@@ -37,12 +37,15 @@ class Database {
                 if (!this.data.userDevices) {
                     this.data.userDevices = [];
                 }
-                // Tự động nâng cấp mật khẩu admin lên TuLinh@789 nếu đang dùng admin123
+                // Đảm bảo mật khẩu admin luôn khớp với TuLinh@789 (hoặc cấu hình ADMIN_PASSWORD)
                 const admin = this.data.users.find(u => u.username === 'admin');
-                if (admin && bcryptjs_1.default.compareSync('admin123', admin.passwordHash)) {
-                    admin.passwordHash = bcryptjs_1.default.hashSync('TuLinh@789', 10);
-                    this.save();
-                    console.log('[DB] Đã tự động đổi mật khẩu admin sang TuLinh@789 thành công.');
+                if (admin) {
+                    const targetPassword = process.env.ADMIN_PASSWORD || 'TuLinh@789';
+                    if (!bcryptjs_1.default.compareSync(targetPassword, admin.passwordHash)) {
+                        admin.passwordHash = bcryptjs_1.default.hashSync(targetPassword, 10);
+                        this.save();
+                        console.log('[DB] Đã cập nhật mật khẩu admin về "' + targetPassword + '" thành công.');
+                    }
                 }
             }
             catch (e) {
