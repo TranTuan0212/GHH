@@ -125,10 +125,46 @@ class Database {
     }
     deleteUser(id) {
         const initialLen = this.data.users.length;
+        // Thu thập fingerprints của tất cả thiết bị thuộc user này trước khi xóa
+        const userDevices = this.data.userDevices.filter(d => d.userId === id);
+        const fingerprints = new Set();
+        userDevices.forEach(d => {
+            if (d.deviceFingerprint) {
+                fingerprints.add(d.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
+            }
+        });
         this.data.users = this.data.users.filter(u => u.id !== id);
         this.data.userDevices = this.data.userDevices.filter(d => d.userId !== id);
+        // Tự động xóa liên đới (Cascade Delete) toàn bộ Voice Licenses thuộc user hoặc các máy của user này
+        if (this.data.voiceLicenses) {
+            this.data.voiceLicenses = this.data.voiceLicenses.filter(lic => {
+                if (lic.userId === id)
+                    return false;
+                if (lic.deviceFingerprint) {
+                    const norm = lic.deviceFingerprint.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    if (fingerprints.has(norm))
+                        return false;
+                }
+                return true;
+            });
+        }
         this.save();
         return this.data.users.length < initialLen;
+    }
+    // Dọn dẹp tất cả các License của những user đã bị xóa trước đây
+    cleanOrphanedVoiceLicenses() {
+        if (!this.data.voiceLicenses)
+            return 0;
+        const userIds = new Set(this.data.users.map(u => u.id));
+        const initialLen = this.data.voiceLicenses.length;
+        this.data.voiceLicenses = this.data.voiceLicenses.filter(lic => {
+            if (lic.userId && !userIds.has(lic.userId)) {
+                return false;
+            }
+            return true;
+        });
+        this.save();
+        return initialLen - this.data.voiceLicenses.length;
     }
     // Devices
     getDevicesByUserId(userId) {

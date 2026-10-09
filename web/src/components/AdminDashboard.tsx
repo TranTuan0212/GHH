@@ -352,6 +352,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     deviceFingerprint: string;
     deviceModel: string;
     licenseKey: string;
+    userId?: string;
+    ownerUsername?: string | null;
+    isOrphaned?: boolean;
     registeredAt: string;
     expiresAt: string;
     isLifetime: boolean;
@@ -378,6 +381,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setVoiceLicenses(data.licenses);
       }
     } catch {}
+  };
+
+  const handleCleanOrphanedLicenses = async () => {
+    if (!window.confirm('Bạn có chắc chắn muốn dọn dẹp các máy/bản quyền của những tài khoản đã bị xóa?')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/license/admin/clean-orphaned', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showMsg(data.message || 'Đã dọn dẹp thành công.', 'success');
+        fetchVoiceLicenses();
+      } else {
+        showMsg(data.error || 'Dọn dẹp thất bại.', 'error');
+      }
+    } catch (err: any) {
+      showMsg(err.message || 'Lỗi kết nối khi dọn dẹp.', 'error');
+    }
   };
 
   useEffect(() => {
@@ -1397,6 +1421,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button
+              onClick={handleCleanOrphanedLicenses}
+              className="px-3.5 py-1.5 rounded-xl bg-red-950/60 hover:bg-red-900/80 text-red-300 border border-red-500/30 text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer"
+              title="Dọn dẹp các máy của những tài khoản đã bị xóa khỏi hệ thống"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Dọn Dẹp Máy Đã Xóa TK</span>
+            </button>
+
+            <button
               onClick={fetchVoiceLicenses}
               className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer"
             >
@@ -1532,11 +1565,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   return (
                     <tr key={lic.id} className="hover:bg-slate-800/40 transition-all font-mono text-xs">
-                      {/* Thiết Bị */}
+                      {/* Thiết Bị & Tài Khoản */}
                       <td className="py-3.5 px-4 font-sans font-semibold text-white">
                         <div className="flex items-center space-x-1.5">
                           <Smartphone className="w-4 h-4 text-indigo-400" />
                           <span>{lic.deviceModel || 'iOS Device'}</span>
+                        </div>
+                        <div className="mt-1">
+                          {lic.ownerUsername ? (
+                            <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-950/80 text-indigo-300 border border-indigo-500/30">
+                              👤 {lic.ownerUsername}
+                            </span>
+                          ) : lic.isOrphaned ? (
+                            <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-red-950 text-red-300 border border-red-500/40 animate-pulse">
+                              ⚠️ Đã xóa tài khoản
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-normal bg-slate-800 text-slate-400">
+                              ⚙️ Tạo thủ công
+                            </span>
+                          )}
                         </div>
                       </td>
 

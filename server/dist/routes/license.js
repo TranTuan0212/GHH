@@ -247,15 +247,30 @@ exports.licenseRouter.post('/admin/generate', (req, res) => {
  * Admin lấy toàn bộ danh sách License Key và máy đã kích hoạt
  */
 exports.licenseRouter.get('/admin/list', (req, res) => {
+    const users = db_1.db.getUsers();
+    const userMap = new Map();
+    users.forEach(u => userMap.set(u.id, u.username));
     const licenses = db_1.db.getAllVoiceLicenses().map(l => {
         const isExpired = !l.isLifetime && new Date(l.expiresAt) < new Date();
+        const ownerUsername = l.userId ? userMap.get(l.userId) || null : null;
+        const isOrphaned = Boolean(l.userId && !userMap.has(l.userId));
         return {
             ...l,
+            ownerUsername,
+            isOrphaned,
             isExpired,
             status: !l.isUsed ? 'CHƯA_KÍCH_HOẠT' : (isExpired ? 'HẾT_HẠN' : 'HOẠT_ĐỘNG')
         };
     });
     return res.json({ licenses });
+});
+/**
+ * POST /api/license/admin/clean-orphaned
+ * Admin dọn dẹp các License của tài khoản đã bị xóa
+ */
+exports.licenseRouter.post('/admin/clean-orphaned', (req, res) => {
+    const count = db_1.db.cleanOrphanedVoiceLicenses();
+    return res.json({ message: `Đã dọn dẹp ${count} bản quyền của các tài khoản đã bị xóa.`, count });
 });
 /**
  * DELETE /api/license/admin/:id
