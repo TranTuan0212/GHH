@@ -259,7 +259,7 @@ const appDir = fs.existsSync(path.resolve(__dirname, '../../app'))
   : path.resolve(process.cwd(), 'app');
 
 app.get('/ios/manifest.plist', (req, res) => {
-  const host = req.headers.host || 'streamslo.date';
+  const host = req.headers.host || 'slomoview.stream';
   const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || 'https';
   // Apple itms-services bắt buộc HTTPS (trừ localhost test)

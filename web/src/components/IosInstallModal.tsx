@@ -11,7 +11,7 @@ export const IosInstallModal: React.FC<IosInstallModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
-  const currentHost = typeof window !== 'undefined' ? window.location.host : 'streamslo.date';
+  const currentHost = typeof window !== 'undefined' ? window.location.host : 'slomoview.stream';
   const manifestUrl = `https://${currentHost}/ios/manifest.plist`;
   const otaUrl = `itms-services://?action=download-manifest&url=${manifestUrl}`;
   const directIpaUrl = `/ios/SloMoLive.ipa`;
