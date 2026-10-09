@@ -62,10 +62,78 @@ public class CameraManager: NSObject, ObservableObject {
     public override init() {
         super.init()
         startMotionUpdates()
+        setupAudioSessionObservers()
     }
 
     deinit {
         stopMotionUpdates()
+        removeAudioSessionObservers()
+    }
+
+    private func setupAudioSessionObservers() {
+        let nc = NotificationCenter.default
+        nc.addObserver(
+            self,
+            selector: #selector(handleAudioInterruption),
+            name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleAudioRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleAppDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    private func removeAudioSessionObservers() {
+        let nc = NotificationCenter.default
+        nc.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
+        nc.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
+        nc.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func handleAudioInterruption(notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            print("[CameraManager] ⚠️ Audio session bị gián đoạn (cuộc gọi / thông báo / Siri...)")
+        case .ended:
+            print("[CameraManager] ✅ Audio session kết thúc gián đoạn, tự phục hồi micro...")
+            DispatchQueue.main.async { [weak self] in
+                self?.configureAndActivateAudioSession()
+                self?.liveSession?.muted = false
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    @objc private func handleAudioRouteChange(notification: Notification) {
+        print("[CameraManager] 🎧 Audio route changed, cấu hình lại micro...")
+        DispatchQueue.main.async { [weak self] in
+            self?.configureAndActivateAudioSession()
+            self?.liveSession?.muted = false
+        }
+    }
+
+    @objc private func handleAppDidBecomeActive() {
+        // Tự động kích hoạt lại Audio Session khi quay lại app từ màn hình khóa / background
+        DispatchQueue.main.async { [weak self] in
+            self?.configureAndActivateAudioSession()
+            self?.liveSession?.muted = false
+        }
     }
 
     private func startMotionUpdates() {
@@ -194,9 +262,8 @@ public class CameraManager: NSObject, ObservableObject {
         // NSException ('LFLiveSession init error', reason: 'audioConfiguration is nil') khi gặp
         // nil — NSException từ Objective-C KHÔNG bắt được bằng guard/try-catch của Swift, nên app
         // luôn abort (SIGABRT) ngay khi bấm Bắt đầu Live, bất kể có guard let hay không.
-        // Dùng audio config mặc định (không nil) để thoả initializer; server (mediaServer.ts) vẫn
-        // tự tổng hợp audio câm (anullsrc) như trước, vì ta không gọi pushAudio() ở đâu cả nên
-        // track audio thực tế không có dữ liệu — video vẫn "thuần" Slo-Mo như thiết kế ban đầu.
+        // Đảm bảo Audio Session đã được cấu hình và kích hoạt trước khi tạo LFLiveSession
+        configureAndActivateAudioSession()
         let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
 
         let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
@@ -270,13 +337,45 @@ public class CameraManager: NSObject, ObservableObject {
         liveSession = session
     }
 
-    private func requestAudioPermissionIfNeeded() {
-        AVAudioSession.sharedInstance().requestRecordPermission { _ in }
+    @discardableResult
+    public func configureAndActivateAudioSession() -> Bool {
+        let session = AVAudioSession.sharedInstance()
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
-            try AVAudioSession.sharedInstance().setActive(true)
+            try session.setCategory(
+                .playAndRecord,
+                mode: .videoRecording,
+                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+            )
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            print("[CameraManager] 🎙️ Audio session configured & activated successfully")
+            return true
         } catch {
-            print("[CameraManager] Audio session config error: \(error)")
+            print("[CameraManager] ❌ Audio session config error: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    public func requestAudioPermissionIfNeeded(completion: ((Bool) -> Void)? = nil) {
+        let recordPermission = AVAudioSession.sharedInstance().recordPermission
+        switch recordPermission {
+        case .granted:
+            self.configureAndActivateAudioSession()
+            completion?(true)
+        case .denied:
+            print("[CameraManager] ⚠️ Quyền Micro bị từ chối")
+            completion?(false)
+        case .undetermined:
+            AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.configureAndActivateAudioSession()
+                        self?.rebuildLiveSession()
+                    }
+                    completion?(granted)
+                }
+            }
+        @unknown default:
+            completion?(false)
         }
     }
 
@@ -549,6 +648,10 @@ public class CameraManager: NSObject, ObservableObject {
         // công nhưng không bắn callback .start; nếu chỉ mở cổng ở callback đó thì server chỉ nhận
         // handshake mà không nhận packet video. LFLiveKit tự bỏ frame trong lúc handshake.
         self.isStreamingAtomic = true
+
+        // Đảm bảo Audio Session luôn được kích hoạt và micro không bị mute trước khi bắt đầu stream
+        self.configureAndActivateAudioSession()
+        session.muted = false
 
         // Với input video tự cung cấp, LFLiveKit chỉ xử lý pixel buffer khi session đang running.
         // Nếu không bật cờ này, RTMP vẫn có thể publish thành công nhưng pushVideo không sinh
