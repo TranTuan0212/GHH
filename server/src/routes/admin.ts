@@ -6,6 +6,7 @@ import { exec, execFile } from 'child_process';
 import { db, User } from '../db';
 import { adminMiddleware, AuthRequest } from './auth';
 import { generateVoiceLicenseKey } from '../utils/cryptoLicense';
+import { VOICE_LICENSE_ENABLED } from '../config';
 
 export const adminRouter = Router();
 adminRouter.use(adminMiddleware);
@@ -42,7 +43,7 @@ adminRouter.get('/users', (req: AuthRequest, res: Response) => {
       let voiceLic = null;
       let effectiveVoiceKey = d.voiceKey;
 
-      if (d.deviceFingerprint && d.appType === 'APP_INPUT') {
+      if (VOICE_LICENSE_ENABLED && d.deviceFingerprint && d.appType === 'APP_INPUT') {
         let lic = db.getVoiceLicenseByDevice(d.deviceFingerprint, u.id);
         if (!lic && d.voiceKey) {
           lic = db.getVoiceLicenseByKey(d.voiceKey);

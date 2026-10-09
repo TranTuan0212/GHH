@@ -5,7 +5,16 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const auth_1 = require("./auth");
 const cryptoLicense_1 = require("../utils/cryptoLicense");
+const config_1 = require("../config");
 exports.licenseRouter = (0, express_1.Router)();
+exports.licenseRouter.use((_req, res, next) => {
+    if (!config_1.VOICE_LICENSE_ENABLED) {
+        return res.status(403).json({
+            error: 'Tính năng bản quyền giọng nói hiện đang tạm khóa trên hệ thống.'
+        });
+    }
+    next();
+});
 // Anti-brute-force cache: Map<Key/IP, { count: number; lockedUntil: number }>
 const bruteForceMap = new Map();
 function checkRateLimit(identifier) {

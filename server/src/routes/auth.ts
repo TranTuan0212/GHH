@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
 import { generateVoiceLicenseKey, generateOfflineLicenseToken } from '../utils/cryptoLicense';
-
+import { VOICE_LICENSE_ENABLED } from '../config';
 
 export const authRouter = Router();
 
@@ -114,9 +114,13 @@ authRouter.post('/login', (req: Request, res: Response) => {
   let licenseToken: string | null = null;
   let voiceLicense: any = null;
 
+  if (!VOICE_LICENSE_ENABLED && appType === 'APP_INPUT') {
+    return res.status(403).json({ error: 'Chức năng máy Nhập và Giọng nói hiện đang tạm khóa trên hệ thống.' });
+  }
+
   // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
   const effectiveAppType: 'APP_LIVE' | 'APP_INPUT' | null = 
-    appType === 'APP_INPUT' ? 'APP_INPUT' :
+    (appType === 'APP_INPUT' && VOICE_LICENSE_ENABLED) ? 'APP_INPUT' :
     (appType === 'APP_LIVE' || platform === 'mobile') ? 'APP_LIVE' : null;
 
   if (effectiveAppType) {
@@ -133,7 +137,7 @@ authRouter.post('/login', (req: Request, res: Response) => {
       );
 
       // TỰ ĐỘNG SINH KEY BẢN QUYỀN THEO MÁY VÀ TÀI KHOẢN KHI ĐĂNG NHẬP (Chờ khách nhập key để kích hoạt)
-      if (effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
+      if (VOICE_LICENSE_ENABLED && effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
         voiceLicense = db.getVoiceLicenseByDevice(deviceFingerprint, user.id);
         const now = new Date();
         const userExpires = new Date(user.expiresAt);
