@@ -40,47 +40,53 @@ interface DataGroupingUIProps {
   isVideoFullscreen?: boolean;
 }
 
-// Chuẩn hóa và bóc tách giá trị số (hỗ trợ số từ 1..13 và số 0 không thấy)
-export function parseCard(raw: string): { rank: string; value: number } {
-  if (!raw) return { rank: '', value: 0 };
+// Chuẩn hóa và bóc tách giá trị số (hỗ trợ số từ 1..13, chất Rô ♦, và số 0 không thấy)
+export function parseCard(raw: string): { rank: string; value: number; isRo: boolean; isUnknown: boolean } {
+  if (!raw) return { rank: '', value: 0, isRo: false, isUnknown: false };
   const s = raw.trim().toUpperCase();
 
   // Nút 0 hoặc "Không thấy"
-  if (s === '0' || s.includes('KHÔNG THẤY') || s.includes('KHONG THAY') || s === '?' || s.includes('UNKNOWN')) {
-    return { rank: '0', value: 0 };
+  if (s === '0' || s.includes('KHÔNG THẤY') || s.includes('KHONG THAY') || s === '?' || s.includes('UNKNOWN') || s.includes('N/A')) {
+    return { rank: '0', value: 0, isRo: false, isUnknown: true };
   }
 
-  // Tách bỏ ký hiệu chất ♥♦♣♠ nếu có để lấy rank
-  const cleanRank = s.replace(/[♥♦♣♠]/g, '').trim();
+  // Nhận diện chất Rô (♦ hoặc kết thúc bằng R/RO hoặc chứa RÔ)
+  const isRo = raw.includes('♦') || s.endsWith('R') || s.endsWith('RO') || s.includes('RÔ');
+
+  // Tách bỏ ký hiệu chất ♥♦♣♠ hoặc R/RO nếu có để lấy rank
+  let cleanRank = s.replace(/[♥♦♣♠]/g, '').trim();
+  if (isRo) {
+    cleanRank = cleanRank.replace(/RO?$/i, '').trim();
+  }
 
   // Chuyển ký tự chữ cũ nếu có về số tương ứng
   if (cleanRank === 'A' || cleanRank === 'ÁT' || cleanRank === 'AT' || cleanRank === 'ACE' || cleanRank.endsWith('A') || cleanRank.includes('ACE')) {
-    return { rank: '1', value: 1 };
+    return { rank: '1', value: 1, isRo, isUnknown: false };
   }
   if (cleanRank === 'J' || cleanRank === 'BỒI' || cleanRank === 'JACK' || cleanRank.endsWith('J')) {
-    return { rank: '11', value: 10 };
+    return { rank: '11', value: 10, isRo, isUnknown: false };
   }
   if (cleanRank === 'Q' || cleanRank === 'ĐẦM' || cleanRank === 'QUEEN' || cleanRank.endsWith('Q')) {
-    return { rank: '12', value: 10 };
+    return { rank: '12', value: 10, isRo, isUnknown: false };
   }
   if (cleanRank === 'K' || cleanRank === 'GIÀ' || cleanRank === 'KING' || cleanRank.endsWith('K')) {
-    return { rank: '13', value: 10 };
+    return { rank: '13', value: 10, isRo, isUnknown: false };
   }
 
   // Số từ 0..13
   const match = cleanRank.match(/\d+/);
   if (match) {
     const n = parseInt(match[0], 10);
-    if (n === 0) return { rank: '0', value: 0 };
-    if (n >= 1 && n <= 9) return { rank: n.toString(), value: n };
-    if (n >= 10 && n <= 13) return { rank: n.toString(), value: 10 };
+    if (n === 0) return { rank: '0', value: 0, isRo: false, isUnknown: true };
+    if (n >= 1 && n <= 9) return { rank: n.toString(), value: n, isRo, isUnknown: false };
+    if (n >= 10 && n <= 13) return { rank: n.toString(), value: 10, isRo, isUnknown: false };
   }
 
-  return { rank: cleanRank || s, value: 0 };
+  return { rank: cleanRank || s, value: 0, isRo, isUnknown: false };
 }
 
 // Kiểm tra tính hợp lệ của từng mục đơn lẻ
-function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: string; value: number; error?: string } {
+function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: string; value: number; isRo?: boolean; error?: string } {
   if (!raw || !raw.trim()) {
     return { isValid: false, normalizedRank: '', value: 0, error: 'Vui lòng nhập giá trị!' };
   }
@@ -88,27 +94,32 @@ function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: st
   const s = raw.trim().toUpperCase();
 
   // Hỗ trợ số 0 và "Không thấy"
-  if (s === '0' || s.includes('KHÔNG THẤY') || s.includes('KHONG THAY') || s === '?' || s.includes('UNKNOWN')) {
+  if (s === '0' || s.includes('KHÔNG THẤY') || s.includes('KHONG THAY') || s === '?' || s.includes('UNKNOWN') || s.includes('N/A')) {
     return { isValid: true, normalizedRank: '0', value: 0 };
   }
 
-  const cleanRank = s.replace(/[♥♦♣♠]/g, '').trim();
+  const isRo = raw.includes('♦') || s.endsWith('R') || s.endsWith('RO') || s.includes('RÔ');
+  let cleanRank = s.replace(/[♥♦♣♠]/g, '').trim();
+  if (isRo) {
+    cleanRank = cleanRank.replace(/RO?$/i, '').trim();
+  }
+  const roSuffix = isRo ? '♦' : '';
 
   // 1 / A
   if (cleanRank === '1' || cleanRank === 'A' || cleanRank === 'ÁT' || cleanRank === 'AT' || cleanRank === 'ACE') {
-    return { isValid: true, normalizedRank: '1', value: 1 };
+    return { isValid: true, normalizedRank: `1${roSuffix}`, value: 1, isRo };
   }
   // 11 / J
   if (cleanRank === '11' || cleanRank === 'J' || cleanRank === 'BỒI' || cleanRank === 'JACK') {
-    return { isValid: true, normalizedRank: '11', value: 10 };
+    return { isValid: true, normalizedRank: `11${roSuffix}`, value: 10, isRo };
   }
   // 12 / Q
   if (cleanRank === '12' || cleanRank === 'Q' || cleanRank === 'ĐẦM' || cleanRank === 'QUEEN') {
-    return { isValid: true, normalizedRank: '12', value: 10 };
+    return { isValid: true, normalizedRank: `12${roSuffix}`, value: 10, isRo };
   }
   // 13 / K
   if (cleanRank === '13' || cleanRank === 'K' || cleanRank === 'GIÀ' || cleanRank === 'KING') {
-    return { isValid: true, normalizedRank: '13', value: 10 };
+    return { isValid: true, normalizedRank: `13${roSuffix}`, value: 10, isRo };
   }
 
   // Số từ 2..13
@@ -119,14 +130,14 @@ function validateSingleCard(raw: string): { isValid: boolean; normalizedRank: st
       return { isValid: true, normalizedRank: '0', value: 0 };
     }
     if (num >= 2 && num <= 9) {
-      return { isValid: true, normalizedRank: num.toString(), value: num };
+      return { isValid: true, normalizedRank: `${num}${roSuffix}`, value: num, isRo };
     }
     if (num >= 10 && num <= 13) {
-      return { isValid: true, normalizedRank: num.toString(), value: 10 };
+      return { isValid: true, normalizedRank: `${num}${roSuffix}`, value: 10, isRo };
     }
   }
 
-  return { isValid: true, normalizedRank: raw.trim(), value: 0 };
+  return { isValid: true, normalizedRank: `${raw.trim()}${roSuffix}`, value: 0, isRo };
 }
 
 // Kiểm tra tính hợp lệ của lá bài nhập vào (hỗ trợ cả 1 lá hoặc nhiều lá cách nhau bởi dấu phẩy hoặc khoảng trắng)
@@ -186,7 +197,7 @@ export function isValidCardValue(raw: string): { isValid: boolean; normalizedRan
 
 // Helper tính độ mạnh của quân bài (Át = 14 trong so bài Liêng/Sáp, K = 13, Q = 12, J = 11, 10..2)
 export function getRankPower(r: string): number {
-  const s = r.trim().toUpperCase();
+  const s = r.trim().toUpperCase().replace(/[♥♦♣♠]/g, '');
   if (s === '1' || s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE') return 14;
   if (s === '13' || s === 'K' || s === 'GIÀ' || s === 'KING') return 13;
   if (s === '12' || s === 'Q' || s === 'ĐẦM' || s === 'QUEEN') return 12;
@@ -198,7 +209,7 @@ export function getRankPower(r: string): number {
 
 // Helper hiển thị tên quân bài thân thiện
 export function getRankDisplay(r: string): string {
-  const s = r.trim().toUpperCase();
+  const s = r.trim().toUpperCase().replace(/[♥♦♣♠]/g, '');
   if (s === '1' || s === 'A' || s === 'ÁT' || s === 'AT' || s === 'ACE') return 'A';
   if (s === '13' || s === 'K' || s === 'GIÀ' || s === 'KING') return 'K';
   if (s === '12' || s === 'Q' || s === 'ĐẦM' || s === 'QUEEN') return 'Q';
@@ -212,18 +223,38 @@ export function evaluate3Cards(cards: DataEntry[]): {
   label: string;
   score: number;
   highlightClass: string;
+  hasUnknown?: boolean;
 } {
   if (cards.length === 0) {
     return { type: 'empty', label: 'Chờ nhập (0 lá)', score: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
   }
+
+  // 0. Nếu trong nhóm có quân bài không thấy (rank = '0' hoặc isUnknown)
+  const hasUnknown = cards.some((c) => {
+    const p = parseCard(c.cardValue);
+    return p.rank === '0' || p.isUnknown;
+  });
+  if (hasUnknown) {
+    return {
+      type: 'points',
+      label: '???',
+      score: -1,
+      hasUnknown: true,
+      highlightClass: 'bg-red-950/90 text-red-400 border border-red-500/80 font-black shadow-lg shadow-red-500/30 animate-pulse'
+    };
+  }
+
   if (cards.length < 3) {
     const sum = cards.reduce((acc, c) => acc + parseCard(c.cardValue).value, 0);
     const mod10 = sum % 10;
+    const hasRo = cards.some((c) => parseCard(c.cardValue).isRo);
     return {
       type: 'partial',
-      label: `${mod10} Điểm (${cards.length}/3 lá)`,
+      label: `${mod10} Điểm (${cards.length}/3 lá)${hasRo ? ' (♦)' : ''}`,
       score: mod10,
-      highlightClass: 'text-amber-300 bg-amber-950/40 border-amber-500/40 font-bold'
+      highlightClass: hasRo
+        ? 'text-rose-300 bg-rose-950/50 border-rose-500/50 font-bold'
+        : 'text-amber-300 bg-amber-950/40 border-amber-500/40 font-bold'
     };
   }
 
@@ -232,6 +263,15 @@ export function evaluate3Cards(cards: DataEntry[]): {
   const parsed = last3.map((c) => parseCard(c.cardValue));
   const ranks = parsed.map((p) => p.rank);
 
+  // Tính Ro Bonus nếu có quân bài chất Rô
+  const roCards = parsed.filter((p) => p.isRo);
+  const maxRoPower = roCards.length > 0 ? Math.max(...roCards.map((p) => getRankPower(p.rank))) : 0;
+  // roBonus: Nếu có Rô, cộng thêm từ 52 đến 64 (50 + maxRoPower)
+  // Vì các mức điểm cách nhau 100 hoặc 1000 điểm nên roBonus không phá vỡ cấp điểm,
+  // nhưng khi bằng điểm nhau thì bên có Rô luôn thắng bên chất thường (và Rô lớn ăn Rô nhỏ).
+  const roBonus = maxRoPower > 0 ? 50 + maxRoPower : 0;
+  const roLabelSuffix = roCards.length > 0 ? ' (♦)' : '';
+
   // 1. Kiểm tra Sáp (Bộ 3 giống nhau / 3 mục cùng số)
   // Quy tắc: Sáp số lớn hơn THẮNG Sáp số nhỏ hơn! (Sáp A = 14 > Sáp K = 13 > ... > Sáp 2 = 2)
   if (ranks[0] !== '0' && ranks[0] === ranks[1] && ranks[1] === ranks[2]) {
@@ -239,16 +279,13 @@ export function evaluate3Cards(cards: DataEntry[]): {
     const display = getRankDisplay(ranks[0]);
     return {
       type: 'sap',
-      label: `Bộ Ba (${display}) 👑`,
-      // Base score 10,000 + power đảm bảo Sáp luôn thắng mọi Liêng, và Sáp to thắng Sáp nhỏ
-      score: 10000 + power,
+      label: `Bộ Ba (${display}) 👑${roLabelSuffix}`,
+      score: 10000 + power * 100 + roBonus,
       highlightClass: 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black shadow-lg shadow-amber-500/30 border-amber-300 animate-pulse'
     };
   }
 
   // 2. Kiểm tra Chuỗi liên tiếp (Liêng / 3 số liên tiếp)
-  // Quy tắc: Chuỗi lớn hơn THẮNG Chuỗi nhỏ hơn!
-  // Thứ tự: Q-K-A (cao nhất = 14) > J-Q-K (13) > 10-J-Q (12) > ... > 7-8-9 (9) > 4-5-6 (6) > A-2-3 (nhỏ nhất = 3)
   const rankOrderMap: { [k: string]: number } = {
     '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
     '11': 11, '12': 12, '13': 13, A: 1, J: 11, Q: 12, K: 13
@@ -260,26 +297,21 @@ export function evaluate3Cards(cards: DataEntry[]): {
   let liengLabel = '';
 
   if (orderNums[0] > 0 && orderNums[1] > 0 && orderNums[2] > 0) {
-    // Chuỗi cao nhất: 12-13-1 (Q-K-A) -> Quân kết thúc là Át (power = 14)
     if (orderNums[0] === 1 && orderNums[1] === 12 && orderNums[2] === 13) {
       isLieng = true;
       liengPower = 14;
-      liengLabel = 'Chuỗi Cao (Q-K-A) ⭐';
-    }
-    // Chuỗi thấp nhất: 1-2-3 (A-2-3) -> Quân kết thúc là 3 (power = 3)
-    else if (orderNums[0] === 1 && orderNums[1] === 2 && orderNums[2] === 3) {
+      liengLabel = `Chuỗi Cao (Q-K-A) ⭐${roLabelSuffix}`;
+    } else if (orderNums[0] === 1 && orderNums[1] === 2 && orderNums[2] === 3) {
       isLieng = true;
       liengPower = 3;
-      liengLabel = 'Chuỗi (A-2-3)';
-    }
-    // Chuỗi liên tiếp thông thường: 2-3-4, 4-5-6, 7-8-9, ..., 11-12-13 (J-Q-K)
-    else if (orderNums[0] + 1 === orderNums[1] && orderNums[1] + 1 === orderNums[2]) {
+      liengLabel = `Chuỗi (A-2-3)${roLabelSuffix}`;
+    } else if (orderNums[0] + 1 === orderNums[1] && orderNums[1] + 1 === orderNums[2]) {
       isLieng = true;
-      liengPower = orderNums[2]; // 4..13
+      liengPower = orderNums[2];
       const d0 = getRankDisplay(orderNums[0].toString());
       const d1 = getRankDisplay(orderNums[1].toString());
       const d2 = getRankDisplay(orderNums[2].toString());
-      liengLabel = `Chuỗi (${d0}-${d1}-${d2})`;
+      liengLabel = `Chuỗi (${d0}-${d1}-${d2})${roLabelSuffix}`;
     }
   }
 
@@ -287,10 +319,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
     return {
       type: 'lieng',
       label: liengLabel,
-      // Base score 5,000 + liengPower đảm bảo:
-      // Chuỗi 7-8-9 (5009) > Chuỗi 4-5-6 (5006)
-      // Chuỗi Q-K-A (5014) > Chuỗi J-Q-K (5013)
-      score: 5000 + liengPower,
+      score: 5000 + liengPower * 100 + roBonus,
       highlightClass: 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-black shadow-md shadow-indigo-500/30 border-indigo-400'
     };
   }
@@ -300,27 +329,28 @@ export function evaluate3Cards(cards: DataEntry[]): {
   if (is3Tay) {
     return {
       type: '3tay',
-      label: 'Nhóm Cao (11-13) ✨',
-      // Base score 1,000. Nếu cùng là 3 Tây thì bằng điểm nhau và đều thắng!
-      score: 1000,
+      label: `Nhóm Cao (11-13) ✨${roLabelSuffix}`,
+      score: 1000 + roBonus,
       highlightClass: 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
     };
   }
 
   // 4. Tính điểm thường: tổng điểm mod 10
-  // Luật mới: TRÙNG ĐIỂM THÌ ĐỀU LÀ THẮNG!
-  // Không xét quân bài lớn nhất để phá vỡ hòa điểm.
-  // 2 nhóm cùng 9 điểm sẽ có cùng 900 điểm, đều xếp Hạng 1 (Thắng) và có cùng màu sắc!
+  // Quy tắc Rô: Khi cùng điểm thì có chất Rô luôn lớn hơn chất thường!
   const sum = parsed.reduce((acc, p) => acc + p.value, 0);
   const mod10 = sum % 10;
-  const normalScore = mod10 * 100;
+  const normalScore = mod10 * 1000 + roBonus;
+  const baseLabel = mod10 === 0 ? '0 Điểm' : `${mod10} Điểm`;
+  const labelWithRo = roCards.length > 0 ? `${baseLabel} (♦)` : baseLabel;
 
   return {
     type: 'points',
-    label: mod10 === 0 ? '0 Điểm' : `${mod10} Điểm`,
+    label: labelWithRo,
     score: normalScore,
     highlightClass:
-      mod10 >= 8
+      roCards.length > 0
+        ? 'bg-rose-950/60 text-rose-300 border border-rose-500/50 font-black shadow-sm shadow-rose-500/20'
+        : mod10 >= 8
         ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
         : mod10 >= 5
         ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 font-bold'
@@ -334,23 +364,45 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   label: string;
   total: number;
   highlightClass: string;
+  hasUnknown?: boolean;
 } {
   if (cards.length === 0) {
     return { status: 'empty', label: 'Chờ nhập (0 lá)', total: 0, highlightClass: 'text-slate-500 bg-slate-900/60 border-white/5' };
   }
-  if (cards.length === 1) {
-    const p = parseCard(cards[0].cardValue);
+
+  // 0. Nếu trong nhóm có quân bài không thấy (rank = '0' hoặc isUnknown)
+  const hasUnknown = cards.some((c) => {
+    const p = parseCard(c.cardValue);
+    return p.rank === '0' || p.isUnknown;
+  });
+  if (hasUnknown) {
     return {
-      status: 'partial',
-      label: `${p.value} Điểm (1/2 lá)`,
-      total: p.value,
-      highlightClass: 'text-amber-300 bg-amber-950/40 border-amber-500/40 font-bold'
+      status: 'points',
+      label: '???',
+      total: -1,
+      hasUnknown: true,
+      highlightClass: 'bg-red-950/90 text-red-400 border border-red-500/80 font-black shadow-lg shadow-red-500/30 animate-pulse'
     };
   }
 
   const parsed = cards.map((c) => parseCard(c.cardValue));
   const count = cards.length;
   const danSuffix = isDan ? ' • Đã Khóa' : '';
+
+  const roCards = parsed.filter((p) => p.isRo);
+  const roSuffix = roCards.length > 0 ? ' (♦)' : '';
+
+  if (cards.length === 1) {
+    const p = parsed[0];
+    return {
+      status: 'partial',
+      label: `${p.value} Điểm (1/2 lá)${roSuffix}`,
+      total: p.value,
+      highlightClass: roCards.length > 0
+        ? 'text-rose-300 bg-rose-950/50 border-rose-500/50 font-bold'
+        : 'text-amber-300 bg-amber-950/40 border-amber-500/40 font-bold'
+    };
+  }
 
   // TRƯỜNG HỢP 1: Đúng 2 lá ban đầu
   if (count === 2) {
@@ -360,7 +412,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
     if (aceCount === 2) {
       return {
         status: 'xibang',
-        label: `Cặp 1-1 Đặc Biệt 👑${danSuffix}`,
+        label: `Cặp 1-1 Đặc Biệt 👑${roSuffix}${danSuffix}`,
         total: 21,
         highlightClass: 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 text-slate-950 font-black shadow-lg shadow-amber-500/40 border-amber-300'
       };
@@ -371,7 +423,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
     if (aceCount === 1 && hasFaceOrTen) {
       return {
         status: 'xilat',
-        label: `Chuẩn 21đ 🔥${danSuffix}`,
+        label: `Chuẩn 21đ 🔥${roSuffix}${danSuffix}`,
         total: 21,
         highlightClass: 'bg-gradient-to-r from-emerald-500 to-teal-400 text-slate-950 font-black shadow-lg shadow-emerald-500/40 border-emerald-300'
       };
@@ -387,16 +439,20 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
       if (best >= 16 && best <= 21) {
         return {
           status: 'points',
-          label: `${best} Điểm${danSuffix}`,
+          label: `${best} Điểm${roSuffix}${danSuffix}`,
           total: best,
-          highlightClass: 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
+          highlightClass: roCards.length > 0
+            ? 'bg-rose-950/60 text-rose-300 border border-rose-500/50 font-bold'
+            : 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
         };
       } else {
         return {
           status: 'non',
-          label: `${best} Điểm (Dưới 16đ)${danSuffix}`,
+          label: `${best} Điểm (Dưới 16đ)${roSuffix}${danSuffix}`,
           total: best,
-          highlightClass: 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
+          highlightClass: roCards.length > 0
+            ? 'bg-rose-950/50 text-rose-300 border border-rose-500/40 font-bold'
+            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
         };
       }
     }
@@ -406,28 +462,31 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
     if (total >= 16 && total <= 21) {
       return {
         status: 'points',
-        label: `${total} Điểm${danSuffix}`,
+        label: `${total} Điểm${roSuffix}${danSuffix}`,
         total,
-        highlightClass: 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
+        highlightClass: roCards.length > 0
+          ? 'bg-rose-950/60 text-rose-300 border border-rose-500/50 font-bold'
+          : 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
       };
     } else {
       return {
         status: 'non',
-        label: `${total} Điểm (Dưới 16đ)${danSuffix}`,
+        label: `${total} Điểm (Dưới 16đ)${roSuffix}${danSuffix}`,
         total,
-        highlightClass: 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
+        highlightClass: roCards.length > 0
+          ? 'bg-rose-950/50 text-rose-300 border border-rose-500/40 font-bold'
+          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
       };
     }
   }
 
   // TRƯỜNG HỢP 2: TỪ 3 MỤC TRỞ LÊN (3, 4, 5+ lá)
-  // Tính tổng điểm linh hoạt có xét Át (11, 10 hoặc 1)
   const aceCount = parsed.filter((p) => p.rank === '1' || p.rank === 'A').length;
   const nonAceSum = parsed
     .filter((p) => p.rank !== '1' && p.rank !== 'A')
     .reduce((acc, p) => acc + p.value, 0);
 
-  let total = nonAceSum + aceCount; // Tối thiểu mỗi Át = 1
+  let total = nonAceSum + aceCount;
   if (aceCount > 0) {
     if (nonAceSum + 11 + (aceCount - 1) <= 21) {
       total = nonAceSum + 11 + (aceCount - 1);
@@ -440,7 +499,7 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   if (count === 5 && total <= 21) {
     return {
       status: 'ngulinh',
-      label: `Chu Kỳ Tối Đa 5 Mục 🌟 (${total}đ)${danSuffix}`,
+      label: `Chu Kỳ Tối Đa 5 Mục 🌟 (${total}đ)${roSuffix}${danSuffix}`,
       total,
       highlightClass: 'bg-gradient-to-r from-purple-600 to-indigo-500 text-white font-black shadow-lg shadow-purple-500/40 border-purple-400'
     };
@@ -460,9 +519,11 @@ export function evaluate2Cards(cards: DataEntry[], isDan?: boolean): {
   if (total >= 16) {
     return {
       status: 'points',
-      label: `${total} Điểm${danSuffix}`,
+      label: `${total} Điểm${roSuffix}${danSuffix}`,
       total,
-      highlightClass: 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
+      highlightClass: roCards.length > 0
+        ? 'bg-rose-950/60 text-rose-300 border border-rose-500/50 font-bold'
+        : 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold'
     };
   }
 
@@ -602,6 +663,13 @@ export function getRankTheme(r: number | null, isComplete: boolean) {
         rankCardClass: 'bg-orange-500/15 border-orange-400 ring-1 ring-orange-400/50 shadow-md shadow-orange-500/15',
         rankNumBadgeClass: 'bg-orange-500 text-white font-black shadow-sm'
       };
+    case 10:
+      return {
+        rankBadgeText: '🔘 Hạng 10',
+        rankBadgeClass: 'bg-slate-700 text-slate-200 font-bold border border-slate-500 shadow-sm',
+        rankCardClass: 'bg-slate-800/40 border-slate-600/60 ring-1 ring-slate-600/30',
+        rankNumBadgeClass: 'bg-slate-700 text-slate-200 font-bold shadow-sm'
+      };
     default:
       return {
         rankBadgeText: `Hạng ${r}`,
@@ -661,22 +729,36 @@ export function computeAllGroupAnswers(
       label = res.label;
       highlightClass = res.highlightClass;
       if (items.length > 0) {
-        scoreForRank = res.score;
-        isComplete = items.length >= 3;
+        if (res.hasUnknown) {
+          scoreForRank = -1;
+          isComplete = false;
+        } else {
+          scoreForRank = res.score;
+          isComplete = items.length >= 3;
+        }
       }
     } else {
       const res = evaluate2Cards(items, isStoodPat);
       label = res.label;
       highlightClass = res.highlightClass;
       if (items.length > 0) {
-        isComplete = items.length >= 2;
-        if (res.status === 'xibang') scoreForRank = 5000 + 21;
-        else if (res.status === 'xilat') scoreForRank = 4000;
-        else if (res.status === 'ngulinh') scoreForRank = 3000 + (21 - res.total);
-        else if (res.status === 'points') scoreForRank = 2000 + res.total;
-        else if (res.status === 'non') scoreForRank = 1000 + res.total;
-        else if (res.status === 'quac') scoreForRank = Math.max(0, 35 - res.total);
-        else if (res.status === 'partial') scoreForRank = res.total;
+        if (res.hasUnknown) {
+          scoreForRank = -1;
+          isComplete = false;
+        } else {
+          isComplete = items.length >= 2;
+          const roCards = items.map((c) => parseCard(c.cardValue)).filter((p) => p.isRo);
+          const maxRoPower = roCards.length > 0 ? Math.max(...roCards.map((p) => getRankPower(p.rank))) : 0;
+          const roBonus = maxRoPower > 0 ? 50 + maxRoPower : 0;
+
+          if (res.status === 'xibang') scoreForRank = 50000 + 2100 + roBonus;
+          else if (res.status === 'xilat') scoreForRank = 40000 + roBonus;
+          else if (res.status === 'ngulinh') scoreForRank = 30000 + (21 - res.total) * 100 + roBonus;
+          else if (res.status === 'points') scoreForRank = 20000 + res.total * 100 + roBonus;
+          else if (res.status === 'non') scoreForRank = 10000 + res.total * 100 + roBonus;
+          else if (res.status === 'quac') scoreForRank = Math.max(0, 35 - res.total) * 100;
+          else if (res.status === 'partial') scoreForRank = res.total * 100 + roBonus;
+        }
       }
     }
 
@@ -848,12 +930,12 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
     const saved = localStorage.getItem('app_game_mode');
     return (saved === '2cards' || saved === '3cards') ? saved : '3cards';
   });
-  // Số nhóm: hỗ trợ từ 2 đến 8 nhóm - Mặc định: 4 nhóm
+  // Số nhóm: hỗ trợ từ 2 đến 10 nhóm - Mặc định: 4 nhóm
   const [numGroups, setNumGroups] = useState<number>(() => {
     const saved = localStorage.getItem('app_num_groups');
     if (saved) {
       const parsed = parseInt(saved, 10);
-      if (parsed >= 2 && parsed <= 8) return parsed;
+      if (parsed >= 2 && parsed <= 10) return parsed;
     }
     return 4;
   });
@@ -1338,13 +1420,13 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           </button>
         </div>
 
-        {/* Group Count Selector: 2, 3, 4, 5, 6, 7, 8 */}
+        {/* Group Count Selector: 2, 3, 4, 5, 6, 7, 8, 9, 10 */}
         <div className="flex items-center space-x-1 bg-slate-900/80 px-2 py-1 rounded-lg border border-white/10 self-stretch sm:self-auto overflow-x-auto no-scrollbar">
           <span className="text-[10px] sm:text-[11px] font-semibold text-slate-400 flex items-center pr-1 flex-shrink-0">
             <Hash className="w-3 h-3 mr-0.5 text-indigo-400" />
             Nhóm:
           </span>
-          {[2, 3, 4, 5, 6, 7, 8].map((count) => (
+          {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((count) => (
             <button
               key={count}
               type="button"
@@ -1523,6 +1605,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             ? 'grid-cols-2 sm:grid-cols-3'
             : numGroups === 4
             ? 'grid-cols-2 sm:grid-cols-2 xl:grid-cols-4'
+            : numGroups >= 9
+            ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-5'
             : 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4'
         } gap-2 sm:gap-2.5`}
       >
@@ -1658,12 +1742,19 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     const item = allItemsInGroup[slotIdx];
                     if (item) {
                       const p = parseCard(item.cardValue);
-                      const isUnknown = item.cardValue === '0' || item.cardValue.includes('Không thấy') || item.cardValue.includes('Không rõ') || item.cardValue === '?';
+                      const isUnknown = p.rank === '0' || p.isUnknown || item.cardValue === '0' || item.cardValue.includes('Không thấy') || item.cardValue.includes('Không rõ') || item.cardValue === '?';
+                      const isRo = p.isRo;
                       return (
                         <div
                           key={item.id || slotIdx}
                           onClick={() => handleOpenEditCardPicker(item, groupNum, slotIdx)}
-                          className="flex items-center justify-between px-2 py-1.5 rounded-xl bg-slate-800/90 border border-white/10 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm"
+                          className={`flex items-center justify-between px-2 py-1.5 rounded-xl border hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm ${
+                            isUnknown
+                              ? 'bg-red-950/60 border-red-500/60 shadow-red-500/20 shadow-md'
+                              : isRo
+                              ? 'bg-rose-950/40 border-rose-500/40 hover:border-rose-300'
+                              : 'bg-slate-800/90 border-white/10'
+                          }`}
                           title="Bấm vào mục để sửa hoặc xóa"
                         >
                           <div className="flex items-center space-x-1.5 min-w-0">
@@ -1672,13 +1763,15 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                             </span>
 
                             {isUnknown ? (
-                              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center space-x-1">
-                                <EyeOff className="w-3 h-3 text-amber-400" />
+                              <span className="px-1.5 py-0.5 rounded-md bg-red-600/30 text-red-300 font-black border border-red-500/60 text-[11px] flex items-center space-x-1 animate-pulse">
+                                <EyeOff className="w-3 h-3 text-red-400" />
                                 <span>0 (Không thấy)</span>
                               </span>
                             ) : (
                               <span
-                                className="font-black font-mono text-sm tracking-wide truncate group-hover:text-amber-300 text-white"
+                                className={`font-black font-mono text-sm tracking-wide truncate group-hover:text-amber-300 ${
+                                  isRo ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]' : 'text-white'
+                                }`}
                               >
                                 {item.cardValue}
                               </span>
@@ -1691,7 +1784,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
                           <div className="flex items-center space-x-1 flex-shrink-0">
                             {p.value > 0 && (
-                              <span className="text-[10px] font-mono font-bold text-amber-300 px-1.5 py-0.2 rounded bg-slate-900 border border-white/5">
+                              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-900 border ${
+                                isRo ? 'text-rose-300 border-rose-500/40' : 'text-amber-300 border-white/5'
+                              }`}>
                                 +{p.value}
                               </span>
                             )}
@@ -1836,22 +1931,48 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 />
               </div>
 
-              {/* Quick Select Buttons */}
-              <div className="flex flex-wrap gap-1 pt-0.5">
-                {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '0'].map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setEditCardValue(c)}
-                    className={`px-2 py-0.5 sm:py-1 rounded-md text-[11px] sm:text-xs font-mono font-bold transition-all ${
-                      editCardValue.trim().toUpperCase() === c
-                        ? 'bg-amber-400 text-slate-950 font-black'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    {c === '0' ? '0 (Không thấy)' : c}
-                  </button>
-                ))}
+              {/* Quick Select Buttons - Dãy Rô */}
+              <div className="space-y-1 pt-0.5">
+                <span className="text-[10px] font-bold text-rose-400">♦ Chất Rô (Đỏ):</span>
+                <div className="flex flex-wrap gap-1">
+                  {['1♦', '2♦', '3♦', '4♦', '5♦', '6♦', '7♦', '8♦', '9♦', '10♦', '11♦', '12♦', '13♦'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setEditCardValue(c)}
+                      className={`px-1.5 py-0.5 rounded-md text-[11px] font-mono font-bold transition-all border ${
+                        editCardValue.trim().toUpperCase() === c
+                          ? 'bg-rose-500 text-white font-black border-rose-300 ring-1 ring-rose-400'
+                          : 'bg-rose-950/60 text-rose-300 border-rose-500/30 hover:border-rose-400'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Quick Select Buttons - Thường */}
+              <div className="space-y-1 pt-0.5">
+                <span className="text-[10px] font-bold text-slate-400">Số Thường & Không thấy:</span>
+                <div className="flex flex-wrap gap-1">
+                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '0'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setEditCardValue(c)}
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold transition-all ${
+                        editCardValue.trim().toUpperCase() === c
+                          ? 'bg-amber-400 text-slate-950 font-black'
+                          : c === '0'
+                          ? 'bg-red-950/80 text-red-300 border border-red-500/40 hover:border-red-300'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      {c === '0' ? '0 (Không thấy)' : c}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

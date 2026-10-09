@@ -61,6 +61,22 @@ const CARDS = [
   { rank: '0', label: '0', sublabel: 'Không thấy', color: 'text-orange-400', border: 'border-orange-500/40 hover:border-orange-300', bg: 'bg-gradient-to-b from-orange-950/60 to-slate-900' },
 ];
 
+const RO_CARDS = [
+  { rank: '1♦', num: '1', label: '1♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '2♦', num: '2', label: '2♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '3♦', num: '3', label: '3♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '4♦', num: '4', label: '4♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '5♦', num: '5', label: '5♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '6♦', num: '6', label: '6♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '7♦', num: '7', label: '7♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '8♦', num: '8', label: '8♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '9♦', num: '9', label: '9♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '10♦', num: '10', label: '10♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '11♦', num: '11', label: '11♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '12♦', num: '12', label: '12♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+  { rank: '13♦', num: '13', label: '13♦', color: 'text-rose-400', border: 'border-rose-500/50 hover:border-rose-300', bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900' },
+];
+
 export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   isOpen,
   onClose,
@@ -388,10 +404,10 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               </button>
             </div>
 
-            {/* Chọn Số Nhóm: 2, 3, 4, 5, 6, 7, 8 */}
+            {/* Chọn Số Nhóm: 2, 3, 4, 5, 6, 7, 8, 9, 10 */}
             <div className="flex items-center space-x-1">
               <span className="text-[11px] font-bold text-slate-400 pr-1">Số nhóm:</span>
-              {[2, 3, 4, 5, 6, 7, 8].map((cnt) => (
+              {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((cnt) => (
                 <button
                   key={cnt}
                   type="button"
@@ -520,8 +536,10 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                               className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg font-mono font-black text-xs sm:text-sm transition-all cursor-pointer border ${
                                 isThisCardEditing
                                   ? 'bg-amber-400 text-slate-950 border-amber-300 ring-2 ring-amber-400 ring-offset-1 ring-offset-slate-900 scale-110 shadow-lg shadow-amber-400/50 animate-pulse z-10'
-                                  : it.cardValue === '0'
-                                  ? 'bg-amber-500/25 text-amber-300 border-amber-500/40 hover:border-amber-300 hover:scale-105'
+                                  : it.cardValue === '0' || it.cardValue.includes('Không thấy') || it.cardValue === '?'
+                                  ? 'bg-red-950/90 text-red-300 border-red-500/70 hover:border-red-300 hover:scale-105 shadow-sm shadow-red-500/30 animate-pulse'
+                                  : it.cardValue.includes('♦') || it.cardValue.toUpperCase().endsWith('R')
+                                  ? 'bg-rose-950/80 text-rose-300 border-rose-500/50 hover:border-rose-300 hover:scale-105'
                                   : 'bg-slate-800 text-white border-white/20 hover:border-amber-400 hover:text-amber-300 hover:scale-105'
                               }`}
                               title={`Bấm vào để chọn lại số này (Hiện tại: ${it.cardValue})`}
@@ -616,11 +634,11 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             <button
               type="button"
               onClick={handleUnknownClick}
-              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-500 hover:from-amber-500 hover:to-yellow-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-lg shadow-amber-500/30 transition-all active:scale-95 border border-amber-300 cursor-pointer"
-              title="Gán trạng thái [0 • Không thấy / Bỏ qua] vào nhóm"
+              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-red-700 via-rose-600 to-amber-600 hover:from-red-600 hover:to-amber-500 text-white font-black text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-lg shadow-red-600/40 transition-all active:scale-95 border border-red-400 cursor-pointer"
+              title="Gán trạng thái [0 • Không thấy / Bỏ qua] vào nhóm (Hiện kết quả ??? màu đỏ và loại khỏi BXH)"
             >
-              <EyeOff className="w-4 h-4 text-slate-950" />
-              <span>⚠️ 0 • KHÔNG THẤY (N/A)</span>
+              <EyeOff className="w-4 h-4 text-white" />
+              <span>⚠️ 0 • KHÔNG THẤY (Kết Quả: ???)</span>
             </button>
 
             {/* Nếu đang sửa: hiển thị nút Xóa mục này */}
@@ -644,8 +662,56 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             )}
           </div>
 
-          {/* Bảng Số từ 1 -> 13 và 0 không thấy: 7 cột x 2 hàng, khung to, rõ ràng, cực kỳ dễ nhìn và dễ bấm */}
-          <div className="bg-slate-950/80 p-2 sm:p-2.5 rounded-xl border border-white/10 shadow-inner">
+          {/* 1. DÃY CHẤT RÔ ♦ (MÀU ĐỎ) - TỪ 1♦ ĐẾN 13♦ (CÙNG ĐIỂM LUÔN THẮNG CHẤT THƯỜNG) */}
+          <div className="bg-slate-950/90 p-2 sm:p-2.5 rounded-xl border border-rose-500/40 shadow-inner space-y-1.5">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[11px] font-black text-rose-400 flex items-center space-x-1">
+                <span className="text-sm">♦</span>
+                <span>DÃY CHẤT RÔ (ĐỎ) • CÙNG ĐIỂM LUÔN LỚN HƠN CHẤT THƯỜNG</span>
+              </span>
+              <span className="text-[10px] text-rose-300 font-mono font-bold bg-rose-950/80 px-1.5 py-0.2 rounded border border-rose-500/30">1♦ ➔ 13♦</span>
+            </div>
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+              {RO_CARDS.map((card) => {
+                const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
+                return (
+                  <button
+                    key={card.rank}
+                    type="button"
+                    onClick={() => handleCardClick(card.rank)}
+                    className={`h-11 sm:h-12 rounded-xl flex items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden cursor-pointer ${
+                      card.bg
+                    } ${card.border} ${
+                      isCurrent
+                        ? 'ring-2 ring-rose-400 border-rose-400 scale-105 z-10 shadow-rose-500/40'
+                        : 'hover:scale-105 hover:border-rose-400'
+                    }`}
+                    title={`Chọn số ${card.rank} (Chất Rô Đỏ - Ưu tiên thắng)`}
+                  >
+                    <span className={`text-base sm:text-lg leading-none font-black tracking-tight ${card.color} drop-shadow-md flex items-center gap-0.5`}>
+                      <span>{card.num}</span>
+                      <span className="text-xs sm:text-sm text-rose-500 font-black">♦</span>
+                    </span>
+                    <div className="absolute inset-0 bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                  </button>
+                );
+              })}
+              {/* Ô thứ 14 trong grid 7x2: Huy hiệu chỉ dẫn Rô */}
+              <div className="h-11 sm:h-12 rounded-xl border border-rose-500/30 bg-rose-950/40 flex flex-col items-center justify-center text-center p-0.5 select-none">
+                <span className="text-[11px] font-black text-rose-300 leading-tight">Ưu Tiên</span>
+                <span className="text-[9px] text-rose-400 font-bold leading-tight">Chất Rô ♦</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. DÃY SỐ THƯỜNG (1 -> 13 VÀ 0 KHÔNG THẤY) */}
+          <div className="bg-slate-950/80 p-2 sm:p-2.5 rounded-xl border border-white/10 shadow-inner space-y-1.5">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[11px] font-bold text-slate-300">
+                DÃY SỐ THƯỜNG (ĐEN / TRẮNG / VÀNG)
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">1 ➔ 13 & 0</span>
+            </div>
             <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
               {CARDS.map((card) => {
                 const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
@@ -654,28 +720,25 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                     key={card.rank}
                     type="button"
                     onClick={() => handleCardClick(card.rank)}
-                    className={`h-14 sm:h-16 rounded-xl flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden cursor-pointer ${
+                    className={`h-11 sm:h-12 rounded-xl flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-md relative group overflow-hidden cursor-pointer ${
                       card.bg
                     } ${card.border} ${
                       isCurrent
                         ? 'ring-2 ring-amber-400 border-amber-400 scale-105 z-10 shadow-amber-500/30'
                         : 'hover:scale-105 hover:border-amber-400/60'
                     }`}
-                    title={card.rank === '0' ? 'Mã 0: Không thấy' : `Chọn số ${card.rank}`}
+                    title={card.rank === '0' ? 'Mã 0: Không thấy (Kết quả ???)' : `Chọn số ${card.rank}`}
                   >
-                    {/* Số to rõ ràng */}
-                    <span className={`text-xl sm:text-2xl leading-none font-black tracking-tighter ${card.color} drop-shadow-md`}>
+                    <span className={`text-base sm:text-lg leading-none font-black tracking-tight ${card.color} drop-shadow-md`}>
                       {card.rank}
                     </span>
 
-                    {/* Sublabel nếu có (ví dụ 'Không thấy' cho số 0) */}
                     {card.sublabel && (
-                      <span className="text-[9px] sm:text-[10px] text-orange-300 font-bold leading-none mt-1">
+                      <span className="text-[8px] sm:text-[9px] text-orange-300 font-bold leading-none mt-0.5">
                         {card.sublabel}
                       </span>
                     )}
 
-                    {/* Hiệu ứng ánh sáng khi hover */}
                     <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                   </button>
                 );
