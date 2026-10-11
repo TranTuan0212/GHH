@@ -559,6 +559,19 @@ io.on('connection', (socket) => {
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
   });
 
+  socket.on('live_remote_card', (data) => {
+    if (!user) return;
+    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
+    if (!canControlRoom(targetRoomId)) return;
+
+    io.to(`room_${targetRoomId}`).emit('remote_card_received', {
+      cardValue: data.cardValue,
+      action: data.action || 'ADD',
+      roomId: targetRoomId,
+      timestamp: Date.now()
+    });
+  });
+
   socket.on('clear_cards', (data) => {
     if (!user) return;
     const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;

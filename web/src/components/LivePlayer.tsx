@@ -29,9 +29,11 @@ import {
   ZoomIn,
   Sparkles,
   Settings,
-  RefreshCw
+  RefreshCw,
+  Calculator
 } from 'lucide-react';
 import { StreamSession } from '../types';
+import { LiveFloatingKeypad } from './LiveFloatingKeypad';
 
 export interface TextOverlay {
   id: string;
@@ -554,11 +556,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, []);
 
+  const [isLiveKeypadOpen, setIsLiveKeypadOpen] = useState(false);
+
   useEffect(() => {
     if (isFullscreen) {
       document.body.style.overflow = 'hidden';
+      setIsLiveKeypadOpen(true);
     } else {
       document.body.style.overflow = '';
+      setIsLiveKeypadOpen(false);
     }
     return () => {
       document.body.style.overflow = '';
@@ -3076,6 +3082,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
+            {/* Nút Bật/Tắt Bảng nhập số nổi */}
+            <button
+              type="button"
+              onClick={() => setIsLiveKeypadOpen(prev => !prev)}
+              className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
+                isLiveKeypadOpen
+                  ? 'bg-amber-500/25 border-amber-400 text-amber-300 ring-1 ring-amber-400'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-white/10'
+              }`}
+              title={isLiveKeypadOpen ? 'Ẩn Bảng nhập số Live' : 'Mở Bảng nhập số Live (Bắn số về App)'}
+            >
+              <Calculator className="w-3.5 h-3.5" />
+            </button>
+
             {/* Nút Phóng to toàn màn hình như YouTube */}
             <button
               type="button"
@@ -3217,6 +3237,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Bảng nhập số nổi truyền realtime về app khi phóng to màn hình live */}
+      <LiveFloatingKeypad
+        isOpen={isLiveKeypadOpen}
+        onClose={() => setIsLiveKeypadOpen(false)}
+        socket={socket || null}
+        currentRoomId={roomId || ''}
+      />
     </div>
   );
 };
