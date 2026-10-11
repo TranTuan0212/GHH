@@ -366,13 +366,13 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
           )}
         </div>
 
-        {/* 2. Hàng trên: Nút 0 (Xanh) và Nút Xóa (Đỏ) */}
-        <div className="grid grid-cols-2 gap-2 flex-shrink-0">
+        {/* 2. Hàng trên: Nút 0 (Xanh), Nút Xóa (Cam) và Nút Reset (Đỏ) */}
+        <div className="grid grid-cols-3 gap-1.5 flex-shrink-0">
           {/* Nút 0 */}
           <button
             type="button"
             onClick={() => handleCardClick('0')}
-            className="h-12 rounded-xl bg-blue-900/70 hover:bg-blue-800/90 active:scale-95 border border-blue-400/60 text-blue-200 hover:text-white font-black text-xl flex items-center justify-center shadow-lg transition-all cursor-pointer"
+            className="h-11 rounded-xl bg-blue-900/80 hover:bg-blue-800 active:scale-95 border border-blue-400/60 text-blue-200 hover:text-white font-black text-xl flex items-center justify-center shadow-md transition-all cursor-pointer"
             title="Bấm số 0 (Lá bài ẩn)"
           >
             0
@@ -382,11 +382,22 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
           <button
             type="button"
             onClick={handleDeleteClick}
-            className="h-12 rounded-xl bg-red-950/70 hover:bg-red-900/90 active:scale-95 border border-red-500/60 text-red-200 hover:text-white font-bold text-sm sm:text-base flex items-center justify-center space-x-1.5 shadow-lg transition-all cursor-pointer"
-            title="Xóa lùi 1 số vừa nhập"
+            className="h-11 rounded-xl bg-amber-950/80 hover:bg-amber-900 active:scale-95 border border-amber-500/60 text-amber-200 hover:text-white font-bold text-sm flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
+            title="Xóa lùi 1 số vừa nhập (Hoàn tác)"
           >
-            <Delete className="w-5 h-5 text-red-300" />
+            <Delete className="w-4 h-4 text-amber-300" />
             <span>Xóa</span>
+          </button>
+
+          {/* Nút Reset đỏ */}
+          <button
+            type="button"
+            onClick={handleResetRound}
+            className="h-11 rounded-xl bg-red-600/90 hover:bg-red-500 active:scale-95 border border-red-400 text-white font-bold text-sm flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
+            title="Reset toàn bộ số đã bấm và reset ván bài trên App"
+          >
+            <RotateCcw className="w-4 h-4 text-white" />
+            <span>Reset</span>
           </button>
         </div>
 
