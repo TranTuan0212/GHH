@@ -220,8 +220,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const dyPercent = (dy / rect.height) * 100;
 
       const pipWidthPercent = (pipWidth / rect.width) * 100;
-      const newX = Math.max(0.5, Math.min(99.5 - pipWidthPercent, pipDragStartRef.current.origXPercent + dxPercent));
-      const newY = Math.max(0.5, Math.min(85, pipDragStartRef.current.origYPercent + dyPercent));
+      const newX = Math.max(-15, Math.min(100 - (pipWidthPercent * 0.2), pipDragStartRef.current.origXPercent + dxPercent));
+      const newY = Math.max(-5, Math.min(95, pipDragStartRef.current.origYPercent + dyPercent));
 
       setPipPos({ xPercent: newX, yPercent: newY });
     };
@@ -303,8 +303,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const dyPercent = (dy / rect.height) * 100;
 
         const pipWidthPercent = (pipWidth / rect.width) * 100;
-        const newX = Math.max(0.5, Math.min(99.5 - pipWidthPercent, pipDragStartRef.current.origXPercent + dxPercent));
-        const newY = Math.max(0.5, Math.min(85, pipDragStartRef.current.origYPercent + dyPercent));
+        const newX = Math.max(-15, Math.min(100 - (pipWidthPercent * 0.2), pipDragStartRef.current.origXPercent + dxPercent));
+        const newY = Math.max(-5, Math.min(95, pipDragStartRef.current.origYPercent + dyPercent));
 
         setPipPos({ xPercent: newX, yPercent: newY });
       }
@@ -478,13 +478,48 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (e.cancelable) e.preventDefault();
       const dx = e.touches[0].clientX - mainPanStartRef.current.startX;
       const dy = e.touches[0].clientY - mainPanStartRef.current.startY;
-      const maxPanX = (mainZoom - 1) * 220;
-      const maxPanY = (mainZoom - 1) * 160;
       setMainPan({
-        x: Math.max(-maxPanX, Math.min(maxPanX, mainPanStartRef.current.origPan.x + dx)),
-        y: Math.max(-maxPanY, Math.min(maxPanY, mainPanStartRef.current.origPan.y + dy)),
+        x: Math.round(mainPanStartRef.current.origPan.x + dx),
+        y: Math.round(mainPanStartRef.current.origPan.y + dy),
       });
     }
+  };
+
+  const handleContainerMouseDown = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    // Bỏ qua nếu bấm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
+    if (
+      target.closest('[data-live-keypad="true"]') ||
+      target.closest('[data-pip-window="true"]') ||
+      target.closest('[data-text-overlay="true"]') ||
+      target.closest('button')
+    ) {
+      return;
+    }
+
+    if (mainZoom <= 1.05) return;
+
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origPan = { ...mainPan };
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      setMainPan({
+        x: Math.round(origPan.x + dx),
+        y: Math.round(origPan.y + dy),
+      });
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
   };
 
   const handleContainerTouchEnd = (e: React.TouchEvent) => {
@@ -2283,14 +2318,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       <div
         ref={videoContainerRef}
         onDoubleClick={toggleFullscreen}
+        onMouseDown={handleContainerMouseDown}
         onTouchStart={handleContainerTouchStart}
         onTouchMove={handleContainerTouchMove}
         onTouchEnd={handleContainerTouchEnd}
         style={{ touchAction: 'none' }}
-        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
+        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none ${
+          mainZoom > 1.05 ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+        } ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
-        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay để zoom cận cảnh."
+        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay hoặc chuột để zoom và kéo cận cảnh."
       >
         {/* Nút đặt lại zoom khi đang phóng to cận cảnh */}
         {mainZoom > 1.05 && (
