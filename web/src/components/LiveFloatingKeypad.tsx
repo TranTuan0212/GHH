@@ -34,17 +34,23 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     return { x: 24, y: 70 };
   });
 
-  // Khi mở bảng, đảm bảo tọa độ không bị trôi ra ngoài màn hình
+  // Khi mở bảng, phục hồi chuẩn xác vị trí người dùng đã đặt từ localStorage
   useEffect(() => {
     if (isOpen) {
-      setPosition(prev => {
-        const maxX = Math.max(0, (window?.innerWidth || 1000) - 300);
-        const maxY = Math.max(0, (window?.innerHeight || 800) - 300);
-        if (prev.x > maxX || prev.y > maxY || prev.x < 0 || prev.y < 0) {
-          return { x: 24, y: 70 };
+      try {
+        const saved = localStorage.getItem('live_keypad_pos');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+            const screenW = window?.innerWidth || 1000;
+            const screenH = window?.innerHeight || 800;
+            const safeX = Math.max(0, Math.min(parsed.x, screenW - 80));
+            const safeY = Math.max(0, Math.min(parsed.y, screenH - 80));
+            setPosition({ x: safeX, y: safeY });
+            return;
+          }
         }
-        return prev;
-      });
+      } catch {}
     }
   }, [isOpen]);
 
