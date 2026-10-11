@@ -8,13 +8,17 @@ interface LiveFloatingKeypadProps {
   onClose: () => void;
   socket: Socket | null;
   currentRoomId: string;
+  roomName?: string;
+  container?: HTMLElement | null;
 }
 
 export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
   isOpen,
   onClose,
   socket,
-  currentRoomId
+  currentRoomId,
+  roomName,
+  container
 }) => {
   const [pressedCards, setPressedCards] = useState<string[]>([]);
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
@@ -29,6 +33,20 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     } catch {}
     return { x: 24, y: 70 };
   });
+
+  // Khi mở bảng, đảm bảo tọa độ không bị trôi ra ngoài màn hình
+  useEffect(() => {
+    if (isOpen) {
+      setPosition(prev => {
+        const maxX = Math.max(0, (window?.innerWidth || 1000) - 300);
+        const maxY = Math.max(0, (window?.innerHeight || 800) - 300);
+        if (prev.x > maxX || prev.y > maxY || prev.x < 0 || prev.y < 0) {
+          return { x: 24, y: 70 };
+        }
+        return prev;
+      });
+    }
+  }, [isOpen]);
 
   const [size, setSize] = useState<{ width: number; height: number }>(() => {
     try {
@@ -205,26 +223,31 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
   const content = (
     <div
       style={{
-        position: 'fixed',
+        position: 'absolute',
         left: `${position.x}px`,
         top: `${position.y}px`,
         width: `${size.width}px`,
         height: `${size.height}px`,
-        zIndex: 9999999
+        zIndex: 99999999
       }}
-      className="backdrop-blur-md bg-black/65 border border-white/30 rounded-2xl shadow-2xl flex flex-col select-none overflow-hidden transition-all duration-75"
+      className="backdrop-blur-md bg-black/75 border border-white/30 rounded-2xl shadow-2xl flex flex-col select-none overflow-hidden transition-all duration-75"
     >
       {/* Header kéo di chuyển & Nút đóng/reset */}
       <div
         onMouseDown={handleDragMouseDown}
         onTouchStart={handleDragTouchStart}
-        className="flex items-center justify-between px-3 py-2 bg-white/5 border-b border-white/15 cursor-move active:cursor-grabbing"
+        className="flex items-center justify-between px-3 py-2 bg-white/10 border-b border-white/15 cursor-move active:cursor-grabbing"
       >
         <div className="flex items-center space-x-2 text-white/90">
           <Move className="w-3.5 h-3.5 text-amber-300" />
           <span className="text-xs font-black tracking-wide uppercase text-slate-200">
             Bảng Nhập Live
           </span>
+          {roomName && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 font-mono font-bold" title="Tài khoản nhận số">
+              {roomName}
+            </span>
+          )}
         </div>
         <div className="flex items-center space-x-1.5">
           <button
@@ -337,5 +360,6 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
   );
 
   if (typeof document === 'undefined') return null;
-  return createPortal(content, document.body);
+  const target = container || (document.fullscreenElement as HTMLElement) || document.body;
+  return createPortal(content, target);
 };

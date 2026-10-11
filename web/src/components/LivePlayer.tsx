@@ -3238,12 +3238,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </div>
       )}
 
+      {/* Nút mở nhanh Bảng nhập số trên màn hình khi Fullscreen mà lỡ đóng */}
+      {isFullscreen && !isLiveKeypadOpen && (
+        <button
+          type="button"
+          onClick={() => setIsLiveKeypadOpen(true)}
+          className="absolute top-4 left-4 z-[999990] flex items-center space-x-1.5 px-3 py-1.5 rounded-xl backdrop-blur-md bg-amber-500/90 hover:bg-amber-400 text-black font-bold text-xs shadow-xl transition-all active:scale-95 border border-white/20 cursor-pointer"
+          title="Mở Bảng nhập số Live"
+        >
+          <Calculator className="w-4 h-4 text-black" />
+          <span>Mở Bảng Nhập</span>
+        </button>
+      )}
+
       {/* Bảng nhập số nổi truyền realtime về app khi phóng to màn hình live */}
       <LiveFloatingKeypad
         isOpen={isLiveKeypadOpen}
         onClose={() => setIsLiveKeypadOpen(false)}
         socket={socket || null}
         currentRoomId={roomId || ''}
+        roomName={roomName}
+        container={playerContainerRef.current}
       />
     </div>
   );
