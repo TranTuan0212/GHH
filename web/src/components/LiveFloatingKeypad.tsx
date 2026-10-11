@@ -56,12 +56,12 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         if (typeof parsed.width === 'number' && typeof parsed.height === 'number') {
           return {
             width: Math.max(220, Math.min(parsed.width, 420)),
-            height: Math.max(260, Math.min(parsed.height, 410))
+            height: Math.max(220, Math.min(parsed.height, 360))
           };
         }
       }
     } catch {}
-    return { width: 320, height: 390 };
+    return { width: 310, height: 295 };
   });
 
   const isDraggingRef = useRef(false);
@@ -139,7 +139,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       const maxW = Math.max(340, (window?.innerWidth || 1000) - 20);
       const maxH = Math.max(490, (window?.innerHeight || 800) - 30);
       const newW = Math.round(Math.max(220, Math.min(maxW, pinchStartRef.current.w * ratio)));
-      const newH = Math.round(Math.max(260, Math.min(maxH, pinchStartRef.current.h * ratio)));
+      const newH = Math.round(Math.max(220, Math.min(maxH, pinchStartRef.current.h * ratio)));
       const nextSize = { width: newW, height: newH };
       setSize(nextSize);
       try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -229,7 +229,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         const maxW = Math.max(340, (window?.innerWidth || 1000) - position.x);
         const maxH = Math.max(490, (window?.innerHeight || 800) - position.y);
         const newW = Math.round(Math.max(220, Math.min(maxW, resizeStartRef.current.w + deltaX)));
-        const newH = Math.round(Math.max(260, Math.min(maxH, resizeStartRef.current.h + deltaY)));
+        const newH = Math.round(Math.max(220, Math.min(maxH, resizeStartRef.current.h + deltaY)));
         const nextSize = { width: newW, height: newH };
         setSize(nextSize);
         try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -286,6 +286,15 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     }
   };
 
+  const handleContainerMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('[data-resize-handle="true"]')) {
+      return;
+    }
+    handleDragMouseDown(e);
+  };
+
   if (!isOpen) return null;
 
   const content = (
@@ -294,7 +303,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       onTouchStart={handleKeypadTouchStart}
       onTouchMove={handleKeypadTouchMove}
       onTouchEnd={handleKeypadTouchEnd}
-      onMouseDown={(e) => e.stopPropagation()}
+      onMouseDown={handleContainerMouseDown}
       onDoubleClick={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
@@ -307,61 +316,23 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         zIndex: 99999999,
         touchAction: 'none'
       }}
-      className="backdrop-blur-md bg-black/75 border border-white/30 rounded-2xl shadow-2xl flex flex-col select-none overflow-hidden transition-all duration-75"
+      className="backdrop-blur-md bg-black/80 border border-white/30 rounded-2xl shadow-2xl flex flex-col select-none overflow-hidden transition-all duration-75 cursor-move active:cursor-grabbing p-2 gap-1.5"
     >
-      {/* Header kéo di chuyển & Nút đóng/reset */}
-      <div
-        data-drag-handle="true"
-        onMouseDown={handleDragMouseDown}
-        className="flex items-center justify-between px-3 py-2 bg-white/10 border-b border-white/15 cursor-move active:cursor-grabbing"
-      >
-        <div className="flex items-center space-x-2 text-white/90">
-          <Move className="w-3.5 h-3.5 text-amber-300" />
-          <span className="text-xs font-black tracking-wide uppercase text-slate-200">
-            Bảng Nhập Live
-          </span>
-          {roomName && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 font-mono font-bold" title="Tài khoản nhận số">
-              {roomName}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center space-x-1.5">
-          <button
-            type="button"
-            onClick={handleResetRound}
-            className="p-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-amber-300 border border-white/10 transition-colors"
-            title="Làm mới ván bài (Xóa hết)"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-lg bg-slate-800/80 hover:bg-red-600 text-slate-300 hover:text-white border border-white/10 transition-colors"
-            title="Đóng bảng nhập"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Main Container */}
-      <div className="flex-1 p-2 flex flex-col gap-1.5 overflow-hidden">
-        {/* 1. Màn hình hiển thị số: Ô gọn thấp, các số trong ô vuông sắc nét */}
+      {/* 1. Màn hình hiển thị số + Tên user + Nút đóng (1 hàng duy nhất) */}
+      <div className="flex items-center gap-1.5 flex-shrink-0 cursor-move">
         <div
           ref={displayScrollRef}
-          className="h-9 px-1.5 py-1 rounded-xl bg-black/50 border border-white/20 flex items-center gap-1 overflow-x-auto no-scrollbar shadow-inner flex-shrink-0"
+          className="flex-1 h-8 px-1.5 py-0.5 rounded-lg bg-black/60 border border-white/20 flex items-center gap-1 overflow-x-auto no-scrollbar shadow-inner"
         >
           {pressedCards.length === 0 ? (
-            <span className="text-slate-400 text-xs font-medium px-1.5 italic select-none">
+            <span className="text-slate-400 text-[11px] font-medium px-1 italic select-none">
               Chưa bấm số nào
             </span>
           ) : (
             pressedCards.map((card, idx) => (
               <div
                 key={idx}
-                className="w-7 h-7 flex-shrink-0 rounded-md bg-slate-800/90 border border-white/30 text-white font-black text-xs flex items-center justify-center shadow-md animate-fadeIn"
+                className="w-6.5 h-6.5 flex-shrink-0 rounded-md bg-slate-800/90 border border-white/30 text-white font-black text-xs flex items-center justify-center shadow-md animate-fadeIn"
               >
                 {card}
               </div>
@@ -369,65 +340,80 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
           )}
         </div>
 
-        {/* 2. Hàng trên: Nút 0 (Xanh), Nút Xóa (Cam) và Nút Reset (Đỏ) */}
-        <div className="grid grid-cols-3 gap-1.5 flex-shrink-0">
-          {/* Nút 0 */}
-          <button
-            type="button"
-            onClick={() => handleCardClick('0')}
-            className="h-9 rounded-xl bg-blue-900/80 hover:bg-blue-800 active:scale-95 border border-blue-400/60 text-blue-200 hover:text-white font-black text-lg flex items-center justify-center shadow-md transition-all cursor-pointer"
-            title="Bấm số 0 (Lá bài ẩn)"
-          >
-            0
-          </button>
+        {roomName && (
+          <span className="text-[10px] px-1.5 py-1 rounded-md bg-amber-400/20 text-amber-300 font-mono font-bold border border-amber-400/30 flex-shrink-0" title="Tài khoản nhận số">
+            {roomName}
+          </span>
+        )}
 
-          {/* Nút Xóa */}
-          <button
-            type="button"
-            onClick={handleDeleteClick}
-            className="h-9 rounded-xl bg-amber-950/80 hover:bg-amber-900 active:scale-95 border border-amber-500/60 text-amber-200 hover:text-white font-bold text-xs flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
-            title="Xóa lùi 1 số vừa nhập (Hoàn tác)"
-          >
-            <Delete className="w-3.5 h-3.5 text-amber-300" />
-            <span>Xóa</span>
-          </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-7 h-7 rounded-md bg-slate-800/80 hover:bg-red-600 text-slate-300 hover:text-white border border-white/10 transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer"
+          title="Đóng bảng nhập"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
-          {/* Nút Reset đỏ */}
-          <button
-            type="button"
-            onClick={handleResetRound}
-            className="h-9 rounded-xl bg-red-600/90 hover:bg-red-500 active:scale-95 border border-red-400 text-white font-bold text-xs flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
-            title="Reset toàn bộ số đã bấm và reset ván bài trên App"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-white" />
-            <span>Reset</span>
-          </button>
-        </div>
+      {/* 2. Hàng chức năng 4 cột: 0 (Xanh), 13 (Xám), Xóa (Cam) và Reset (Đỏ) */}
+      <div className="grid grid-cols-4 gap-1.5 flex-shrink-0">
+        {/* Nút 0 */}
+        <button
+          type="button"
+          onClick={() => handleCardClick('0')}
+          className="h-8.5 rounded-lg bg-blue-900/80 hover:bg-blue-800 active:scale-95 border border-blue-400/60 text-blue-200 hover:text-white font-black text-base flex items-center justify-center shadow-md transition-all cursor-pointer"
+          title="Bấm số 0 (Lá bài ẩn)"
+        >
+          0
+        </button>
 
-        {/* 3. Lưới 4 cột: 1 -> 12 */}
-        <div className="grid grid-cols-4 gap-1.5 flex-1 min-h-0">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((num) => (
-            <button
-              key={num}
-              type="button"
-              onClick={() => handleCardClick(String(num))}
-              className="rounded-xl bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-base sm:text-lg flex items-center justify-center shadow-md transition-all cursor-pointer"
-              title={`Bấm số ${num}`}
-            >
-              {num}
-            </button>
-          ))}
-        </div>
-
-        {/* 4. Hàng cuối: Nút 13 to bản trải rộng */}
+        {/* Nút 13 */}
         <button
           type="button"
           onClick={() => handleCardClick('13')}
-          className="h-10 rounded-xl bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-lg flex items-center justify-center shadow-md transition-all cursor-pointer flex-shrink-0"
+          className="h-8.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-black text-base flex items-center justify-center shadow-md transition-all cursor-pointer"
           title="Bấm số 13"
         >
           13
         </button>
+
+        {/* Nút Xóa */}
+        <button
+          type="button"
+          onClick={handleDeleteClick}
+          className="h-8.5 rounded-lg bg-amber-950/80 hover:bg-amber-900 active:scale-95 border border-amber-500/60 text-amber-200 hover:text-white font-bold text-xs flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
+          title="Xóa lùi 1 số vừa nhập (Hoàn tác)"
+        >
+          <Delete className="w-3.5 h-3.5 text-amber-300" />
+          <span>Xóa</span>
+        </button>
+
+        {/* Nút Reset đỏ */}
+        <button
+          type="button"
+          onClick={handleResetRound}
+          className="h-8.5 rounded-lg bg-red-600/90 hover:bg-red-500 active:scale-95 border border-red-400 text-white font-bold text-xs flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
+          title="Reset toàn bộ số đã bấm và reset ván bài trên App"
+        >
+          <RotateCcw className="w-3.5 h-3.5 text-white" />
+          <span>Reset</span>
+        </button>
+      </div>
+
+      {/* 3. Lưới 4 cột: 1 -> 12 (3 hàng x 4 cột) */}
+      <div className="grid grid-cols-4 gap-1.5 flex-1 min-h-0">
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((num) => (
+          <button
+            key={num}
+            type="button"
+            onClick={() => handleCardClick(String(num))}
+            className="rounded-lg bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-base flex items-center justify-center shadow-md transition-all cursor-pointer"
+            title={`Bấm số ${num}`}
+          >
+            {num}
+          </button>
+        ))}
       </div>
 
       {/* Resize Handle ở góc dưới bên phải */}
