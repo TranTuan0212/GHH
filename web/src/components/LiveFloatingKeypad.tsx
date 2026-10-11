@@ -65,6 +65,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isResizing, setIsResizing] = useState(false);
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; w: number; h: number }>({ x: 0, y: 0, w: 340, h: 490 });
+  const [pinchStart, setPinchStart] = useState<{ dist: number; w: number; h: number } | null>(null);
   const displayScrollRef = useRef<HTMLDivElement>(null);
 
   // Auto scroll right when new card is pressed
@@ -74,9 +75,52 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     }
   }, [pressedCards]);
 
+  // Cảm ứng 2 ngón tay vuốt phóng to / thu nhỏ bảng (Pinch-to-Zoom)
+  const handleKeypadTouchStart = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (e.touches.length === 2) {
+      setIsDragging(false);
+      setIsResizing(false);
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      setPinchStart({
+        dist: Math.max(10, dist),
+        w: size.width,
+        h: size.height
+      });
+    }
+  };
+
+  const handleKeypadTouchMove = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (e.touches.length === 2 && pinchStart) {
+      if (e.cancelable) e.preventDefault();
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const ratio = dist / pinchStart.dist;
+      const maxW = Math.max(340, (window?.innerWidth || 1000) - 20);
+      const maxH = Math.max(490, (window?.innerHeight || 800) - 30);
+      const newW = Math.round(Math.max(240, Math.min(maxW, pinchStart.w * ratio)));
+      const newH = Math.round(Math.max(360, Math.min(maxH, pinchStart.h * ratio)));
+      const nextSize = { width: newW, height: newH };
+      setSize(nextSize);
+      try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
+    }
+  };
+
+  const handleKeypadTouchEnd = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (e.touches.length < 2) {
+      setPinchStart(null);
+    }
+  };
+
   // Dragging logic
   const handleDragMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(true);
     setDragOffset({
       x: e.clientX - position.x,
@@ -85,6 +129,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
   };
 
   const handleDragTouchStart = (e: React.TouchEvent) => {
+    e.stopPropagation();
     if (e.touches.length === 1) {
       setIsDragging(true);
       setDragOffset({
@@ -94,7 +139,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     }
   };
 
-  // Resizing logic
+  // Resizing logic (Góc kéo chuột/1 ngón tay dưới cùng)
   const handleResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -222,13 +267,24 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
 
   const content = (
     <div
+      data-live-keypad="true"
+      onTouchStart={handleKeypadTouchStart}
+      onTouchMove={handleKeypadTouchMove}
+      onTouchEnd={handleKeypadTouchEnd}
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseMove={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
       style={{
         position: 'absolute',
         left: `${position.x}px`,
         top: `${position.y}px`,
         width: `${size.width}px`,
         height: `${size.height}px`,
-        zIndex: 99999999
+        zIndex: 99999999,
+        touchAction: 'none'
       }}
       className="backdrop-blur-md bg-black/75 border border-white/30 rounded-2xl shadow-2xl flex flex-col select-none overflow-hidden transition-all duration-75"
     >

@@ -398,7 +398,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchStart = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
-    // CHỈ bỏ qua nếu đang ở chế độ tua (!isLive) VÀ chạm trúng màn nhỏ PiP ở góc hoặc text overlay
+    // Bỏ qua nếu chạm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
+    if (target.closest('[data-live-keypad="true"]')) {
+      return;
+    }
     if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
       return;
     }
@@ -446,6 +449,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchMove = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
+    if (target.closest('[data-live-keypad="true"]')) {
+      return;
+    }
     if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
       return;
     }
@@ -3082,19 +3088,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
-            {/* Nút Bật/Tắt Bảng nhập số nổi */}
-            <button
-              type="button"
-              onClick={() => setIsLiveKeypadOpen(prev => !prev)}
-              className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
-                isLiveKeypadOpen
-                  ? 'bg-amber-500/25 border-amber-400 text-amber-300 ring-1 ring-amber-400'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-white/10'
-              }`}
-              title={isLiveKeypadOpen ? 'Ẩn Bảng nhập số Live' : 'Mở Bảng nhập số Live (Bắn số về App)'}
-            >
-              <Calculator className="w-3.5 h-3.5" />
-            </button>
+            {/* Nút Bật/Tắt Bảng nhập số nổi (Chỉ xuất hiện khi ở chế độ phóng to Toàn màn hình) */}
+            {isFullscreen && (
+              <button
+                type="button"
+                onClick={() => setIsLiveKeypadOpen(prev => !prev)}
+                className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
+                  isLiveKeypadOpen
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-300 ring-1 ring-amber-400'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-white/10'
+                }`}
+                title={isLiveKeypadOpen ? 'Ẩn Bảng nhập số Live' : 'Mở Bảng nhập số Live (Bắn số về App)'}
+              >
+                <Calculator className="w-3.5 h-3.5" />
+              </button>
+            )}
 
             {/* Nút Phóng to toàn màn hình như YouTube */}
             <button
@@ -3251,15 +3259,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </button>
       )}
 
-      {/* Bảng nhập số nổi truyền realtime về app khi phóng to màn hình live */}
-      <LiveFloatingKeypad
-        isOpen={isLiveKeypadOpen}
-        onClose={() => setIsLiveKeypadOpen(false)}
-        socket={socket || null}
-        currentRoomId={roomId || ''}
-        roomName={roomName}
-        container={playerContainerRef.current}
-      />
+      {/* Bảng nhập số nổi truyền realtime về app CHỈ hiển thị khi phóng to màn hình live */}
+      {isFullscreen && (
+        <LiveFloatingKeypad
+          isOpen={isLiveKeypadOpen}
+          onClose={() => setIsLiveKeypadOpen(false)}
+          socket={socket || null}
+          currentRoomId={roomId || ''}
+          roomName={roomName}
+          container={playerContainerRef.current}
+        />
+      )}
     </div>
   );
 };
