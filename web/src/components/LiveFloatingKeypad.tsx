@@ -61,11 +61,13 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     return { width: 340, height: 490 };
   });
 
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isResizing, setIsResizing] = useState(false);
-  const [resizeStart, setResizeStart] = useState<{ x: number; y: number; w: number; h: number }>({ x: 0, y: 0, w: 340, h: 490 });
-  const [pinchStart, setPinchStart] = useState<{ dist: number; w: number; h: number } | null>(null);
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef<{ clientX: number; clientY: number; posX: number; posY: number } | null>(null);
+
+  const isResizingRef = useRef(false);
+  const resizeStartRef = useRef<{ clientX: number; clientY: number; w: number; h: number } | null>(null);
+
+  const pinchStartRef = useRef<{ dist: number; w: number; h: number } | null>(null);
   const displayScrollRef = useRef<HTMLDivElement>(null);
 
   // Auto scroll right when new card is pressed
@@ -75,158 +77,176 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     }
   }, [pressedCards]);
 
-  // Cảm ứng 2 ngón tay vuốt phóng to / thu nhỏ bảng (Pinch-to-Zoom)
+  // 1. CẢM ỨNG CHẠM TOUCH (Kéo 1 ngón & Pinch 2 ngón trực tiếp)
   const handleKeypadTouchStart = (e: React.TouchEvent) => {
     e.stopPropagation();
     if (e.touches.length === 2) {
-      setIsDragging(false);
-      setIsResizing(false);
+      // 2 ngón tay: Kích hoạt Pinch Zoom
+      isDraggingRef.current = false;
+      isResizingRef.current = false;
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      setPinchStart({
+      pinchStartRef.current = {
         dist: Math.max(10, dist),
         w: size.width,
         h: size.height
-      });
+      };
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      const target = e.target as HTMLElement;
+      // Bấm vào nút thì không kéo
+      if (target.closest('button')) {
+        return;
+      }
+      // Chạm góc kéo resize
+      if (target.closest('[data-resize-handle="true"]')) {
+        isResizingRef.current = true;
+        resizeStartRef.current = {
+          clientX: e.touches[0].clientX,
+          clientY: e.touches[0].clientY,
+          w: size.width,
+          h: size.height
+        };
+        return;
+      }
+      // Chạm thanh tiêu đề hoặc nền để KÉO BẢNG ĐI
+      isDraggingRef.current = true;
+      dragStartRef.current = {
+        clientX: e.touches[0].clientX,
+        clientY: e.touches[0].clientY,
+        posX: position.x,
+        posY: position.y
+      };
     }
   };
 
   const handleKeypadTouchMove = (e: React.TouchEvent) => {
     e.stopPropagation();
-    if (e.touches.length === 2 && pinchStart) {
-      if (e.cancelable) e.preventDefault();
+    if (e.cancelable) e.preventDefault();
+
+    // 2 ngón tay: Co giãn kích thước bảng
+    if (e.touches.length === 2 && pinchStartRef.current) {
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const ratio = dist / pinchStart.dist;
+      const ratio = dist / pinchStartRef.current.dist;
       const maxW = Math.max(340, (window?.innerWidth || 1000) - 20);
       const maxH = Math.max(490, (window?.innerHeight || 800) - 30);
-      const newW = Math.round(Math.max(240, Math.min(maxW, pinchStart.w * ratio)));
-      const newH = Math.round(Math.max(360, Math.min(maxH, pinchStart.h * ratio)));
+      const newW = Math.round(Math.max(240, Math.min(maxW, pinchStartRef.current.w * ratio)));
+      const newH = Math.round(Math.max(360, Math.min(maxH, pinchStartRef.current.h * ratio)));
       const nextSize = { width: newW, height: newH };
       setSize(nextSize);
       try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
+      return;
+    }
+
+    // 1 ngón tay: Kéo di chuyển bảng
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      if (isDraggingRef.current && dragStartRef.current) {
+        const dx = t.clientX - dragStartRef.current.clientX;
+        const dy = t.clientY - dragStartRef.current.clientY;
+        const maxX = Math.max(0, (window?.innerWidth || 1000) - size.width);
+        const maxY = Math.max(0, (window?.innerHeight || 800) - 80);
+        const nextX = Math.round(Math.max(0, Math.min(dragStartRef.current.posX + dx, maxX)));
+        const nextY = Math.round(Math.max(0, Math.min(dragStartRef.current.posY + dy, maxY)));
+        setPosition({ x: nextX, y: nextY });
+        try { localStorage.setItem('live_keypad_pos', JSON.stringify({ x: nextX, y: nextY })); } catch {}
+        return;
+      }
+
+      // 1 ngón tay kéo góc resize
+      if (isResizingRef.current && resizeStartRef.current) {
+        const deltaX = t.clientX - resizeStartRef.current.clientX;
+        const deltaY = t.clientY - resizeStartRef.current.clientY;
+        const maxW = Math.max(340, (window?.innerWidth || 1000) - position.x);
+        const maxH = Math.max(490, (window?.innerHeight || 800) - position.y);
+        const newW = Math.round(Math.max(240, Math.min(maxW, resizeStartRef.current.w + deltaX)));
+        const newH = Math.round(Math.max(360, Math.min(maxH, resizeStartRef.current.h + deltaY)));
+        const nextSize = { width: newW, height: newH };
+        setSize(nextSize);
+        try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
+      }
     }
   };
 
   const handleKeypadTouchEnd = (e: React.TouchEvent) => {
     e.stopPropagation();
-    if (e.touches.length < 2) {
-      setPinchStart(null);
+    if (e.touches.length === 0) {
+      isDraggingRef.current = false;
+      isResizingRef.current = false;
+      dragStartRef.current = null;
+      resizeStartRef.current = null;
+      pinchStartRef.current = null;
     }
   };
 
-  // Dragging logic
+  // 2. CHUỘT MOUSE (kéo trên máy tính PC/Laptop)
   const handleDragMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(true);
-    setDragOffset({
-      x: e.clientX - position.x,
-      y: e.clientY - position.y
-    });
+    isDraggingRef.current = true;
+    dragStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      posX: position.x,
+      posY: position.y
+    };
   };
 
-  const handleDragTouchStart = (e: React.TouchEvent) => {
-    e.stopPropagation();
-    if (e.touches.length === 1) {
-      setIsDragging(true);
-      setDragOffset({
-        x: e.touches[0].clientX - position.x,
-        y: e.touches[0].clientY - position.y
-      });
-    }
-  };
-
-  // Resizing logic (Góc kéo chuột/1 ngón tay dưới cùng)
   const handleResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsResizing(true);
-    setResizeStart({
-      x: e.clientX,
-      y: e.clientY,
+    isResizingRef.current = true;
+    resizeStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
       w: size.width,
       h: size.height
-    });
-  };
-
-  const handleResizeTouchStart = (e: React.TouchEvent) => {
-    e.stopPropagation();
-    if (e.touches.length === 1) {
-      setIsResizing(true);
-      setResizeStart({
-        x: e.touches[0].clientX,
-        y: e.touches[0].clientY,
-        w: size.width,
-        h: size.height
-      });
-    }
+    };
   };
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDragging) {
-        const maxX = Math.max(0, window.innerWidth - size.width);
-        const maxY = Math.max(0, window.innerHeight - 100);
-        const newX = Math.max(0, Math.min(e.clientX - dragOffset.x, maxX));
-        const newY = Math.max(0, Math.min(e.clientY - dragOffset.y, maxY));
-        const nextPos = { x: newX, y: newY };
-        setPosition(nextPos);
-        try { localStorage.setItem('live_keypad_pos', JSON.stringify(nextPos)); } catch {}
-      } else if (isResizing) {
-        const deltaX = e.clientX - resizeStart.x;
-        const deltaY = e.clientY - resizeStart.y;
-        const newW = Math.max(260, Math.min(resizeStart.w + deltaX, window.innerWidth - position.x));
-        const newH = Math.max(380, Math.min(resizeStart.h + deltaY, window.innerHeight - position.y));
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      if (isDraggingRef.current && dragStartRef.current) {
+        const dx = e.clientX - dragStartRef.current.clientX;
+        const dy = e.clientY - dragStartRef.current.clientY;
+        const maxX = Math.max(0, (window?.innerWidth || 1000) - size.width);
+        const maxY = Math.max(0, (window?.innerHeight || 800) - 80);
+        const nextX = Math.round(Math.max(0, Math.min(dragStartRef.current.posX + dx, maxX)));
+        const nextY = Math.round(Math.max(0, Math.min(dragStartRef.current.posY + dy, maxY)));
+        setPosition({ x: nextX, y: nextY });
+        try { localStorage.setItem('live_keypad_pos', JSON.stringify({ x: nextX, y: nextY })); } catch {}
+      } else if (isResizingRef.current && resizeStartRef.current) {
+        const deltaX = e.clientX - resizeStartRef.current.clientX;
+        const deltaY = e.clientY - resizeStartRef.current.clientY;
+        const maxW = Math.max(340, (window?.innerWidth || 1000) - position.x);
+        const maxH = Math.max(490, (window?.innerHeight || 800) - position.y);
+        const newW = Math.round(Math.max(240, Math.min(maxW, resizeStartRef.current.w + deltaX)));
+        const newH = Math.round(Math.max(360, Math.min(maxH, resizeStartRef.current.h + deltaY)));
         const nextSize = { width: newW, height: newH };
         setSize(nextSize);
         try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
       }
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      if (isDragging) {
-        const t = e.touches[0];
-        const maxX = Math.max(0, window.innerWidth - size.width);
-        const maxY = Math.max(0, window.innerHeight - 100);
-        const newX = Math.max(0, Math.min(t.clientX - dragOffset.x, maxX));
-        const newY = Math.max(0, Math.min(t.clientY - dragOffset.y, maxY));
-        const nextPos = { x: newX, y: newY };
-        setPosition(nextPos);
-        try { localStorage.setItem('live_keypad_pos', JSON.stringify(nextPos)); } catch {}
-      } else if (isResizing) {
-        const t = e.touches[0];
-        const deltaX = t.clientX - resizeStart.x;
-        const deltaY = t.clientY - resizeStart.y;
-        const newW = Math.max(260, Math.min(resizeStart.w + deltaX, window.innerWidth - position.x));
-        const newH = Math.max(380, Math.min(resizeStart.h + deltaY, window.innerHeight - position.y));
-        const nextSize = { width: newW, height: newH };
-        setSize(nextSize);
-        try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
-      }
+    const handleWindowMouseUp = () => {
+      isDraggingRef.current = false;
+      isResizingRef.current = false;
+      dragStartRef.current = null;
+      resizeStartRef.current = null;
     };
 
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      setIsResizing(false);
-    };
-
-    if (isDragging || isResizing) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-      window.addEventListener('touchmove', handleTouchMove, { passive: false });
-      window.addEventListener('touchend', handleMouseUp);
-    }
+    window.addEventListener('mousemove', handleWindowMouseMove, { capture: true });
+    window.addEventListener('mouseup', handleWindowMouseUp, { capture: true });
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-      window.removeEventListener('touchmove', handleTouchMove);
-      window.removeEventListener('touchend', handleMouseUp);
+      window.removeEventListener('mousemove', handleWindowMouseMove, { capture: true });
+      window.removeEventListener('mouseup', handleWindowMouseUp, { capture: true });
     };
-  }, [isDragging, isResizing, dragOffset, resizeStart, position, size]);
+  }, [position, size]);
 
   // Press a number (0..13)
   const handleCardClick = (val: string) => {
@@ -272,8 +292,6 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       onTouchMove={handleKeypadTouchMove}
       onTouchEnd={handleKeypadTouchEnd}
       onMouseDown={(e) => e.stopPropagation()}
-      onMouseMove={(e) => e.stopPropagation()}
-      onMouseUp={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
@@ -290,8 +308,8 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     >
       {/* Header kéo di chuyển & Nút đóng/reset */}
       <div
+        data-drag-handle="true"
         onMouseDown={handleDragMouseDown}
-        onTouchStart={handleDragTouchStart}
         className="flex items-center justify-between px-3 py-2 bg-white/10 border-b border-white/15 cursor-move active:cursor-grabbing"
       >
         <div className="flex items-center space-x-2 text-white/90">
@@ -400,9 +418,9 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
 
       {/* Resize Handle ở góc dưới bên phải */}
       <div
+        data-resize-handle="true"
         onMouseDown={handleResizeMouseDown}
-        onTouchStart={handleResizeTouchStart}
-        className="absolute bottom-1 right-1 w-5 h-5 flex items-center justify-center cursor-se-resize text-slate-400 hover:text-amber-400 transition-colors"
+        className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center cursor-se-resize text-slate-400 hover:text-amber-400 transition-colors"
         title="Kéo góc để phóng to/thu nhỏ kích thước bảng phím"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
