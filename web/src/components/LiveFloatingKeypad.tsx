@@ -54,11 +54,14 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (typeof parsed.width === 'number' && typeof parsed.height === 'number') {
-          return parsed;
+          return {
+            width: Math.max(220, Math.min(parsed.width, 420)),
+            height: Math.max(260, Math.min(parsed.height, 410))
+          };
         }
       }
     } catch {}
-    return { width: 340, height: 490 };
+    return { width: 320, height: 390 };
   });
 
   const isDraggingRef = useRef(false);
@@ -135,8 +138,8 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       const ratio = dist / pinchStartRef.current.dist;
       const maxW = Math.max(340, (window?.innerWidth || 1000) - 20);
       const maxH = Math.max(490, (window?.innerHeight || 800) - 30);
-      const newW = Math.round(Math.max(240, Math.min(maxW, pinchStartRef.current.w * ratio)));
-      const newH = Math.round(Math.max(360, Math.min(maxH, pinchStartRef.current.h * ratio)));
+      const newW = Math.round(Math.max(220, Math.min(maxW, pinchStartRef.current.w * ratio)));
+      const newH = Math.round(Math.max(260, Math.min(maxH, pinchStartRef.current.h * ratio)));
       const nextSize = { width: newW, height: newH };
       setSize(nextSize);
       try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -225,8 +228,8 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         const deltaY = e.clientY - resizeStartRef.current.clientY;
         const maxW = Math.max(340, (window?.innerWidth || 1000) - position.x);
         const maxH = Math.max(490, (window?.innerHeight || 800) - position.y);
-        const newW = Math.round(Math.max(240, Math.min(maxW, resizeStartRef.current.w + deltaX)));
-        const newH = Math.round(Math.max(360, Math.min(maxH, resizeStartRef.current.h + deltaY)));
+        const newW = Math.round(Math.max(220, Math.min(maxW, resizeStartRef.current.w + deltaX)));
+        const newH = Math.round(Math.max(260, Math.min(maxH, resizeStartRef.current.h + deltaY)));
         const nextSize = { width: newW, height: newH };
         setSize(nextSize);
         try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -344,21 +347,21 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       </div>
 
       {/* Main Container */}
-      <div className="flex-1 p-2.5 flex flex-col gap-2 overflow-hidden">
-        {/* 1. Màn hình hiển thị số: Các số được bọc trong từng ô hình vuông sắc nét */}
+      <div className="flex-1 p-2 flex flex-col gap-1.5 overflow-hidden">
+        {/* 1. Màn hình hiển thị số: Ô gọn thấp, các số trong ô vuông sắc nét */}
         <div
           ref={displayScrollRef}
-          className="h-14 p-1.5 rounded-xl bg-black/50 border border-white/20 flex items-center gap-1.5 overflow-x-auto no-scrollbar shadow-inner flex-shrink-0"
+          className="h-9 px-1.5 py-1 rounded-xl bg-black/50 border border-white/20 flex items-center gap-1 overflow-x-auto no-scrollbar shadow-inner flex-shrink-0"
         >
           {pressedCards.length === 0 ? (
-            <span className="text-slate-400 text-xs sm:text-sm font-medium px-2 italic select-none">
+            <span className="text-slate-400 text-xs font-medium px-1.5 italic select-none">
               Chưa bấm số nào
             </span>
           ) : (
             pressedCards.map((card, idx) => (
               <div
                 key={idx}
-                className="w-10 h-10 flex-shrink-0 rounded-lg bg-slate-800/90 border border-white/30 text-white font-black text-base flex items-center justify-center shadow-md animate-fadeIn"
+                className="w-7 h-7 flex-shrink-0 rounded-md bg-slate-800/90 border border-white/30 text-white font-black text-xs flex items-center justify-center shadow-md animate-fadeIn"
               >
                 {card}
               </div>
@@ -372,7 +375,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
           <button
             type="button"
             onClick={() => handleCardClick('0')}
-            className="h-11 rounded-xl bg-blue-900/80 hover:bg-blue-800 active:scale-95 border border-blue-400/60 text-blue-200 hover:text-white font-black text-xl flex items-center justify-center shadow-md transition-all cursor-pointer"
+            className="h-9 rounded-xl bg-blue-900/80 hover:bg-blue-800 active:scale-95 border border-blue-400/60 text-blue-200 hover:text-white font-black text-lg flex items-center justify-center shadow-md transition-all cursor-pointer"
             title="Bấm số 0 (Lá bài ẩn)"
           >
             0
@@ -382,10 +385,10 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
           <button
             type="button"
             onClick={handleDeleteClick}
-            className="h-11 rounded-xl bg-amber-950/80 hover:bg-amber-900 active:scale-95 border border-amber-500/60 text-amber-200 hover:text-white font-bold text-sm flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
+            className="h-9 rounded-xl bg-amber-950/80 hover:bg-amber-900 active:scale-95 border border-amber-500/60 text-amber-200 hover:text-white font-bold text-xs flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
             title="Xóa lùi 1 số vừa nhập (Hoàn tác)"
           >
-            <Delete className="w-4 h-4 text-amber-300" />
+            <Delete className="w-3.5 h-3.5 text-amber-300" />
             <span>Xóa</span>
           </button>
 
@@ -393,22 +396,22 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
           <button
             type="button"
             onClick={handleResetRound}
-            className="h-11 rounded-xl bg-red-600/90 hover:bg-red-500 active:scale-95 border border-red-400 text-white font-bold text-sm flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
+            className="h-9 rounded-xl bg-red-600/90 hover:bg-red-500 active:scale-95 border border-red-400 text-white font-bold text-xs flex items-center justify-center space-x-1 shadow-md transition-all cursor-pointer"
             title="Reset toàn bộ số đã bấm và reset ván bài trên App"
           >
-            <RotateCcw className="w-4 h-4 text-white" />
+            <RotateCcw className="w-3.5 h-3.5 text-white" />
             <span>Reset</span>
           </button>
         </div>
 
         {/* 3. Lưới 4 cột: 1 -> 12 */}
-        <div className="grid grid-cols-4 gap-2 flex-1 min-h-0">
+        <div className="grid grid-cols-4 gap-1.5 flex-1 min-h-0">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((num) => (
             <button
               key={num}
               type="button"
               onClick={() => handleCardClick(String(num))}
-              className="rounded-xl bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-lg sm:text-xl flex items-center justify-center shadow-md transition-all cursor-pointer"
+              className="rounded-xl bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-base sm:text-lg flex items-center justify-center shadow-md transition-all cursor-pointer"
               title={`Bấm số ${num}`}
             >
               {num}
@@ -420,7 +423,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         <button
           type="button"
           onClick={() => handleCardClick('13')}
-          className="h-12 rounded-xl bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-xl flex items-center justify-center shadow-md transition-all cursor-pointer flex-shrink-0"
+          className="h-10 rounded-xl bg-slate-900/80 hover:bg-slate-800/95 active:scale-95 border border-white/25 hover:border-amber-400 text-white font-bold text-lg flex items-center justify-center shadow-md transition-all cursor-pointer flex-shrink-0"
           title="Bấm số 13"
         >
           13
