@@ -339,7 +339,7 @@ export function evaluate3Cards(cards: DataEntry[]): {
   // Quy tắc Rô: Khi cùng điểm thì có chất Rô luôn lớn hơn chất thường!
   const sum = parsed.reduce((acc, p) => acc + p.value, 0);
   const mod10 = sum % 10;
-  const normalScore = mod10 * 1000 + roBonus;
+  const normalScore = mod10 * 100 + roBonus;
   const baseLabel = mod10 === 0 ? '0 Điểm' : `${mod10} Điểm`;
   const labelWithRo = roCards.length > 0 ? `${baseLabel} (♦)` : baseLabel;
 
