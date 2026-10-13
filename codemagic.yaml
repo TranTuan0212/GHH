@@ -7,7 +7,7 @@ workflows:
       vars:
         XCODE_PROJECT: "ios/SloMoLive.xcodeproj"
         XCODE_SCHEME: "SloMoLive"
-      xcode: latest
+      xcode: 26.4
       cocoapods: default
     scripts:
       - name: Install CocoaPods dependencies
