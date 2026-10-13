@@ -297,12 +297,15 @@ public class CameraManager: NSObject, ObservableObject {
         let targetBitrate: UInt = targetFps >= 240 ? 12_000_000 : (targetFps >= 120 ? 8_000_000 : 3_000_000)
 
         // LFLiveKit validates these setters against the current frame rate: max must be set
-        // first; minimum must be strictly below the target. A one-second GOP aligns with the
-        // server's one-second DVR segments and bounds replay seek distance.
+        // first; minimum must be strictly below the target.
+        // GOP = fps/4 → keyframe every 0.25s (was fps/2 = 0.5s).
+        // Denser keyframes means: when network drops packets during live stream, replay only
+        // needs to backtrack at most 0.25s to find a decodable IDR frame instead of 0.5s.
+        // DVR uses -c:v copy so it inherits these source keyframes directly.
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
         videoCfg.videoMinFrameRate = max(1, targetFps / 2)
-        videoCfg.videoMaxKeyframeInterval = max(15, targetFps / 2)
+        videoCfg.videoMaxKeyframeInterval = max(10, targetFps / 4)
         videoCfg.videoBitRate = targetBitrate
         videoCfg.videoMaxBitRate = targetBitrate * 12 / 10
         videoCfg.videoMinBitRate = targetBitrate * 55 / 100
