@@ -13,18 +13,45 @@ class VideoPreviewView: UIView {
 
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
+    var onTapToFocus: ((CGPoint, CGPoint) -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
     func makeUIView(context: Context) -> VideoPreviewView {
         let view = VideoPreviewView()
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
+
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        view.addGestureRecognizer(tapGesture)
+        context.coordinator.previewView = view
+
         return view
     }
 
     func updateUIView(_ uiView: VideoPreviewView, context: Context) {
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
+        }
+        context.coordinator.parent = self
+    }
+
+    class Coordinator: NSObject {
+        var parent: CameraPreviewView
+        weak var previewView: VideoPreviewView?
+
+        init(_ parent: CameraPreviewView) {
+            self.parent = parent
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard let view = previewView else { return }
+            let viewPoint = gesture.location(in: view)
+            let devicePoint = view.videoPreviewLayer.captureDevicePointConverted(fromLayerPoint: viewPoint)
+            parent.onTapToFocus?(viewPoint, devicePoint)
         }
     }
 }
@@ -40,6 +67,11 @@ struct ContentView: View {
     @State private var isFakeLocked = false
     @State private var serverInfoChecked = false
     @State private var serverInfoHint: String? = nil
+
+    // Tap to focus & exposure indicator
+    @State private var focusPoint: CGPoint? = nil
+    @State private var showFocusBox = false
+    @State private var focusBoxPulse = false
 
     // Tự động kiểm tra server ngay khi mở app — giúp user biết IP LAN đúng và có cảnh báo sớm
     // về tình huống mạng (LAN / Cloudflare / 5G).
@@ -155,12 +187,40 @@ struct ContentView: View {
             } else {
                 // Live Stream Camera Preview View
                 ZStack {
-                    CameraPreviewView(session: cameraManager.session)
-                        .edgesIgnoringSafeArea(.all)
-                        .onAppear {
-                            locationManager.requestPermissions()
-                            cameraManager.setupCamera { _ in }
+                    CameraPreviewView(session: cameraManager.session, onTapToFocus: { viewPoint, devicePoint in
+                        cameraManager.focus(at: devicePoint)
+                        focusPoint = viewPoint
+                        showFocusBox = true
+                        focusBoxPulse = true
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            focusBoxPulse = false
                         }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                showFocusBox = false
+                            }
+                        }
+                    })
+                    .edgesIgnoringSafeArea(.all)
+                    .onAppear {
+                        locationManager.requestPermissions()
+                        cameraManager.setupCamera { _ in }
+                    }
+
+                    // Yellow Focus & Exposure Box (Giống app Camera iOS chuẩn)
+                    if showFocusBox, let pt = focusPoint {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.yellow, lineWidth: 1.5)
+                                .frame(width: focusBoxPulse ? 85 : 65, height: focusBoxPulse ? 85 : 65)
+                            Circle()
+                                .fill(Color.yellow)
+                                .frame(width: 4, height: 4)
+                        }
+                        .position(pt)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                    }
 
                     // Overlay Status Bar
                     VStack {

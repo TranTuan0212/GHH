@@ -90,6 +90,12 @@ public class CameraManager: NSObject, ObservableObject {
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+        nc.addObserver(
+            self,
+            selector: #selector(handleSubjectAreaDidChange),
+            name: AVCaptureDevice.subjectAreaDidChangeNotification,
+            object: nil
+        )
     }
 
     private func removeAudioSessionObservers() {
@@ -97,6 +103,12 @@ public class CameraManager: NSObject, ObservableObject {
         nc.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         nc.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         nc.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+        nc.removeObserver(self, name: AVCaptureDevice.subjectAreaDidChangeNotification, object: nil)
+    }
+
+    @objc private func handleSubjectAreaDidChange(notification: Notification) {
+        // Khi người dùng lia máy / di chuyển máy, tự động khôi phục chế độ tự động lấy nét liên tục
+        self.resetContinuousFocus()
     }
 
     @objc private func handleAudioInterruption(notification: Notification) {
@@ -543,6 +555,21 @@ public class CameraManager: NSObject, ObservableObject {
                     }
                     print("[CameraManager] Không tìm thấy format HFR, fallback 30fps")
                 }
+
+                // Cấu hình tự động lấy nét và đo sáng liên tục toàn dải (cả gần và xa vô cực)
+                if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
+                    videoDevice.focusMode = .continuousAutoFocus
+                }
+                if videoDevice.isAutoFocusRangeRestrictionSupported {
+                    videoDevice.autoFocusRangeRestriction = .none
+                }
+                if videoDevice.isExposureModeSupported(.continuousAutoExposure) {
+                    videoDevice.exposureMode = .continuousAutoExposure
+                }
+                if videoDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                    videoDevice.whiteBalanceMode = .continuousAutoWhiteBalance
+                }
+
                 videoDevice.unlockForConfiguration()
 
                 if self.captureSession.canAddOutput(self.videoDataOutput) {
@@ -748,6 +775,21 @@ public class CameraManager: NSObject, ObservableObject {
                         newDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: 30)
                         DispatchQueue.main.async { self.currentFPS = 30.0 }
                     }
+
+                    // Cấu hình tự động lấy nét và đo sáng liên tục toàn dải (cả gần và xa vô cực)
+                    if newDevice.isFocusModeSupported(.continuousAutoFocus) {
+                        newDevice.focusMode = .continuousAutoFocus
+                    }
+                    if newDevice.isAutoFocusRangeRestrictionSupported {
+                        newDevice.autoFocusRangeRestriction = .none
+                    }
+                    if newDevice.isExposureModeSupported(.continuousAutoExposure) {
+                        newDevice.exposureMode = .continuousAutoExposure
+                    }
+                    if newDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                        newDevice.whiteBalanceMode = .continuousAutoWhiteBalance
+                    }
+
                     newDevice.unlockForConfiguration()
                 } catch {
                     print("[CameraManager] Không lock được device để set HFR: \(error)")
@@ -766,6 +808,64 @@ public class CameraManager: NSObject, ObservableObject {
                     self.errorMessage = "Lỗi đổi camera: \(error.localizedDescription)"
                     completion?(false)
                 }
+            }
+        }
+    }
+
+    /// Lấy nét và đo sáng tại điểm chạm (tọa độ 0.0 -> 1.0 theo hệ tọa độ chuẩn của AVCaptureDevice)
+    public func focus(at devicePoint: CGPoint) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+
+                // Cấu hình điểm lấy nét
+                if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus) {
+                    device.focusPointOfInterest = devicePoint
+                    device.focusMode = .autoFocus
+                }
+
+                // Cấu hình điểm đo sáng
+                if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
+                    device.exposurePointOfInterest = devicePoint
+                    device.exposureMode = .autoExpose
+                }
+
+                // Bật giám sát để khi lia máy sẽ tự động chuyển về Continuous Auto Focus
+                if device.isSubjectAreaChangeMonitoringEnabled == false {
+                    device.isSubjectAreaChangeMonitoringEnabled = true
+                }
+
+                device.unlockForConfiguration()
+                print("[CameraManager] 🎯 Đã lấy nét & đo sáng tại điểm (\(String(format: "%.2f", devicePoint.x)), \(String(format: "%.2f", devicePoint.y)))")
+            } catch {
+                print("[CameraManager] Không thể lock device để lấy nét: \(error)")
+            }
+        }
+    }
+
+    /// Khôi phục chế độ tự động lấy nét và đo sáng liên tục (Continuous Auto Focus)
+    public func resetContinuousFocus() {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
+                if device.isAutoFocusRangeRestrictionSupported {
+                    device.autoFocusRangeRestriction = .none
+                }
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+                if device.isSubjectAreaChangeMonitoringEnabled {
+                    device.isSubjectAreaChangeMonitoringEnabled = false
+                }
+                device.unlockForConfiguration()
+                print("[CameraManager] 🔄 Khôi phục Continuous Auto Focus")
+            } catch {
+                print("[CameraManager] Lỗi reset auto focus: \(error)")
             }
         }
     }
