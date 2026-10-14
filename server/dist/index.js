@@ -202,7 +202,6 @@ app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'rep
         }
         else if (filePath.endsWith('.ts')) {
             res.setHeader('Content-Type', 'video/MP2T');
-            res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
         }
     }
 }));
@@ -217,7 +216,6 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'live'
         }
         else if (filePath.endsWith('.ts')) {
             res.setHeader('Content-Type', 'video/MP2T');
-            res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
         }
     }
 }));

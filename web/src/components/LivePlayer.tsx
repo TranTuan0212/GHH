@@ -1261,13 +1261,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       const hls = new Hls({
         // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio):
-        maxBufferLength: 25, // 25s buffer phía trước (tiết kiệm băng thông 4G/5G)
-        maxMaxBufferLength: 45, // 45s tối đa
-        maxBufferSize: 64 * 1024 * 1024, // 64MB RAM buffer cho 120fps source
-        backBufferLength: 90, // Giữ 1.5 phút buffer lùi để tua qua lại tức thì
-        maxBufferHole: 0.1, // Ngưỡng nhỏ để bắt lỗ hổng chính xác
-        nudgeOffset: 0, // TẮT nhảy cóc frame để không làm vỡ frame khi mạng chậm
-        nudgeMaxRetry: 0,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        maxBufferSize: 256 * 1024 * 1024, // 256MB RAM buffer cho 120fps source
+        backBufferLength: 180, // Giữ 3 phút buffer lùi để tua qua lại tức thì
+        maxBufferHole: 0.4, // Ngưỡng nhỏ để không nhảy cóc frame
+        nudgeOffset: 0.05, // Nhích nhẹ (~6 frame) nếu kẹt buffer thay vì nhảy nửa giây
+        nudgeMaxRetry: 5,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
         highBufferWatchdogPeriod: 0,
         liveSyncDuration: 3,
@@ -1401,8 +1401,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             stallTimer = window.setTimeout(() => {
               if (!video.paused && video.readyState < 3) {
                 if (!isLiveRef.current) {
-                  console.log('[LivePlayer] Video replay đang chờ buffer hoàn chỉnh...');
-                  video.play().catch(() => {});
+                  console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 3500ms -> Nhích nhẹ để tiếp tục phát...');
+                  video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.1);
                 } else if (!hasLiveFrameRef.current) {
                   console.log('[LivePlayer] Video live HLS bị khựng -> Nhảy về live edge...');
                   const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0;
