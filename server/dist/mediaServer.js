@@ -287,6 +287,7 @@ function startHlsSession(streamKey) {
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
+        '-threads', '0',
         // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
         '-profile:v', 'baseline',
         '-level:v', '4.1',
@@ -312,93 +313,21 @@ function startHlsSession(streamKey) {
         '-rtsp_transport', 'tcp',
         `rtsp://127.0.0.1:8554/${streamKey}`
     ];
-    // Rendition phụ (SD 480p, 60fps, 1800kbps) - Giảm độ phân giải để mượt, giữ nguyên 60fps, scale Lanczos khử nhòe
-    const lowLiveFfmpegArgs = [
-        '-fflags', '+genpts+discardcorrupt',
-        '-err_detect', 'ignore_err',
-        '-i', `rtmp://localhost:1935/live/${streamKey}`,
-        '-map', '0:v:0',
-        '-map', '0:a?',
-        '-vf', 'scale=-2:480:flags=lanczos',
-        '-fpsmax', String(LIVE_PREVIEW_FPS),
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v', 'baseline',
-        '-level:v', '3.1',
-        '-pix_fmt', 'yuv420p',
-        '-bf', '0',
-        '-x264-params', 'scenecut=0:repeat-headers=1',
-        '-b:v', '1800k',
-        '-maxrate', '2200k',
-        '-bufsize', '3000k',
-        '-g', '15',
-        '-keyint_min', '8',
-        '-sc_threshold', '0',
-        '-force_key_frames', 'expr:gte(t,n_forced*0.25)',
-        '-c:a', 'libopus',
-        '-b:a', '64k',
-        '-ar', '48000',
-        '-ac', '2',
-        '-f', 'rtsp',
-        '-rtsp_transport', 'tcp',
-        `rtsp://127.0.0.1:8554/${streamKey}_low`
-    ];
-    // Rendition siêu nhẹ (360p, 60fps, 750kbps) - Giảm độ phân giải cho máy/mạng yếu, giữ nguyên 60fps
-    const ultraLiveFfmpegArgs = [
-        '-fflags', '+genpts+discardcorrupt',
-        '-err_detect', 'ignore_err',
-        '-i', `rtmp://localhost:1935/live/${streamKey}`,
-        '-map', '0:v:0',
-        '-map', '0:a?',
-        '-vf', 'scale=-2:360:flags=lanczos',
-        '-fpsmax', String(LIVE_PREVIEW_FPS),
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v', 'baseline',
-        '-level:v', '3.0',
-        '-pix_fmt', 'yuv420p',
-        '-bf', '0',
-        '-x264-params', 'scenecut=0:repeat-headers=1',
-        '-b:v', '750k',
-        '-maxrate', '950k',
-        '-bufsize', '1200k',
-        '-g', '15',
-        '-keyint_min', '8',
-        '-sc_threshold', '0',
-        '-force_key_frames', 'expr:gte(t,n_forced*0.25)',
-        '-c:a', 'libopus',
-        '-b:a', '48k',
-        '-ar', '48000',
-        '-ac', '2',
-        '-f', 'rtsp',
-        '-rtsp_transport', 'tcp',
-        `rtsp://127.0.0.1:8554/${streamKey}_ultra`
-    ];
     console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
     console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
     console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, video-only)`);
     console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, with audio)`);
-    console.log(`[MediaServer]   web live SD:   WHEP /${streamKey}_low/whep (480p, up to ${LIVE_PREVIEW_FPS}fps, 1000k for weak network)`);
-    console.log(`[MediaServer]   web live Ultra: WHEP /${streamKey}_ultra/whep (360p, up to ${LIVE_PREVIEW_FPS}fps, 500k ultra smooth)`);
     const ffmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
     const liveFfmpeg = (0, child_process_1.spawn)(ffmpegPath, liveFfmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
-    const lowLiveFfmpeg = (0, child_process_1.spawn)(ffmpegPath, lowLiveFfmpegArgs, {
-        stdio: ['ignore', 'pipe', 'pipe']
-    });
-    const ultraLiveFfmpeg = (0, child_process_1.spawn)(ffmpegPath, ultraLiveFfmpegArgs, {
-        stdio: ['ignore', 'pipe', 'pipe']
-    });
     const session = {
         streamKey,
         startTime: Date.now() / 1000,
         lastSeen: Date.now() / 1000,
-        ffmpegProcesses: [ffmpeg, liveFfmpeg, lowLiveFfmpeg, ultraLiveFfmpeg]
+        ffmpegProcesses: [ffmpeg, liveFfmpeg]
     };
     exports.hlsSessions.set(streamKey, session);
     ffmpeg.stdout.on('data', (data) => {
@@ -445,20 +374,6 @@ function startHlsSession(streamKey) {
     });
     liveFfmpeg.on('close', (code, signal) => {
         console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-    });
-    lowLiveFfmpeg.stderr.on('data', (data) => {
-        const line = data.toString().trim();
-        if (!line)
-            return;
-        const isImportant = /error|warning|fatal|cannot|failed/i.test(line);
-        if (isImportant)
-            console.log(`[MediaServer] [live-low ${streamKey}] ${line}`);
-    });
-    lowLiveFfmpeg.on('error', (err) => {
-        console.error(`[MediaServer] live-low FFmpeg error for ${streamKey}:`, err);
-    });
-    lowLiveFfmpeg.on('close', (code, signal) => {
-        console.log(`[MediaServer] live-low FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
     });
     console.log(`[MediaServer] DVR + WebRTC session started for ${streamKey}`);
 }
