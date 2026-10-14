@@ -65,11 +65,19 @@ const nmsSessions: Map<string, { streamKey: string; connectedAt: number }> = new
 // Map NMS session id -> streamKey
 const sessionToStreamKey: Map<string, string> = new Map();
 
+// Map streamKey -> pending disconnect timer (Grace Period 20s cho mạng 4G/5G)
+const pendingDisconnects: Map<string, NodeJS.Timeout> = new Map();
+const GRACE_PERIOD_MS = 20_000;
+
 function getStreamDir(rendition: 'live' | 'replay', streamKey: string): string {
   return path.join(MEDIA_ROOT, rendition, streamKey);
 }
 
 export function cleanupStreamSession(streamKey: string): void {
+  if (pendingDisconnects.has(streamKey)) {
+    clearTimeout(pendingDisconnects.get(streamKey)!);
+    pendingDisconnects.delete(streamKey);
+  }
   const session = hlsSessions.get(streamKey);
   if (session) {
     for (const process of session.ffmpegProcesses) {
@@ -104,6 +112,10 @@ export function cleanupStreamSession(streamKey: string): void {
  * File sẽ được cron xóa sau CRON_MAX_AGE_SECONDS (mặc định 24h).
  */
 export function stopFfmpegOnly(streamKey: string): void {
+  if (pendingDisconnects.has(streamKey)) {
+    clearTimeout(pendingDisconnects.get(streamKey)!);
+    pendingDisconnects.delete(streamKey);
+  }
   const session = hlsSessions.get(streamKey);
   if (session) {
     for (const process of session.ffmpegProcesses) {
@@ -456,12 +468,25 @@ function startHlsSession(streamKey: string): void {
 /** Called when NMS detects a new RTMP publish */
 function onStreamStart(sessionId: string, streamPath: string): void {
   const streamKey = streamPath.split('/').pop() || streamPath;
-  if (hlsSessions.has(streamKey)) {
-    console.log(`[MediaServer] Stream ${streamKey} already has HLS session, skipping`);
-    return;
-  }
   sessionToStreamKey.set(sessionId, streamKey);
   nmsSessions.set(sessionId, { streamKey, connectedAt: Date.now() / 1000 });
+
+  // Nếu có timer chờ ngắt kết nối đang chạy (Grace Period), hủy ngay vì iPhone đã kết nối lại!
+  if (pendingDisconnects.has(streamKey)) {
+    clearTimeout(pendingDisconnects.get(streamKey)!);
+    pendingDisconnects.delete(streamKey);
+    console.log(`[MediaServer] ✅ iPhone kết nối lại thành công trong thời gian ân hạn cho stream ${streamKey}! Tiếp tục giữ luồng.`);
+  }
+
+  const existingSession = hlsSessions.get(streamKey);
+  if (existingSession) {
+    const anyAlive = existingSession.ffmpegProcesses.some(p => !p.killed);
+    if (anyAlive) {
+      console.log(`[MediaServer] Stream ${streamKey} đã có HLS/FFmpeg session đang chạy, tái sử dụng.`);
+      return;
+    }
+  }
+
   startHlsSession(streamKey);
 }
 
@@ -472,19 +497,33 @@ function onStreamEnd(sessionId: string): void {
   sessionToStreamKey.delete(sessionId);
   nmsSessions.delete(sessionId);
 
-  // Stop ffmpeg HLS session
-  const session = hlsSessions.get(streamKey);
-  if (session) {
-    for (const process of session.ffmpegProcesses) {
-      if (!process.killed) process.kill('SIGTERM');
-    }
-    hlsSessions.delete(streamKey);
-    console.log(`[MediaServer] Stream ${streamKey} ended, HLS ffmpeg stopped`);
+  console.log(`[MediaServer] ⏳ RTMP ngắt kết nối cho stream ${streamKey}. Bắt đầu ân hạn ${GRACE_PERIOD_MS / 1000}s chờ iPhone kết nối lại...`);
+
+  // Xóa timer cũ nếu có
+  if (pendingDisconnects.has(streamKey)) {
+    clearTimeout(pendingDisconnects.get(streamKey)!);
   }
-  // QUAN TRỌNG: KHÔNG xóa file replay ngay khi RTMP ngắt!
-  // Mục đích của DVR là để người xem tua lại, xem slow motion các pha vừa qua kể cả khi
-  // iPhone dừng phát hoặc mạng gián đoạn tạm thời. Các file cũ sẽ do Cron tự động dọn dẹp sau.
-  streamEndedHandler?.(streamKey);
+
+  const timer = setTimeout(() => {
+    pendingDisconnects.delete(streamKey);
+    console.log(`[MediaServer] 🛑 Hết thời gian ân hạn ${GRACE_PERIOD_MS / 1000}s cho stream ${streamKey}. Chính thức đóng phiên.`);
+
+    // Stop ffmpeg HLS session
+    const session = hlsSessions.get(streamKey);
+    if (session) {
+      for (const process of session.ffmpegProcesses) {
+        if (!process.killed) process.kill('SIGTERM');
+      }
+      hlsSessions.delete(streamKey);
+      console.log(`[MediaServer] Stream ${streamKey} ended, HLS ffmpeg stopped`);
+    }
+    // QUAN TRỌNG: KHÔNG xóa file replay ngay khi RTMP ngắt!
+    // Mục đích của DVR là để người xem tua lại, xem slow motion các pha vừa qua kể cả khi
+    // iPhone dừng phát hoặc mạng gián đoạn tạm thời. Các file cũ sẽ do Cron tự động dọn dẹp sau.
+    streamEndedHandler?.(streamKey);
+  }, GRACE_PERIOD_MS);
+
+  pendingDisconnects.set(streamKey, timer);
 }
 
 /** Background cleanup: timeout check */
@@ -722,7 +761,7 @@ export function startNativeMediaServer(): void {
     // Khi iOS bắt đầu push RTMP — xác thực streamKey trong Database trước khi cho phép
     nms.on('prePublish', (id: string, StreamPath: string, _args: any) => {
       const streamKey = StreamPath.split('/').pop() || '';
-      const activeStream = db.getStreams().find(s => s.streamKey === streamKey && s.status === 'LIVE');
+      const activeStream = db.getStreams().find(s => s.streamKey === streamKey && (s.status === 'LIVE' || pendingDisconnects.has(streamKey)));
 
       if (!activeStream) {
         console.warn(`[MediaServer] [BẢO MẬT] Từ chối kết nối RTMP không hợp lệ hoặc chưa được cấp phép: ${StreamPath} (Session: ${id})`);
