@@ -820,9 +820,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     ? (() => {
         try {
           const endpoint = new URL(detectedServerUrl);
-          const pathKey = activeResolution === '360p'
-            ? `${stream.streamKey}_ultra`
-            : (activeResolution === '480p' ? `${stream.streamKey}_low` : stream.streamKey);
+          const pathKey = stream.streamKey;
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
             if (typeof window !== 'undefined' && window.location.hostname) {
