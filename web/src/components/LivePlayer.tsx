@@ -2338,6 +2338,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             hasFrame — vì effect khởi tạo HLS cần videoRef.current tồn tại TRƯỚC khi có frame đầu
             tiên. Nếu ẩn video đằng sau `hasFrame ? ... : ...` sẽ tạo deadlock: video chỉ mount khi
             hasFrame=true, nhưng hasFrame chỉ được set true SAU khi HLS đã load được vào video đó. */}
+        {/* SVG Edge-Sharpening Filter (Unsharp Mask Kernel) để khử mờ viền số và chất bài khi tua chậm */}
+        <svg className="absolute w-0 h-0 pointer-events-none" aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0 }}>
+          <defs>
+            <filter id="slomo-sharp-filter">
+              <feConvolveMatrix
+                order="3"
+                preserveAlpha="true"
+                kernelMatrix="0 -0.5 0 -0.5 3.0 -0.5 0 -0.5 0"
+              />
+            </filter>
+          </defs>
+        </svg>
+
         {/* Thẻ 2: HLS DVR Replay & HLS Live Fallback (MÀN HÌNH TO KHI TUA) */}
         <video
           ref={replayVideoRef}
@@ -2352,7 +2365,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             position: 'absolute',
             inset: 0,
             imageRendering: '-webkit-optimize-contrast' as any,
-            filter: isSharpBoost ? 'contrast(1.12) saturate(1.15) brightness(1.02)' : 'none'
+            filter: isSharpBoost ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
           }}
           playsInline
           muted={true}
@@ -2404,7 +2417,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out',
               imageRendering: '-webkit-optimize-contrast' as any,
-              filter: isSharpBoost && isLive ? 'contrast(1.12) saturate(1.15) brightness(1.02)' : 'none'
+              filter: isSharpBoost && isLive ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
             }}
             playsInline
             muted={isMuted}
