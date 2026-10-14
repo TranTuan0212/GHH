@@ -213,6 +213,7 @@ app.use('/replay', express.static(path.join(MEDIA_ROOT, 'replay'), {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     } else if (filePath.endsWith('.ts')) {
       res.setHeader('Content-Type', 'video/MP2T');
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
     }
   }
 }));
@@ -227,6 +228,7 @@ app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     } else if (filePath.endsWith('.ts')) {
       res.setHeader('Content-Type', 'video/MP2T');
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
     }
   }
 }));
@@ -259,7 +261,7 @@ const appDir = fs.existsSync(path.resolve(__dirname, '../../app'))
   : path.resolve(process.cwd(), 'app');
 
 app.get('/ios/manifest.plist', (req, res) => {
-  const host = req.headers.host || 'slomoview.stream';
+  const host = req.headers.host || 'streamslo.date';
   const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || 'https';
   // Apple itms-services bắt buộc HTTPS (trừ localhost test)
@@ -557,19 +559,6 @@ io.on('connection', (socket) => {
     db.popCardEntry(targetRoomId);
     const updated = db.getCardEntries(targetRoomId);
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
-  });
-
-  socket.on('live_remote_card', (data) => {
-    if (!user) return;
-    const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
-    if (!canControlRoom(targetRoomId)) return;
-
-    io.to(`room_${targetRoomId}`).emit('remote_card_received', {
-      cardValue: data.cardValue,
-      action: data.action || 'ADD',
-      roomId: targetRoomId,
-      timestamp: Date.now()
-    });
   });
 
   socket.on('clear_cards', (data) => {
