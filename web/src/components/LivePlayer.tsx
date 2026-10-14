@@ -29,11 +29,9 @@ import {
   ZoomIn,
   Sparkles,
   Settings,
-  RefreshCw,
-  Calculator
+  RefreshCw
 } from 'lucide-react';
 import { StreamSession } from '../types';
-import { LiveFloatingKeypad } from './LiveFloatingKeypad';
 
 export interface TextOverlay {
   id: string;
@@ -220,8 +218,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const dyPercent = (dy / rect.height) * 100;
 
       const pipWidthPercent = (pipWidth / rect.width) * 100;
-      const newX = Math.max(-15, Math.min(100 - (pipWidthPercent * 0.2), pipDragStartRef.current.origXPercent + dxPercent));
-      const newY = Math.max(-5, Math.min(95, pipDragStartRef.current.origYPercent + dyPercent));
+      const newX = Math.max(0.5, Math.min(99.5 - pipWidthPercent, pipDragStartRef.current.origXPercent + dxPercent));
+      const newY = Math.max(0.5, Math.min(85, pipDragStartRef.current.origYPercent + dyPercent));
 
       setPipPos({ xPercent: newX, yPercent: newY });
     };
@@ -303,8 +301,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const dyPercent = (dy / rect.height) * 100;
 
         const pipWidthPercent = (pipWidth / rect.width) * 100;
-        const newX = Math.max(-15, Math.min(100 - (pipWidthPercent * 0.2), pipDragStartRef.current.origXPercent + dxPercent));
-        const newY = Math.max(-5, Math.min(95, pipDragStartRef.current.origYPercent + dyPercent));
+        const newX = Math.max(0.5, Math.min(99.5 - pipWidthPercent, pipDragStartRef.current.origXPercent + dxPercent));
+        const newY = Math.max(0.5, Math.min(85, pipDragStartRef.current.origYPercent + dyPercent));
 
         setPipPos({ xPercent: newX, yPercent: newY });
       }
@@ -398,10 +396,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchStart = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
-    // Bỏ qua nếu chạm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
-    if (target.closest('[data-live-keypad="true"]')) {
-      return;
-    }
+    // CHỈ bỏ qua nếu đang ở chế độ tua (!isLive) VÀ chạm trúng màn nhỏ PiP ở góc hoặc text overlay
     if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
       return;
     }
@@ -449,9 +444,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchMove = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest('[data-live-keypad="true"]')) {
-      return;
-    }
     if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
       return;
     }
@@ -478,48 +470,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (e.cancelable) e.preventDefault();
       const dx = e.touches[0].clientX - mainPanStartRef.current.startX;
       const dy = e.touches[0].clientY - mainPanStartRef.current.startY;
+      const maxPanX = (mainZoom - 1) * 220;
+      const maxPanY = (mainZoom - 1) * 160;
       setMainPan({
-        x: Math.round(mainPanStartRef.current.origPan.x + dx),
-        y: Math.round(mainPanStartRef.current.origPan.y + dy),
+        x: Math.max(-maxPanX, Math.min(maxPanX, mainPanStartRef.current.origPan.x + dx)),
+        y: Math.max(-maxPanY, Math.min(maxPanY, mainPanStartRef.current.origPan.y + dy)),
       });
     }
-  };
-
-  const handleContainerMouseDown = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    // Bỏ qua nếu bấm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
-    if (
-      target.closest('[data-live-keypad="true"]') ||
-      target.closest('[data-pip-window="true"]') ||
-      target.closest('[data-text-overlay="true"]') ||
-      target.closest('button')
-    ) {
-      return;
-    }
-
-    if (mainZoom <= 1.05) return;
-
-    e.preventDefault();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const origPan = { ...mainPan };
-
-    const onMouseMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      setMainPan({
-        x: Math.round(origPan.x + dx),
-        y: Math.round(origPan.y + dy),
-      });
-    };
-
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
   };
 
   const handleContainerTouchEnd = (e: React.TouchEvent) => {
@@ -597,15 +554,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, []);
 
-  const [isLiveKeypadOpen, setIsLiveKeypadOpen] = useState(false);
-
   useEffect(() => {
     if (isFullscreen) {
       document.body.style.overflow = 'hidden';
-      setIsLiveKeypadOpen(true);
     } else {
       document.body.style.overflow = '';
-      setIsLiveKeypadOpen(false);
     }
     return () => {
       document.body.style.overflow = '';
@@ -2318,17 +2271,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       <div
         ref={videoContainerRef}
         onDoubleClick={toggleFullscreen}
-        onMouseDown={handleContainerMouseDown}
         onTouchStart={handleContainerTouchStart}
         onTouchMove={handleContainerTouchMove}
         onTouchEnd={handleContainerTouchEnd}
         style={{ touchAction: 'none' }}
-        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none ${
-          mainZoom > 1.05 ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
-        } ${
+        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
-        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay hoặc chuột để zoom và kéo cận cảnh."
+        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay để zoom cận cảnh."
       >
         {/* Nút đặt lại zoom khi đang phóng to cận cảnh */}
         {mainZoom > 1.05 && (
@@ -2388,6 +2338,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             hasFrame — vì effect khởi tạo HLS cần videoRef.current tồn tại TRƯỚC khi có frame đầu
             tiên. Nếu ẩn video đằng sau `hasFrame ? ... : ...` sẽ tạo deadlock: video chỉ mount khi
             hasFrame=true, nhưng hasFrame chỉ được set true SAU khi HLS đã load được vào video đó. */}
+        {/* SVG Edge-Sharpening Filter (Unsharp Mask Kernel) để khử mờ viền số và chất bài khi tua chậm */}
+        <svg className="absolute w-0 h-0 pointer-events-none" aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0 }}>
+          <defs>
+            <filter id="slomo-sharp-filter">
+              <feConvolveMatrix
+                order="3"
+                preserveAlpha="true"
+                kernelMatrix="0 -0.5 0 -0.5 3.0 -0.5 0 -0.5 0"
+              />
+            </filter>
+          </defs>
+        </svg>
+
         {/* Thẻ 2: HLS DVR Replay & HLS Live Fallback (MÀN HÌNH TO KHI TUA) */}
         <video
           ref={replayVideoRef}
@@ -2402,7 +2365,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             position: 'absolute',
             inset: 0,
             imageRendering: '-webkit-optimize-contrast' as any,
-            filter: isSharpBoost ? 'contrast(1.12) saturate(1.15) brightness(1.02)' : 'none'
+            filter: isSharpBoost ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
           }}
           playsInline
           muted={true}
@@ -2454,7 +2417,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out',
               imageRendering: '-webkit-optimize-contrast' as any,
-              filter: isSharpBoost && isLive ? 'contrast(1.12) saturate(1.15) brightness(1.02)' : 'none'
+              filter: isSharpBoost && isLive ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
             }}
             playsInline
             muted={isMuted}
@@ -3126,22 +3089,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
-            {/* Nút Bật/Tắt Bảng nhập số nổi (Chỉ xuất hiện khi ở chế độ phóng to Toàn màn hình) */}
-            {isFullscreen && (
-              <button
-                type="button"
-                onClick={() => setIsLiveKeypadOpen(prev => !prev)}
-                className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
-                  isLiveKeypadOpen
-                    ? 'bg-amber-500/25 border-amber-400 text-amber-300 ring-1 ring-amber-400'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-white/10'
-                }`}
-                title={isLiveKeypadOpen ? 'Ẩn Bảng nhập số Live' : 'Mở Bảng nhập số Live (Bắn số về App)'}
-              >
-                <Calculator className="w-3.5 h-3.5" />
-              </button>
-            )}
-
             {/* Nút Phóng to toàn màn hình như YouTube */}
             <button
               type="button"
@@ -3282,31 +3229,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {/* Nút mở nhanh Bảng nhập số trên màn hình khi Fullscreen mà lỡ đóng */}
-      {isFullscreen && !isLiveKeypadOpen && (
-        <button
-          type="button"
-          onClick={() => setIsLiveKeypadOpen(true)}
-          className="absolute top-4 left-4 z-[999990] flex items-center space-x-1.5 px-3 py-1.5 rounded-xl backdrop-blur-md bg-amber-500/90 hover:bg-amber-400 text-black font-bold text-xs shadow-xl transition-all active:scale-95 border border-white/20 cursor-pointer"
-          title="Mở Bảng nhập số Live"
-        >
-          <Calculator className="w-4 h-4 text-black" />
-          <span>Mở Bảng Nhập</span>
-        </button>
-      )}
-
-      {/* Bảng nhập số nổi truyền realtime về app CHỈ hiển thị khi phóng to màn hình live */}
-      {isFullscreen && (
-        <LiveFloatingKeypad
-          isOpen={isLiveKeypadOpen}
-          onClose={() => setIsLiveKeypadOpen(false)}
-          socket={socket || null}
-          currentRoomId={roomId || ''}
-          roomName={roomName}
-          container={playerContainerRef.current}
-        />
       )}
     </div>
   );

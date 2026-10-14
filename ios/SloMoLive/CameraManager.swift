@@ -294,12 +294,11 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
-        // Bitrate tối ưu cho 4G/5G di động:
-        // - 120fps (720p): 4.2 Mbps (max 5.0 Mbps, min 2.8 Mbps)
-        //   Vừa vặn băng thông 4G/5G ổn định, triệt tiêu nghẽn socket buffer -> Encoder giữ nguyên chất lượng nét căng (không bị mờ nén khi mạng lag).
-        // - 240fps: 6.0 Mbps (max 7.2 Mbps, min 3.5 Mbps)
-        // - 60fps/30fps: 2.5 Mbps (max 3.2 Mbps, min 1.8 Mbps)
-        let targetBitrate: UInt = targetFps >= 240 ? 6_000_000 : (targetFps >= 120 ? 4_200_000 : 2_500_000)
+        // Bitrate tối ưu nâng cao độ nét cho 4G/5G di động:
+        // - 120fps (720p): 5.2 Mbps (max 6.2 Mbps, min 3.5 Mbps) -> Tăng ~25% độ chi tiết sắc nét cho lá bài khi tua lại, vẫn an toàn cho 4G/5G.
+        // - 240fps: 7.0 Mbps (max 8.5 Mbps, min 4.2 Mbps)
+        // - 60fps/30fps: 2.8 Mbps (max 3.5 Mbps, min 2.0 Mbps)
+        let targetBitrate: UInt = targetFps >= 240 ? 7_000_000 : (targetFps >= 120 ? 5_200_000 : 2_800_000)
 
         // LFLiveKit validates these setters against the current frame rate: max must be set
         // first; minimum must be strictly below the target.
@@ -312,8 +311,8 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps / 2)
         videoCfg.videoMaxKeyframeInterval = max(10, targetFps / 4)
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = targetFps >= 240 ? 7_200_000 : (targetFps >= 120 ? 5_000_000 : 3_200_000)
-        videoCfg.videoMinBitRate = targetFps >= 240 ? 3_500_000 : (targetFps >= 120 ? 2_800_000 : 1_800_000)
+        videoCfg.videoMaxBitRate = targetFps >= 240 ? 8_500_000 : (targetFps >= 120 ? 6_200_000 : 3_500_000)
+        videoCfg.videoMinBitRate = targetFps >= 240 ? 4_200_000 : (targetFps >= 120 ? 3_500_000 : 2_000_000)
         print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(Double(targetBitrate) / 1_000_000)Mbps")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
