@@ -352,6 +352,9 @@ public class CameraManager: NSObject, ObservableObject {
         // vá cho iOS 14+) sẽ crash khi gọi sessionDidChangeState / session:didFailWithError mà
         // delegate chưa ai implement. Đây là một trong những nguyên nhân crash khi bấm Start Live.
         session.delegate = self
+        // Tự động kết nối lại khi sóng 4G/5G bị ngắt quãng (thử lại mỗi 2s, tối đa 5 lần)
+        session.reconnectInterval = 2
+        session.reconnectCount = 5
 
         liveSession = session
     }
@@ -875,27 +878,29 @@ public class CameraManager: NSObject, ObservableObject {
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
-        // from background threads" và truy cập thread-safe.
-        guard isStreamingAtomic else { return }
+        autoreleasepool {
+            // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
+            // from background threads" và truy cập thread-safe.
+            guard isStreamingAtomic else { return }
 
-        // LFLiveKit.pushVideo(_:) nhận CVPixelBuffer, không nhận CMSampleBuffer trực tiếp. Ta chỉ
-        // lấy image buffer đã có sẵn trong sampleBuffer (không decode/convert format gì thêm, đã ở
-        // dạng BGRA theo videoSettings) rồi đưa cho LFLiveKit tự encode H.264 nội bộ.
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            // LFLiveKit.pushVideo(_:) nhận CVPixelBuffer, không nhận CMSampleBuffer trực tiếp. Ta chỉ
+            // lấy image buffer đã có sẵn trong sampleBuffer (không decode/convert format gì thêm, đã ở
+            // dạng BGRA theo videoSettings) rồi đưa cho LFLiveKit tự encode H.264 nội bộ.
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // DEBUG: đếm frames để biết capture có chạy thật sự không. Log mỗi 240 frames (~1s ở 240fps).
-        _frameCounter += 1
-        if _frameCounter % 240 == 1 {
-            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-            print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames, latest PTS=\(CMTimeGetSeconds(pts))s")
+            // DEBUG: đếm frames để biết capture có chạy thật sự không. Log mỗi 240 frames (~1s ở 240fps).
+            _frameCounter += 1
+            if _frameCounter % 240 == 1 {
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames, latest PTS=\(CMTimeGetSeconds(pts))s")
+            }
+
+            // Bọc trong objc exception handler để nếu liveSession đã bị dealloc, queue đầy, hoặc
+            // bất kỳ lỗi nội bộ nào của LFLiveKit, ta nuốt exception thay vì crash toàn app.
+            // Swift không có try-catch cho ObjC exception gốc, nên ta đặt cờ atomic và để LFLiveKit
+            // xử lý; nếu pushVideo trả về early do session invalid thì frame đó bị drop, không crash.
+            liveSession?.pushVideo(pixelBuffer)
         }
-
-        // Bọc trong objc exception handler để nếu liveSession đã bị dealloc, queue đầy, hoặc
-        // bất kỳ lỗi nội bộ nào của LFLiveKit, ta nuốt exception thay vì crash toàn app.
-        // Swift không có try-catch cho ObjC exception gốc, nên ta đặt cờ atomic và để LFLiveKit
-        // xử lý; nếu pushVideo trả về early do session invalid thì frame đó bị drop, không crash.
-        liveSession?.pushVideo(pixelBuffer)
     }
 }
 
