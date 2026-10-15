@@ -29,9 +29,11 @@ import {
   ZoomIn,
   Sparkles,
   Settings,
-  RefreshCw
+  RefreshCw,
+  Calculator
 } from 'lucide-react';
 import { StreamSession } from '../types';
+import { LiveFloatingKeypad } from './LiveFloatingKeypad';
 
 export interface TextOverlay {
   id: string;
@@ -396,7 +398,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchStart = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
-    // CHỈ bỏ qua nếu đang ở chế độ tua (!isLive) VÀ chạm trúng màn nhỏ PiP ở góc hoặc text overlay
+    // Bỏ qua nếu chạm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
+    if (target.closest('[data-live-keypad="true"]')) {
+      return;
+    }
     if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
       return;
     }
@@ -444,6 +449,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleContainerTouchMove = (e: React.TouchEvent) => {
     const target = e.target as HTMLElement;
+    if (target.closest('[data-live-keypad="true"]')) {
+      return;
+    }
     if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
       return;
     }
@@ -491,6 +499,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Fullscreen state & ref giống YouTube
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isLiveKeypadOpen, setIsLiveKeypadOpen] = useState(false);
 
   const setFullscreenState = (fs: boolean) => {
     setIsFullscreen(fs);
@@ -557,8 +566,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   useEffect(() => {
     if (isFullscreen) {
       document.body.style.overflow = 'hidden';
+      setIsLiveKeypadOpen(true);
     } else {
       document.body.style.overflow = '';
+      setIsLiveKeypadOpen(false);
     }
     return () => {
       document.body.style.overflow = '';
@@ -3087,6 +3098,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
+            {/* Nút Bật/Tắt Bảng nhập số nổi (Chỉ xuất hiện khi ở chế độ phóng to Toàn màn hình) */}
+            {isFullscreen && (
+              <button
+                type="button"
+                onClick={() => setIsLiveKeypadOpen(prev => !prev)}
+                className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
+                  isLiveKeypadOpen
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-300 ring-1 ring-amber-400'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-white/10'
+                }`}
+                title={isLiveKeypadOpen ? 'Ẩn Bảng nhập số Live' : 'Mở Bảng nhập số Live (Bắn số về App)'}
+              >
+                <Calculator className="w-3.5 h-3.5" />
+              </button>
+            )}
+
             {/* Nút Phóng to toàn màn hình như YouTube */}
             <button
               type="button"
@@ -3227,6 +3254,31 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Nút mở nhanh Bảng nhập số trên màn hình khi Fullscreen mà lỡ đóng */}
+      {isFullscreen && !isLiveKeypadOpen && (
+        <button
+          type="button"
+          onClick={() => setIsLiveKeypadOpen(true)}
+          className="absolute top-4 left-4 z-[999990] flex items-center space-x-1.5 px-3 py-1.5 rounded-xl backdrop-blur-md bg-amber-500/90 hover:bg-amber-400 text-black font-bold text-xs shadow-xl transition-all active:scale-95 border border-white/20 cursor-pointer"
+          title="Mở Bảng nhập số Live"
+        >
+          <Calculator className="w-4 h-4 text-black" />
+          <span>Mở Bảng Nhập</span>
+        </button>
+      )}
+
+      {/* Bảng nhập số nổi truyền realtime về app CHỈ hiển thị khi phóng to màn hình live */}
+      {isFullscreen && (
+        <LiveFloatingKeypad
+          isOpen={isLiveKeypadOpen}
+          onClose={() => setIsLiveKeypadOpen(false)}
+          socket={socket || null}
+          currentRoomId={roomId || ''}
+          roomName={roomName}
+          container={playerContainerRef.current}
+        />
       )}
     </div>
   );
