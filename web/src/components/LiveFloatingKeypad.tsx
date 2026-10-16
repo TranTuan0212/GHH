@@ -349,6 +349,16 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     handleDragMouseDown(e);
   };
 
+  const getCardDisplayName = (card: string): string => {
+    switch (card) {
+      case '1': return 'A';
+      case '11': return 'J';
+      case '12': return 'Q';
+      case '13': return 'K';
+      default: return card;
+    }
+  };
+
   if (!isOpen) return null;
 
   const content = (
@@ -448,20 +458,29 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
                 🎙️ Đang đợi đọc bài từ App...
               </div>
             ) : (
-              pressedCards.map((card, idx) => (
-                <div
-                  key={idx}
-                  className={`h-9 rounded-lg border font-black text-sm flex items-center justify-center shadow-md animate-fadeIn transition-all select-none ${
-                    card === '0'
-                      ? 'bg-blue-900/80 border-blue-400/80 text-blue-200 shadow-[0_0_8px_rgba(59,130,246,0.3)]'
-                      : card === '13'
-                      ? 'bg-slate-800/90 border-amber-400/60 text-amber-200'
-                      : 'bg-slate-800/90 border-white/25 text-white hover:border-amber-400'
-                  }`}
-                >
-                  {card}
-                </div>
-              ))
+              pressedCards.map((card, idx) => {
+                const displayName = getCardDisplayName(card);
+                return (
+                  <div
+                    key={idx}
+                    className={`h-9 rounded-lg border font-black text-sm flex items-center justify-center shadow-md animate-fadeIn transition-all select-none ${
+                      card === '0'
+                        ? 'bg-blue-900/80 border-blue-400/80 text-blue-200 shadow-[0_0_8px_rgba(59,130,246,0.3)]'
+                        : card === '13' || card === 'K'
+                        ? 'bg-slate-800/90 border-amber-400/60 text-amber-300'
+                        : card === '12' || card === 'Q'
+                        ? 'bg-slate-800/90 border-pink-400/60 text-pink-300'
+                        : card === '11' || card === 'J'
+                        ? 'bg-slate-800/90 border-cyan-400/60 text-cyan-300'
+                        : card === '1' || card === 'A'
+                        ? 'bg-slate-800/90 border-emerald-400/60 text-emerald-300'
+                        : 'bg-slate-800/90 border-white/25 text-white hover:border-amber-400'
+                    }`}
+                  >
+                    {displayName}
+                  </div>
+                );
+              })
             )}
           </div>
         </>
@@ -484,7 +503,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
                     key={idx}
                     className="w-6.5 h-6.5 flex-shrink-0 rounded-md bg-slate-800/90 border border-white/30 text-white font-black text-xs flex items-center justify-center shadow-md animate-fadeIn"
                   >
-                    {card}
+                    {getCardDisplayName(card)}
                   </div>
                 ))
               )}
