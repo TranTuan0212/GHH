@@ -56,6 +56,10 @@ public class CameraManager: NSObject, ObservableObject {
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
     @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
 
+    /// Trạng thái chế độ chống nhòe bài (Action Shutter 1/500s)
+    @Published public var isActionShutterEnabled: Bool = false
+    @Published public var currentShutterSpeedText: String = "Tự động"
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -306,25 +310,24 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
-        // Bitrate tối ưu nâng cao độ nét cho 4G/5G di động:
-        // - 120fps (720p): 5.2 Mbps (max 6.2 Mbps, min 3.5 Mbps) -> Tăng ~25% độ chi tiết sắc nét cho lá bài khi tua lại, vẫn an toàn cho 4G/5G.
-        // - 240fps: 7.0 Mbps (max 8.5 Mbps, min 4.2 Mbps)
-        // - 60fps/30fps: 2.8 Mbps (max 3.5 Mbps, min 2.0 Mbps)
-        let targetBitrate: UInt = targetFps >= 240 ? 7_000_000 : (targetFps >= 120 ? 5_200_000 : 2_800_000)
+        // Bitrate tối ưu chống vỡ hình khi lá bài chuyển động nhanh:
+        // - 240fps: 11.0 Mbps (max 14.0 Mbps, min 7.0 Mbps)
+        // - 120fps (720p): 8.5 Mbps (max 11.0 Mbps, min 5.0 Mbps) -> Giữ nguyên từng đường viền và số bài khi quăng/chia bài
+        // - 60fps/30fps: 5.0 Mbps (max 6.5 Mbps, min 3.0 Mbps)
+        let targetBitrate: UInt = targetFps >= 240 ? 11_000_000 : (targetFps >= 120 ? 8_500_000 : 5_000_000)
 
         // LFLiveKit validates these setters against the current frame rate: max must be set
         // first; minimum must be strictly below the target.
-        // GOP = fps/4 → keyframe every 0.25s (was fps/2 = 0.5s).
-        // Denser keyframes means: when network drops packets during live stream, replay only
-        // needs to backtrack at most 0.25s to find a decodable IDR frame instead of 0.5s.
-        // DVR uses -c:v copy so it inherits these source keyframes directly.
+        // GOP = 1.0s (targetFps * 1) thay vì fps/4 (0.25s).
+        // Giãn keyframe giúp giải phóng 75% băng thông bị chiếm dụng vô ích bởi các I-frame liên tục,
+        // dồn 100% dung lượng bitrate vào các frame P khi lá bài di chuyển -> triệt tiêu hiện tượng vỡ khối macroblock.
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
         videoCfg.videoMinFrameRate = max(1, targetFps / 2)
-        videoCfg.videoMaxKeyframeInterval = max(10, targetFps / 4)
+        videoCfg.videoMaxKeyframeInterval = targetFps * 1
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = targetFps >= 240 ? 8_500_000 : (targetFps >= 120 ? 6_200_000 : 3_500_000)
-        videoCfg.videoMinBitRate = targetFps >= 240 ? 4_200_000 : (targetFps >= 120 ? 3_500_000 : 2_000_000)
+        videoCfg.videoMaxBitRate = targetFps >= 240 ? 14_000_000 : (targetFps >= 120 ? 11_000_000 : 6_500_000)
+        videoCfg.videoMinBitRate = targetFps >= 240 ? 7_000_000 : (targetFps >= 120 ? 5_000_000 : 3_000_000)
         print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(Double(targetBitrate) / 1_000_000)Mbps")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
@@ -557,6 +560,11 @@ public class CameraManager: NSObject, ObservableObject {
                         self.errorMessage = "Thiết bị không hỗ trợ 60/120/240fps, dùng 30fps"
                     }
                     print("[CameraManager] Không tìm thấy format HFR, fallback 30fps")
+                }
+
+                // Tắt Low Light Boost nếu có để iOS không tự động tụt FPS hoặc kéo dài shutter time trong phòng
+                if videoDevice.isLowLightBoostSupported {
+                    videoDevice.automaticallyEnablesLowLightBoostWhenAvailable = false
                 }
 
                 // Cấu hình tự động lấy nét và đo sáng liên tục toàn dải (cả gần và xa vô cực)
@@ -859,7 +867,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if device.isAutoFocusRangeRestrictionSupported {
                     device.autoFocusRangeRestriction = .none
                 }
-                if device.isExposureModeSupported(.continuousAutoExposure) {
+                if !self.isActionShutterEnabled && device.isExposureModeSupported(.continuousAutoExposure) {
                     device.exposureMode = .continuousAutoExposure
                 }
                 if device.isSubjectAreaChangeMonitoringEnabled {
@@ -871,6 +879,53 @@ public class CameraManager: NSObject, ObservableObject {
                 print("[CameraManager] Lỗi reset auto focus: \(error)")
             }
         }
+    }
+
+    /// Bật/Tắt chế độ Màn trập tốc độ cao (Action Shutter 1/500s) chống nhòe chuyển động lá bài khi tua lại 0.25x
+    public func setActionShutter(enabled: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                if enabled {
+                    if device.isExposureModeSupported(.custom) {
+                        // Tốc độ màn trập 1/500s để đóng băng hoàn toàn chuyển động bài bay
+                        let targetDuration = CMTimeMake(value: 1, timescale: 500)
+                        let minDur = device.activeFormat.minExposureDuration
+                        let maxDur = device.activeFormat.maxExposureDuration
+                        let clampedDuration = max(minDur, min(targetDuration, maxDur))
+
+                        let minISO = device.activeFormat.minISO
+                        let maxISO = device.activeFormat.maxISO
+                        let baseISO: Float = device.iso > 10 ? device.iso : 800.0
+                        let targetISO = max(minISO, min(baseISO * 2.2, maxISO))
+
+                        device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
+                        DispatchQueue.main.async {
+                            self.isActionShutterEnabled = true
+                            self.currentShutterSpeedText = "1/500s"
+                        }
+                        print("[CameraManager] ⚡ Đã bật Action Shutter 1/500s (ISO: \(targetISO))")
+                    }
+                } else {
+                    if device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
+                    DispatchQueue.main.async {
+                        self.isActionShutterEnabled = false
+                        self.currentShutterSpeedText = "Tự động"
+                    }
+                    print("[CameraManager] 🔄 Khôi phục Phơi sáng tự động (Continuous Auto Exposure)")
+                }
+                device.unlockForConfiguration()
+            } catch {
+                print("[CameraManager] Lỗi cấu hình Shutter Speed: \(error)")
+            }
+        }
+    }
+
+    public func toggleActionShutter() {
+        setActionShutter(enabled: !isActionShutterEnabled)
     }
 }
 

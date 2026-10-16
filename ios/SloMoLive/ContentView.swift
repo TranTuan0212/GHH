@@ -236,7 +236,7 @@ struct ContentView: View {
                                         .foregroundColor(.white)
                                 }
 
-                                Text("FPS: \(Int(cameraManager.currentFPS)) | User: \(networkManager.currentUsername ?? "")")
+                                Text("FPS: \(Int(cameraManager.currentFPS)) | Shutter: \(cameraManager.currentShutterSpeedText) | User: \(networkManager.currentUsername ?? "")")
                                     .font(.caption2)
                                     .foregroundColor(.yellow)
 
@@ -254,22 +254,42 @@ struct ContentView: View {
 
                             Spacer()
 
-                            // Flip Camera Button (Cam Trước / Cam Sau)
-                            Button(action: {
-                                cameraManager.switchCamera()
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "camera.rotate.fill")
-                                        .font(.system(size: 14))
-                                    Text(cameraManager.cameraPosition == .front ? "Cam Trước" : "Cam Sau")
-                                        .font(.caption2)
-                                        .fontWeight(.bold)
+                            VStack(alignment: .trailing, spacing: 8) {
+                                HStack(spacing: 8) {
+                                    // Nút Bật/Tắt Chống Nhòe Bài (Action Shutter 1/500s)
+                                    Button(action: {
+                                        cameraManager.toggleActionShutter()
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: cameraManager.isActionShutterEnabled ? "bolt.fill" : "bolt.slash.fill")
+                                                .font(.system(size: 13, weight: .bold))
+                                            Text(cameraManager.isActionShutterEnabled ? "Chống Nhòe: BẬT" : "Chống Nhòe: TẮT")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(8)
+                                        .background(cameraManager.isActionShutterEnabled ? Color.green.opacity(0.85) : Color.gray.opacity(0.6))
+                                        .cornerRadius(12)
+                                    }
+
+                                    // Flip Camera Button (Cam Trước / Cam Sau)
+                                    Button(action: {
+                                        cameraManager.switchCamera()
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "camera.rotate.fill")
+                                                .font(.system(size: 14))
+                                            Text(cameraManager.cameraPosition == .front ? "Cam Trước" : "Cam Sau")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(8)
+                                        .background(Color.indigo.opacity(0.8))
+                                        .cornerRadius(12)
+                                    }
                                 }
-                                .foregroundColor(.white)
-                                .padding(8)
-                                .background(Color.indigo.opacity(0.8))
-                                .cornerRadius(12)
-                            }
 
                             // GPS Indicator
                             if let loc = locationManager.lastKnownLocation {
@@ -287,7 +307,8 @@ struct ContentView: View {
                                 .cornerRadius(12)
                             }
                         }
-                        .padding()
+                    }
+                    .padding()
 
                         Spacer()
 
