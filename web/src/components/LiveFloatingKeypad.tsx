@@ -50,9 +50,18 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       }
     };
 
+    const handleCardsCleared = (data?: { roomId?: string }) => {
+      if (data?.roomId && currentRoomId && data.roomId !== currentRoomId) return;
+      setPressedCards([]);
+    };
+
     socket.on('remote_card_received', handleRemoteCard);
+    socket.on('cards_cleared', handleCardsCleared);
+    socket.on('round_finished', handleCardsCleared);
     return () => {
       socket.off('remote_card_received', handleRemoteCard);
+      socket.off('cards_cleared', handleCardsCleared);
+      socket.off('round_finished', handleCardsCleared);
     };
   }, [socket, isSyncVoice, currentRoomId]);
 
