@@ -531,6 +531,7 @@ io.on('connection', (socket) => {
             cardValue: data.cardValue,
             action: data.action || 'ADD',
             roomId: targetRoomId,
+            source: data.source || 'WEB',
             timestamp: Date.now()
         });
     });

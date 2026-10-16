@@ -559,7 +559,7 @@ io.on('connection', (socket) => {
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
   });
 
-  socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string }) => {
+  socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string; source?: 'APP' | 'WEB' }) => {
     if (!user) return;
     const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
     if (!canControlRoom(targetRoomId)) return;
@@ -568,6 +568,7 @@ io.on('connection', (socket) => {
       cardValue: data.cardValue,
       action: data.action || 'ADD',
       roomId: targetRoomId,
+      source: data.source || 'WEB',
       timestamp: Date.now()
     });
   });
