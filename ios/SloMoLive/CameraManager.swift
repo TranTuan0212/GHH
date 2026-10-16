@@ -56,10 +56,6 @@ public class CameraManager: NSObject, ObservableObject {
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
     @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
 
-    /// Trạng thái chế độ chống nhòe bài (Action Shutter 1/500s)
-    @Published public var isActionShutterEnabled: Bool = false
-    @Published public var currentShutterSpeedText: String = "Tự động"
-
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -533,8 +529,8 @@ public class CameraManager: NSObject, ObservableObject {
 
                 try videoDevice.lockForConfiguration()
 
-                // Chọn format HFR tốt nhất: ưu tiên 240fps → 120fps → 60fps
-                let targetRates: [Double] = [240.0, 120.0, 60.0]
+                // Chọn format HFR: Khóa chuẩn 120fps (mượt mà, thu sáng tốt trong phòng, bitrate tối ưu) → 60fps
+                let targetRates: [Double] = [120.0, 60.0]
                 let result = self.selectBestHFRFormat(for: videoDevice, targetRates: targetRates)
 
                 if let (format, fps) = result {
@@ -867,7 +863,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if device.isAutoFocusRangeRestrictionSupported {
                     device.autoFocusRangeRestriction = .none
                 }
-                if !self.isActionShutterEnabled && device.isExposureModeSupported(.continuousAutoExposure) {
+                if device.isExposureModeSupported(.continuousAutoExposure) {
                     device.exposureMode = .continuousAutoExposure
                 }
                 if device.isSubjectAreaChangeMonitoringEnabled {
@@ -879,53 +875,6 @@ public class CameraManager: NSObject, ObservableObject {
                 print("[CameraManager] Lỗi reset auto focus: \(error)")
             }
         }
-    }
-
-    /// Bật/Tắt chế độ Màn trập tốc độ cao (Action Shutter 1/500s) chống nhòe chuyển động lá bài khi tua lại 0.25x
-    public func setActionShutter(enabled: Bool) {
-        sessionQueue.async { [weak self] in
-            guard let self = self, let device = self.videoDeviceInput?.device else { return }
-            do {
-                try device.lockForConfiguration()
-                if enabled {
-                    if device.isExposureModeSupported(.custom) {
-                        // Tốc độ màn trập 1/500s để đóng băng hoàn toàn chuyển động bài bay
-                        let targetDuration = CMTimeMake(value: 1, timescale: 500)
-                        let minDur = device.activeFormat.minExposureDuration
-                        let maxDur = device.activeFormat.maxExposureDuration
-                        let clampedDuration = max(minDur, min(targetDuration, maxDur))
-
-                        let minISO = device.activeFormat.minISO
-                        let maxISO = device.activeFormat.maxISO
-                        let baseISO: Float = device.iso > 10 ? device.iso : 800.0
-                        let targetISO = max(minISO, min(baseISO * 2.2, maxISO))
-
-                        device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
-                        DispatchQueue.main.async {
-                            self.isActionShutterEnabled = true
-                            self.currentShutterSpeedText = "1/500s"
-                        }
-                        print("[CameraManager] ⚡ Đã bật Action Shutter 1/500s (ISO: \(targetISO))")
-                    }
-                } else {
-                    if device.isExposureModeSupported(.continuousAutoExposure) {
-                        device.exposureMode = .continuousAutoExposure
-                    }
-                    DispatchQueue.main.async {
-                        self.isActionShutterEnabled = false
-                        self.currentShutterSpeedText = "Tự động"
-                    }
-                    print("[CameraManager] 🔄 Khôi phục Phơi sáng tự động (Continuous Auto Exposure)")
-                }
-                device.unlockForConfiguration()
-            } catch {
-                print("[CameraManager] Lỗi cấu hình Shutter Speed: \(error)")
-            }
-        }
-    }
-
-    public func toggleActionShutter() {
-        setActionShutter(enabled: !isActionShutterEnabled)
     }
 }
 
