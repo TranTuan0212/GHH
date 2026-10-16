@@ -56,6 +56,9 @@ public class CameraManager: NSObject, ObservableObject {
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
     @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
 
+    /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
+    @Published public var isFocusLocked: Bool = false
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -107,7 +110,8 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     @objc private func handleSubjectAreaDidChange(notification: Notification) {
-        // Khi người dùng lia máy / di chuyển máy, tự động khôi phục chế độ tự động lấy nét liên tục
+        // Chỉ khôi phục autofocus nếu người dùng không khóa nét cố định
+        guard !self.isFocusLocked else { return }
         self.resetContinuousFocus()
     }
 
@@ -429,16 +433,15 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Chọn format HFR (120/240fps) phù hợp với thiết bị:
-    /// - iPhone 13 Pro / 14 Pro / 15 Pro / 16 Pro: hỗ trợ 240fps ở 720p hoặc 1080p (tùy model).
-    /// - iPhone thường (không Pro): thường chỉ hỗ trợ tới 60fps trên wide camera.
-    /// Logic: với mỗi target rate (240 → 120 → 60), duyệt qua TẤT CẢ format của device, tìm
-    /// format có minFrameDuration <= 1/targetRate VÀ maxFrameRate >= targetRate. Nếu nhiều
-    /// format match, chọn format có resolution cao nhất (pixel count lớn nhất) để giữ chi tiết.
+    /// Chọn format HFR chuẩn 120fps/60fps:
+    /// Ưu tiên độ phân giải Native 1280x720 (khớp 1:1 với RTMP encoder, kích hoạt chế độ gộp điểm ảnh Pixel Binning
+    /// trên iPhone 14 Pro Max giúp thu sáng tốt trong phòng, không bị quá tải RAM và không bị nhòe nội suy khi chuyển động).
     private func selectBestHFRFormat(for device: AVCaptureDevice, targetRates: [Double]) -> (format: AVCaptureDevice.Format, fps: Double)? {
+        let idealPixels: Int32 = 1280 * 720 // Chuẩn 720p khớp 1:1 với encoder RTMP
+
         for targetRate in targetRates {
             var bestFormat: AVCaptureDevice.Format? = nil
-            var bestPixels: Int32 = 0
+            var bestScore: Int64 = Int64.max
 
             for format in device.formats {
                 let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
@@ -447,16 +450,23 @@ public class CameraManager: NSObject, ObservableObject {
                 for range in format.videoSupportedFrameRateRanges {
                     // minFrameDuration phải đủ nhanh (1/targetRate) VÀ maxFrameRate phải >= targetRate
                     if range.minFrameDuration <= CMTime(value: 1, timescale: CMTimeScale(targetRate)) &&
-                       range.maxFrameRate >= targetRate &&
-                       pixels > bestPixels {
-                        bestFormat = format
-                        bestPixels = pixels
+                       range.maxFrameRate >= targetRate {
+                        
+                        let isExact720p = (dims.width == 1280 && dims.height == 720) || (dims.width == 720 && dims.height == 1280)
+                        let diff = abs(Int64(pixels) - Int64(idealPixels))
+                        let score: Int64 = isExact720p ? 0 : (diff + 10_000)
+
+                        if score < bestScore {
+                            bestScore = score
+                            bestFormat = format
+                        }
                     }
                 }
             }
 
             if let fmt = bestFormat {
-                print("[CameraManager] Chọn format \(targetRate)fps, resolution: \(CMVideoFormatDescriptionGetDimensions(fmt.formatDescription).width)x\(CMVideoFormatDescriptionGetDimensions(fmt.formatDescription).height)")
+                let dims = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
+                print("[CameraManager] Chọn format \(targetRate)fps, resolution: \(dims.width)x\(dims.height) (Khớp chuẩn 1:1 encoder)")
                 return (fmt, targetRate)
             }
         }
@@ -819,8 +829,8 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Lấy nét và đo sáng tại điểm chạm (tọa độ 0.0 -> 1.0 theo hệ tọa độ chuẩn của AVCaptureDevice)
-    public func focus(at devicePoint: CGPoint) {
+    /// Lấy nét tại điểm chạm và KHÓA CỨNG tiêu cự mặt bàn (ngăn hiện tượng đảo nét khi tay người chia bài đưa vào)
+    public func focus(at devicePoint: CGPoint, shouldLock: Bool = true) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
             do {
@@ -838,9 +848,17 @@ public class CameraManager: NSObject, ObservableObject {
                     device.exposureMode = .autoExpose
                 }
 
-                // Bật giám sát để khi lia máy sẽ tự động chuyển về Continuous Auto Focus
-                if device.isSubjectAreaChangeMonitoringEnabled == false {
-                    device.isSubjectAreaChangeMonitoringEnabled = true
+                if shouldLock {
+                    // Tắt giám sát thay đổi vùng cảnh để KHÔNG tự động chuyển về Continuous Auto Focus khi tay người di chuyển
+                    device.isSubjectAreaChangeMonitoringEnabled = false
+                    DispatchQueue.main.async {
+                        self.isFocusLocked = true
+                    }
+                    print("[CameraManager] 🔒 Đã KHÓA NÉT cố định tại điểm chạm mặt bàn (Không đảo nét khi chia bài)")
+                } else {
+                    if device.isSubjectAreaChangeMonitoringEnabled == false {
+                        device.isSubjectAreaChangeMonitoringEnabled = true
+                    }
                 }
 
                 device.unlockForConfiguration()
@@ -851,10 +869,48 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Mở khóa nét để chuyển về tự động lấy nét liên tục hoặc khóa nét tại chỗ
+    public func toggleFocusLock() {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                if self.isFocusLocked {
+                    // Mở khóa -> về lại continuous auto focus
+                    if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
+                    if device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
+                    device.isSubjectAreaChangeMonitoringEnabled = true
+                    DispatchQueue.main.async {
+                        self.isFocusLocked = false
+                    }
+                    print("[CameraManager] 🔄 Đã mở khóa nét -> Tự động lấy nét liên tục")
+                } else {
+                    // Khóa cứng tiêu cự hiện tại
+                    if device.isFocusModeSupported(.locked) {
+                        device.focusMode = .locked
+                    }
+                    device.isSubjectAreaChangeMonitoringEnabled = false
+                    DispatchQueue.main.async {
+                        self.isFocusLocked = true
+                    }
+                    print("[CameraManager] 🔒 Đã khóa tiêu cự hiện tại")
+                }
+                device.unlockForConfiguration()
+            } catch {
+                print("[CameraManager] Lỗi toggle focus lock: \(error)")
+            }
+        }
+    }
+
     /// Khôi phục chế độ tự động lấy nét và đo sáng liên tục (Continuous Auto Focus)
     public func resetContinuousFocus() {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            guard !self.isFocusLocked else { return }
             do {
                 try device.lockForConfiguration()
                 if device.isFocusModeSupported(.continuousAutoFocus) {

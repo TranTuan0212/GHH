@@ -188,14 +188,14 @@ struct ContentView: View {
                 // Live Stream Camera Preview View
                 ZStack {
                     CameraPreviewView(session: cameraManager.session, onTapToFocus: { viewPoint, devicePoint in
-                        cameraManager.focus(at: devicePoint)
+                        cameraManager.focus(at: devicePoint, shouldLock: true)
                         focusPoint = viewPoint
                         showFocusBox = true
                         focusBoxPulse = true
                         withAnimation(.easeInOut(duration: 0.15)) {
                             focusBoxPulse = false
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             withAnimation(.easeOut(duration: 0.3)) {
                                 showFocusBox = false
                             }
@@ -209,13 +209,24 @@ struct ContentView: View {
 
                     // Yellow Focus & Exposure Box (Giống app Camera iOS chuẩn)
                     if showFocusBox, let pt = focusPoint {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.yellow, lineWidth: 1.5)
-                                .frame(width: focusBoxPulse ? 85 : 65, height: focusBoxPulse ? 85 : 65)
-                            Circle()
-                                .fill(Color.yellow)
-                                .frame(width: 4, height: 4)
+                        VStack(spacing: 4) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.yellow, lineWidth: 1.5)
+                                    .frame(width: focusBoxPulse ? 85 : 65, height: focusBoxPulse ? 85 : 65)
+                                Circle()
+                                    .fill(Color.yellow)
+                                    .frame(width: 4, height: 4)
+                            }
+                            if cameraManager.isFocusLocked {
+                                Text("ĐÃ KHÓA NÉT 🔒")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.yellow)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.black.opacity(0.75))
+                                    .cornerRadius(6)
+                            }
                         }
                         .position(pt)
                         .transition(.opacity)
@@ -255,21 +266,44 @@ struct ContentView: View {
                             Spacer()
 
                             VStack(alignment: .trailing, spacing: 8) {
-                                // Flip Camera Button (Cam Trước / Cam Sau)
-                                Button(action: {
-                                    cameraManager.switchCamera()
-                                }) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "camera.rotate.fill")
-                                            .font(.system(size: 14))
-                                        Text(cameraManager.cameraPosition == .front ? "Cam Trước" : "Cam Sau")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
+                                HStack(spacing: 8) {
+                                    // Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
+                                    Button(action: {
+                                        cameraManager.toggleFocusLock()
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: cameraManager.isFocusLocked ? "lock.fill" : "lock.open.fill")
+                                                .font(.system(size: 13, weight: .bold))
+                                            Text(cameraManager.isFocusLocked ? "Nét: KHÓA 🔒" : "Nét: AUTO 🔄")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(cameraManager.isFocusLocked ? .yellow : .white)
+                                        .padding(8)
+                                        .background(cameraManager.isFocusLocked ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(cameraManager.isFocusLocked ? Color.yellow : Color.white.opacity(0.2), lineWidth: 1)
+                                        )
                                     }
-                                    .foregroundColor(.white)
-                                    .padding(8)
-                                    .background(Color.indigo.opacity(0.8))
-                                    .cornerRadius(12)
+
+                                    // Flip Camera Button (Cam Trước / Cam Sau)
+                                    Button(action: {
+                                        cameraManager.switchCamera()
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "camera.rotate.fill")
+                                                .font(.system(size: 14))
+                                            Text(cameraManager.cameraPosition == .front ? "Cam Trước" : "Cam Sau")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(8)
+                                        .background(Color.indigo.opacity(0.8))
+                                        .cornerRadius(12)
+                                    }
                                 }
 
                             // GPS Indicator
