@@ -21,6 +21,41 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
   container
 }) => {
   const [pressedCards, setPressedCards] = useState<string[]>([]);
+  const [isSyncVoice, setIsSyncVoice] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('live_keypad_sync_voice');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  // Lắng nghe các lá bài được đọc bằng giọng nói từ App điện thoại truyền về Realtime
+  useEffect(() => {
+    if (!socket || !isSyncVoice) return;
+
+    const handleRemoteCard = (data: { cardValue?: string; action?: string; roomId?: string }) => {
+      if (data.roomId && currentRoomId && data.roomId !== currentRoomId) {
+        return;
+      }
+
+      const action = data.action || 'ADD';
+      if (action === 'ADD' && data.cardValue) {
+        const val = data.cardValue === '__hidden__' ? '0' : data.cardValue;
+        setPressedCards(prev => [...prev, val]);
+      } else if (action === 'DELETE') {
+        setPressedCards(prev => prev.slice(0, -1));
+      } else if (action === 'CLEAR') {
+        setPressedCards([]);
+      }
+    };
+
+    socket.on('remote_card_received', handleRemoteCard);
+    return () => {
+      socket.off('remote_card_received', handleRemoteCard);
+    };
+  }, [socket, isSyncVoice, currentRoomId]);
+
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = localStorage.getItem('live_keypad_pos');
@@ -345,6 +380,25 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
             ))
           )}
         </div>
+
+        {/* Nút công tắc Bật/Tắt Đồng bộ Giọng Nói Realtime */}
+        <button
+          type="button"
+          onClick={() => {
+            const next = !isSyncVoice;
+            setIsSyncVoice(next);
+            try { localStorage.setItem('live_keypad_sync_voice', String(next)); } catch {}
+          }}
+          className={`h-7 px-1.5 rounded-md text-[10px] font-bold border flex items-center gap-1 transition-all flex-shrink-0 cursor-pointer ${
+            isSyncVoice
+              ? 'bg-emerald-600/30 border-emerald-400 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+              : 'bg-slate-800/80 border-slate-600 text-slate-400'
+          }`}
+          title={isSyncVoice ? 'Đang BẬT đồng bộ giọng nói từ App' : 'Chạm để BẬT đồng bộ giọng nói từ App'}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${isSyncVoice ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+          <span>🎙️ Đồng bộ</span>
+        </button>
 
         {roomName && (
           <span className="text-[10px] px-1.5 py-1 rounded-md bg-amber-400/20 text-amber-300 font-mono font-bold border border-amber-400/30 flex-shrink-0" title="Tài khoản nhận số">
