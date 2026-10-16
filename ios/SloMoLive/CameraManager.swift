@@ -59,6 +59,10 @@ public class CameraManager: NSObject, ObservableObject {
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
     @Published public var isFocusLocked: Bool = false
 
+    /// Trạng thái tốc độ màn trập 1/240s (khử nhòe lá bài khi tua chậm 0.25x)
+    @Published public var isActionShutterEnabled: Bool = true
+    @Published public var currentShutterText: String = "1/240s ⚡"
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -299,36 +303,40 @@ public class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        // QUAN TRỌNG: Khớp hoàn hảo videoSize của bộ nén với hướng xoay của camera.
-        // Tránh tình trạng camera xuất khung ngang 16:9 nhưng encoder bị kẹp 720x1280 (9:16) làm hình bị nén méo (nén thẳng).
+        // QUAN TRỌNG: Khớp hoàn hảo videoSize của bộ nén với resolution thực tế của camera (1080p hoặc 720p).
+        var captureWidth: CGFloat = 1920
+        var captureHeight: CGFloat = 1080
+        if let device = videoDeviceInput?.device {
+            let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+            let maxDim = max(CGFloat(dims.width), CGFloat(dims.height))
+            let minDim = min(CGFloat(dims.width), CGFloat(dims.height))
+            captureWidth = maxDim >= 1920 ? 1920 : 1280
+            captureHeight = maxDim >= 1920 ? 1080 : 720
+        }
+
         if isLandscape {
-            videoCfg.videoSize = CGSize(width: 1280, height: 720)
+            videoCfg.videoSize = CGSize(width: captureWidth, height: captureHeight)
             videoCfg.outputImageOrientation = uiOrientation
         } else {
-            videoCfg.videoSize = CGSize(width: 720, height: 1280)
+            videoCfg.videoSize = CGSize(width: captureHeight, height: captureWidth)
             videoCfg.outputImageOrientation = .portrait
         }
 
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
-        // Bitrate tối ưu chống vỡ hình khi lá bài chuyển động nhanh:
-        // - 240fps: 11.0 Mbps (max 14.0 Mbps, min 7.0 Mbps)
-        // - 120fps (720p): 8.5 Mbps (max 11.0 Mbps, min 5.0 Mbps) -> Giữ nguyên từng đường viền và số bài khi quăng/chia bài
-        // - 60fps/30fps: 5.0 Mbps (max 6.5 Mbps, min 3.0 Mbps)
-        let targetBitrate: UInt = targetFps >= 240 ? 11_000_000 : (targetFps >= 120 ? 8_500_000 : 5_000_000)
+        // Bitrate an toàn 100% cho 4G trong phòng mà vẫn giữ độ nét tối đa cho 1080p 120fps:
+        // - Target: 7.5 Mbps (mạng 4G gánh nhẹ nhàng, mượt mà không khựng)
+        // - Max: 9.5 Mbps (bùng nổ khi lá bài di chuyển nhanh)
+        // - Min: 4.5 Mbps (tự động co giãn khi sóng 4G chập chờn để không bao giờ lag stream)
+        let targetBitrate: UInt = 7_500_000
 
-        // LFLiveKit validates these setters against the current frame rate: max must be set
-        // first; minimum must be strictly below the target.
-        // GOP = 1.0s (targetFps * 1) thay vì fps/4 (0.25s).
-        // Giãn keyframe giúp giải phóng 75% băng thông bị chiếm dụng vô ích bởi các I-frame liên tục,
-        // dồn 100% dung lượng bitrate vào các frame P khi lá bài di chuyển -> triệt tiêu hiện tượng vỡ khối macroblock.
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
         videoCfg.videoMinFrameRate = max(1, targetFps / 2)
         videoCfg.videoMaxKeyframeInterval = targetFps * 1
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = targetFps >= 240 ? 14_000_000 : (targetFps >= 120 ? 11_000_000 : 6_500_000)
-        videoCfg.videoMinBitRate = targetFps >= 240 ? 7_000_000 : (targetFps >= 120 ? 5_000_000 : 3_000_000)
-        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(Double(targetBitrate) / 1_000_000)Mbps")
+        videoCfg.videoMaxBitRate = 9_500_000
+        videoCfg.videoMinBitRate = 4_500_000
+        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(Double(targetBitrate) / 1_000_000)Mbps (4G safe)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -434,29 +442,33 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     /// Chọn format HFR chuẩn 120fps/60fps:
-    /// Ưu tiên độ phân giải Native 1280x720 (khớp 1:1 với RTMP encoder, kích hoạt chế độ gộp điểm ảnh Pixel Binning
-    /// trên iPhone 14 Pro Max giúp thu sáng tốt trong phòng, không bị quá tải RAM và không bị nhòe nội suy khi chuyển động).
+    /// Ưu tiên độ phân giải Full HD 1080p (1920x1080) để số bài và chất bài sắc lẹm, rõ nét từng chi tiết;
+    /// Nếu thiết bị không hỗ trợ 1080p sẽ tự động fallback về 720p (1280x720).
     private func selectBestHFRFormat(for device: AVCaptureDevice, targetRates: [Double]) -> (format: AVCaptureDevice.Format, fps: Double)? {
-        let idealPixels: Int32 = 1280 * 720 // Chuẩn 720p khớp 1:1 với encoder RTMP
-
         for targetRate in targetRates {
             var bestFormat: AVCaptureDevice.Format? = nil
-            var bestScore: Int64 = Int64.max
+            var bestScore: Int64 = -1
 
             for format in device.formats {
                 let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                let pixels = dims.width * dims.height
+                let maxDim = max(dims.width, dims.height)
+                let minDim = min(dims.width, dims.height)
 
                 for range in format.videoSupportedFrameRateRanges {
                     // minFrameDuration phải đủ nhanh (1/targetRate) VÀ maxFrameRate phải >= targetRate
                     if range.minFrameDuration <= CMTime(value: 1, timescale: CMTimeScale(targetRate)) &&
                        range.maxFrameRate >= targetRate {
                         
-                        let isExact720p = (dims.width == 1280 && dims.height == 720) || (dims.width == 720 && dims.height == 1280)
-                        let diff = abs(Int64(pixels) - Int64(idealPixels))
-                        let score: Int64 = isExact720p ? 0 : (diff + 10_000)
+                        var score: Int64 = 0
+                        if maxDim == 1920 && minDim == 1080 {
+                            score = 100 // Ưu tiên số 1: Full HD 1080p
+                        } else if maxDim == 1280 && minDim == 720 {
+                            score = 50  // Ưu tiên số 2: HD 720p
+                        } else if maxDim <= 1920 {
+                            score = 20
+                        }
 
-                        if score < bestScore {
+                        if score > bestScore {
                             bestScore = score
                             bestFormat = format
                         }
@@ -580,9 +592,9 @@ public class CameraManager: NSObject, ObservableObject {
                 if videoDevice.isAutoFocusRangeRestrictionSupported {
                     videoDevice.autoFocusRangeRestriction = .none
                 }
-                if videoDevice.isExposureModeSupported(.continuousAutoExposure) {
-                    videoDevice.exposureMode = .continuousAutoExposure
-                }
+                // Cấu hình phơi sáng 1/240s + ISO 2400 (hoặc Auto)
+                self.applyExposureSettings(device: videoDevice)
+
                 if videoDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                     videoDevice.whiteBalanceMode = .continuousAutoWhiteBalance
                 }
@@ -842,10 +854,12 @@ public class CameraManager: NSObject, ObservableObject {
                     device.focusMode = .autoFocus
                 }
 
-                // Cấu hình điểm đo sáng
-                if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
+                // Cấu hình điểm đo sáng hoặc giữ 1/240s
+                if !self.isActionShutterEnabled && device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
                     device.exposurePointOfInterest = devicePoint
                     device.exposureMode = .autoExpose
+                } else if self.isActionShutterEnabled {
+                    self.applyExposureSettings(device: device)
                 }
 
                 if shouldLock {
@@ -880,9 +894,7 @@ public class CameraManager: NSObject, ObservableObject {
                     if device.isFocusModeSupported(.continuousAutoFocus) {
                         device.focusMode = .continuousAutoFocus
                     }
-                    if device.isExposureModeSupported(.continuousAutoExposure) {
-                        device.exposureMode = .continuousAutoExposure
-                    }
+                    self.applyExposureSettings(device: device)
                     device.isSubjectAreaChangeMonitoringEnabled = true
                     DispatchQueue.main.async {
                         self.isFocusLocked = false
@@ -906,7 +918,7 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Khôi phục chế độ tự động lấy nét và đo sáng liên tục (Continuous Auto Focus)
+    /// Khôi phục chế độ tự động lấy nét liên tục (Continuous Auto Focus)
     public func resetContinuousFocus() {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
@@ -919,9 +931,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if device.isAutoFocusRangeRestrictionSupported {
                     device.autoFocusRangeRestriction = .none
                 }
-                if device.isExposureModeSupported(.continuousAutoExposure) {
-                    device.exposureMode = .continuousAutoExposure
-                }
+                self.applyExposureSettings(device: device)
                 if device.isSubjectAreaChangeMonitoringEnabled {
                     device.isSubjectAreaChangeMonitoringEnabled = false
                 }
@@ -929,6 +939,47 @@ public class CameraManager: NSObject, ObservableObject {
                 print("[CameraManager] 🔄 Khôi phục Continuous Auto Focus")
             } catch {
                 print("[CameraManager] Lỗi reset auto focus: \(error)")
+            }
+        }
+    }
+
+    /// Áp dụng phơi sáng tối ưu: 1/240s + ISO 2400 (khử nhòe chuyển động bài bay mà vẫn sáng rực rỡ trong phòng)
+    public func applyExposureSettings(device: AVCaptureDevice) {
+        if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
+            let targetDuration = CMTimeMake(value: 1, timescale: 240)
+            let minDur = device.activeFormat.minExposureDuration
+            let maxDur = device.activeFormat.maxExposureDuration
+            let clampedDuration = max(minDur, min(targetDuration, maxDur))
+
+            let minISO = device.activeFormat.minISO
+            let maxISO = device.activeFormat.maxISO
+            let targetISO = max(minISO, min(2400.0, maxISO))
+
+            device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
+            DispatchQueue.main.async {
+                self.currentShutterText = "1/240s ⚡"
+            }
+            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Khử nhòe & sáng trong phòng)")
+        } else if device.isExposureModeSupported(.continuousAutoExposure) {
+            device.exposureMode = .continuousAutoExposure
+            DispatchQueue.main.async {
+                self.currentShutterText = "Auto Phơi Sáng"
+            }
+            print("[CameraManager] 🔄 Phơi sáng tự động liên tục")
+        }
+    }
+
+    /// Bật/Tắt chế độ màn trập 1/240s
+    public func toggleActionShutter() {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                self.isActionShutterEnabled = !self.isActionShutterEnabled
+                self.applyExposureSettings(device: device)
+                device.unlockForConfiguration()
+            } catch {
+                print("[CameraManager] Lỗi toggle action shutter: \(error)")
             }
         }
     }

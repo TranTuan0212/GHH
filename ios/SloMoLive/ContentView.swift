@@ -247,7 +247,7 @@ struct ContentView: View {
                                         .foregroundColor(.white)
                                 }
 
-                                Text("FPS: \(Int(cameraManager.currentFPS)) | User: \(networkManager.currentUsername ?? "")")
+                                Text("FPS: \(Int(cameraManager.currentFPS)) | \(cameraManager.currentShutterText) | User: \(networkManager.currentUsername ?? "")")
                                     .font(.caption2)
                                     .foregroundColor(.yellow)
 
@@ -266,25 +266,46 @@ struct ContentView: View {
                             Spacer()
 
                             VStack(alignment: .trailing, spacing: 8) {
-                                HStack(spacing: 8) {
+                                HStack(spacing: 6) {
+                                    // Nút Bật/Tắt Shutter 1/240s
+                                    Button(action: {
+                                        cameraManager.toggleActionShutter()
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: cameraManager.isActionShutterEnabled ? "bolt.fill" : "bolt.slash.fill")
+                                                .font(.system(size: 11, weight: .bold))
+                                            Text(cameraManager.isActionShutterEnabled ? "1/240s ⚡" : "Auto Sáng")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(cameraManager.isActionShutterEnabled ? .yellow : .white)
+                                        .padding(7)
+                                        .background(cameraManager.isActionShutterEnabled ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(cameraManager.isActionShutterEnabled ? Color.yellow : Color.white.opacity(0.2), lineWidth: 1)
+                                        )
+                                    }
+
                                     // Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
                                     Button(action: {
                                         cameraManager.toggleFocusLock()
                                     }) {
-                                        HStack(spacing: 4) {
+                                        HStack(spacing: 3) {
                                             Image(systemName: cameraManager.isFocusLocked ? "lock.fill" : "lock.open.fill")
-                                                .font(.system(size: 13, weight: .bold))
+                                                .font(.system(size: 11, weight: .bold))
                                             Text(cameraManager.isFocusLocked ? "Nét: KHÓA 🔒" : "Nét: AUTO 🔄")
                                                 .font(.caption2)
                                                 .fontWeight(.bold)
                                         }
-                                        .foregroundColor(cameraManager.isFocusLocked ? .yellow : .white)
-                                        .padding(8)
+                                        .foregroundColor(cameraManager.isFocusLocked ? .green : .white)
+                                        .padding(7)
                                         .background(cameraManager.isFocusLocked ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
-                                        .cornerRadius(12)
+                                        .cornerRadius(10)
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(cameraManager.isFocusLocked ? Color.yellow : Color.white.opacity(0.2), lineWidth: 1)
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(cameraManager.isFocusLocked ? Color.green : Color.white.opacity(0.2), lineWidth: 1)
                                         )
                                     }
 
@@ -292,17 +313,12 @@ struct ContentView: View {
                                     Button(action: {
                                         cameraManager.switchCamera()
                                     }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "camera.rotate.fill")
-                                                .font(.system(size: 14))
-                                            Text(cameraManager.cameraPosition == .front ? "Cam Trước" : "Cam Sau")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                        }
-                                        .foregroundColor(.white)
-                                        .padding(8)
-                                        .background(Color.indigo.opacity(0.8))
-                                        .cornerRadius(12)
+                                        Image(systemName: "camera.rotate.fill")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.white)
+                                            .padding(7)
+                                            .background(Color.indigo.opacity(0.8))
+                                            .cornerRadius(10)
                                     }
                                 }
 
