@@ -259,7 +259,7 @@ const appDir = fs.existsSync(path.resolve(__dirname, '../../app'))
   : path.resolve(process.cwd(), 'app');
 
 app.get('/ios/manifest.plist', (req, res) => {
-  const host = req.headers.host || 'slomoview.stream';
+  const host = req.headers.host || 'streamslo.date';
   const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || 'https';
   // Apple itms-services bắt buộc HTTPS (trừ localhost test)
@@ -559,7 +559,7 @@ io.on('connection', (socket) => {
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
   });
 
-  socket.on('live_remote_card', (data) => {
+  socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string }) => {
     if (!user) return;
     const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
     if (!canControlRoom(targetRoomId)) return;
