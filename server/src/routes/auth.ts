@@ -114,13 +114,9 @@ authRouter.post('/login', (req: Request, res: Response) => {
   let licenseToken: string | null = null;
   let voiceLicense: any = null;
 
-  if (!VOICE_LICENSE_ENABLED && appType === 'APP_INPUT') {
-    return res.status(403).json({ error: 'Chức năng máy Nhập và Giọng nói hiện đang tạm khóa trên hệ thống.' });
-  }
-
   // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
   const effectiveAppType: 'APP_LIVE' | 'APP_INPUT' | null = 
-    (appType === 'APP_INPUT' && VOICE_LICENSE_ENABLED) ? 'APP_INPUT' :
+    appType === 'APP_INPUT' ? 'APP_INPUT' :
     (appType === 'APP_LIVE' || platform === 'mobile') ? 'APP_LIVE' : null;
 
   if (effectiveAppType) {
@@ -135,52 +131,6 @@ authRouter.post('/login', (req: Request, res: Response) => {
         effectiveAppType,
         deviceFingerprint
       );
-
-      // TỰ ĐỘNG SINH KEY BẢN QUYỀN THEO MÁY VÀ TÀI KHOẢN KHI ĐĂNG NHẬP (Chờ khách nhập key để kích hoạt)
-      if (VOICE_LICENSE_ENABLED && effectiveAppType === 'APP_INPUT' && deviceFingerprint) {
-        voiceLicense = db.getVoiceLicenseByDevice(deviceFingerprint, user.id);
-        const now = new Date();
-        const userExpires = new Date(user.expiresAt);
-        const daysRemaining = Math.max(1, Math.round((userExpires.getTime() - now.getTime()) / (24 * 3600 * 1000)));
-
-        if (!voiceLicense) {
-          // Server TỰ ĐỘNG sinh sẵn Voice Key gán theo mã máy độc bản
-          const autoKey = generateVoiceLicenseKey(deviceFingerprint, daysRemaining);
-          voiceLicense = db.createVoiceLicense({
-            id: 'lic-' + Date.now(),
-            deviceFingerprint,
-            deviceModel: boundDevice.deviceModel,
-            userId: user.id,
-            licenseKey: autoKey,
-            registeredAt: boundDevice.activatedAt || now.toISOString(),
-            expiresAt: user.expiresAt,
-            isLifetime: false,
-            isUsed: false, // Chờ khách nhập key để mở giọng nói
-            activatedAt: undefined
-          });
-          boundDevice.voiceKey = autoKey;
-          boundDevice.voiceUnlocked = false;
-        } else {
-          // Key đã tồn tại sẵn trên server
-          boundDevice.voiceKey = voiceLicense.licenseKey;
-          voiceLicense.expiresAt = user.expiresAt;
-
-          if (voiceLicense.isUsed) {
-            // Khách đã kích hoạt key trước đó -> cấp token offline duy trì
-            boundDevice.voiceUnlocked = true;
-            licenseToken = generateOfflineLicenseToken(
-              deviceFingerprint,
-              voiceLicense.registeredAt,
-              voiceLicense.expiresAt,
-              voiceLicense.isLifetime
-            );
-          } else {
-            // Khách chưa nhập key -> chưa mở giọng nói
-            boundDevice.voiceUnlocked = false;
-          }
-        }
-        db.save();
-      }
     } catch (err: any) {
       return res.status(403).json({ error: err.message });
     }
