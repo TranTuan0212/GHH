@@ -63,6 +63,9 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var isActionShutterEnabled: Bool = true
     @Published public var currentShutterText: String = "1/240s ⚡"
 
+    /// Mức thu phóng Zoom — giúp iPhone 14 Pro Max đặt ở khoảng cách lấy nét chuẩn (>22cm) vẫn soi cận cảnh lá bài nét căng
+    @Published public var currentZoom: CGFloat = 1.0
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -463,11 +466,11 @@ public class CameraManager: NSObject, ObservableObject {
                         
                         var score: Int64 = 0
                         if maxDim == 1920 && minDim == 1080 {
-                            score = 100 // Ưu tiên số 1: Full HD 1080p
+                            score = 1000 // Ưu tiên số 1 tuyệt đối: Full HD 1080p
                         } else if maxDim == 1280 && minDim == 720 {
-                            score = 50  // Ưu tiên số 2: HD 720p
+                            score = 200  // Ưu tiên số 2: HD 720p
                         } else if maxDim <= 1920 {
-                            score = 20
+                            score = 50
                         }
 
                         // Ưu tiên định dạng Unbinned (không gộp pixel) để giữ độ sắc nét quang học tối đa
@@ -1030,6 +1033,26 @@ public class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
             } catch {
                 print("[CameraManager] Lỗi toggle action shutter: \(error)")
+            }
+        }
+    }
+
+    /// Điều chỉnh mức Zoom quang học / số (Hỗ trợ tối ưu cự ly lấy nét cho iPhone 14 Pro Max)
+    public func setZoom(_ factor: CGFloat) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                let maxAllowedZoom = min(device.activeFormat.videoMaxZoomFactor, 4.0)
+                let clampedZoom = max(1.0, min(factor, maxAllowedZoom))
+                device.videoZoomFactor = clampedZoom
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.currentZoom = clampedZoom
+                }
+                print("[CameraManager] 🔍 Đã đặt Zoom: \(String(format: "%.1f", clampedZoom))x")
+            } catch {
+                print("[CameraManager] Lỗi đặt Zoom: \(error)")
             }
         }
     }
