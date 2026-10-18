@@ -1211,8 +1211,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: lùi 1.0 giây từ mép Live để lấy đoạn buffer đã giải mã hoàn chỉnh trong RAM
-        targetTime = Math.max(start, end - 1.0);
+        // Bấm Slow từ Live: dính ngay mốc hiện tại
+        targetTime = video.currentTime > 0 ? Math.min(end, video.currentTime) : end;
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1751,14 +1751,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: lùi 1.5 giây từ mép Live để lấy đoạn buffer đã nạp hoàn chỉnh trong RAM
-        const targetTime = Math.max(start, end - 1.5);
-        if (video.readyState >= 1) {
-          video.currentTime = targetTime;
-          setCurrentTime(targetTime);
-        } else {
-          pendingReplayTimeRef.current = targetTime;
+        // Chuyển từ Live sang Slow: DÍNH NGAY LẬP TỨC tại khung hình hiện tại, không nhảy lùi thời gian
+        const currentPos = video.currentTime > 0 ? video.currentTime : end;
+        const targetTime = Math.max(start, Math.min(end, currentPos));
+        if (Math.abs(video.currentTime - targetTime) > 0.05) {
+          if (video.readyState >= 1) {
+            video.currentTime = targetTime;
+          } else {
+            pendingReplayTimeRef.current = targetTime;
+          }
         }
+        setCurrentTime(targetTime);
+        video.playbackRate = speed;
       }
 
       video.play().catch((err) => {
@@ -1836,7 +1840,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const v = replayVideoRef.current;
       const start = (v && v.seekable.length > 0) ? v.seekable.start(0) : hlsWindowStart;
       const end = (v && v.seekable.length > 0) ? v.seekable.end(v.seekable.length - 1) : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : start);
-      const target = Math.max(start, end - 1.0);
+      const target = v && v.currentTime > 0 ? v.currentTime : end;
       updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;
