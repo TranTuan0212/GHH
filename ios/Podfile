@@ -27,6 +27,9 @@ post_install do |installer|
         patched = source.gsub(
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanTrue',
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse'
+        ).gsub(
+          'kVTProfileLevel_H264_Main_AutoLevel',
+          'kVTProfileLevel_H264_High_AutoLevel'
         )
         File.write(encoder, patched) if patched != source
       end

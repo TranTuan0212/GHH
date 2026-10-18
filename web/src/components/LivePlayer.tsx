@@ -1270,11 +1270,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
 
       const hls = new Hls({
-        // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio):
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        maxBufferSize: 256 * 1024 * 1024, // 256MB RAM buffer cho 120fps source
-        backBufferLength: 180, // Giữ 3 phút buffer lùi để tua qua lại tức thì
+        // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio, tận dụng RAM lớn):
+        maxBufferLength: 90,
+        maxMaxBufferLength: 180,
+        maxBufferSize: 512 * 1024 * 1024, // 512MB RAM buffer cho 120fps source giữ trọn vẹn frame
+        backBufferLength: 300, // Giữ 5 phút buffer lùi trong RAM để tua đi tua lại tức thì không mất frame
         maxBufferHole: 0.4, // Ngưỡng nhỏ để không nhảy cóc frame
         nudgeOffset: 0.05, // Nhích nhẹ (~6 frame) nếu kẹt buffer thay vì nhảy nửa giây
         nudgeMaxRetry: 5,
