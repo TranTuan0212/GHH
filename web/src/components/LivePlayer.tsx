@@ -1210,8 +1210,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: lùi 4 giây để xem lại ngay pha vừa qua
-        targetTime = Math.max(start, end - 4);
+        // Bấm Slow từ Live: tua ngay từ đoạn đó hoặc lùi 1s thôi chứ đừng tua từ điểm xuất phát
+        const livePos = (liveVideoRef.current && liveVideoRef.current.currentTime > 0) ? liveVideoRef.current.currentTime : end;
+        targetTime = Math.max(start, livePos - 1.0);
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1747,8 +1748,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       video.playbackRate = speed;
       video.muted = true;
       const start = hlsWindowStart;
+      const liveVideoTime = (liveVideoRef.current && liveVideoRef.current.currentTime > 0) ? liveVideoRef.current.currentTime : 0;
       const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
-      const end = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
+      const end = Math.max(liveVideoTime, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration));
       
       updateFrozenTimeline((prev) => prev ?? { start, end });
 
@@ -1756,8 +1758,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: lùi 4 giây để xem lại pha quay chậm vừa qua
-        const targetTime = Math.max(start, end - 4);
+        // Chuyển từ Live sang Slow: tua ngay từ đoạn đó hoặc lùi 1s thôi chứ đừng tua từ điểm xuất phát
+        const livePos = liveVideoTime > 0 ? liveVideoTime : end;
+        const targetTime = Math.max(start, livePos - 1.0);
         if (video.readyState >= 1) {
           video.currentTime = targetTime;
           setCurrentTime(targetTime);
@@ -1839,8 +1842,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setIsLive(false);
       setIsPlaying(false);
       const start = hlsWindowStart;
-      const end = hlsLiveEdge;
-      const target = Math.max(start, end - 4);
+      const liveVideoTime = (liveVideoRef.current && liveVideoRef.current.currentTime > 0) ? liveVideoRef.current.currentTime : 0;
+      const end = Math.max(liveVideoTime, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : start);
+      const livePos = liveVideoTime > 0 ? liveVideoTime : end;
+      const target = Math.max(start, livePos - 1.0);
       updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;
