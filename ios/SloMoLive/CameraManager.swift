@@ -470,6 +470,11 @@ public class CameraManager: NSObject, ObservableObject {
                             score = 20
                         }
 
+                        // Ưu tiên định dạng Unbinned (không gộp pixel) để giữ độ sắc nét quang học tối đa
+                        if !format.isVideoBinned {
+                            score += 50
+                        }
+
                         if score > bestScore {
                             bestScore = score
                             bestFormat = format
@@ -830,9 +835,9 @@ public class CameraManager: NSObject, ObservableObject {
                     if newDevice.isAutoFocusRangeRestrictionSupported {
                         newDevice.autoFocusRangeRestriction = .none
                     }
-                    if newDevice.isExposureModeSupported(.continuousAutoExposure) {
-                        newDevice.exposureMode = .continuousAutoExposure
-                    }
+                    // Cấu hình phơi sáng 1/240s + ISO mở rộng (khử bóng ma & nhòe chuyển động cho Cam trước)
+                    self.applyExposureSettings(device: newDevice)
+
                     if newDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                         newDevice.whiteBalanceMode = .continuousAutoWhiteBalance
                     }
@@ -844,6 +849,10 @@ public class CameraManager: NSObject, ObservableObject {
 
                 self.captureSession.commitConfiguration()
                 self.liveSession?.captureDevicePosition = newPosition
+                // Tái cấu hình lại Encoder RTMP khớp chuẩn 1:1 với camera trước
+                if !self.streamKey.isEmpty && !self.rtmpIngestUrl.isEmpty {
+                    self.rebuildLiveSession()
+                }
                 DispatchQueue.main.async {
                     self.cameraPosition = newPosition
                     self.updateVideoOrientation()
