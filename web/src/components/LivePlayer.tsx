@@ -1130,9 +1130,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
+        // BẬT ĐỆM NGẦM VÀO RAM CHO 4G:
+        // Replay video tiếp tục chạy ngầm (tắt tiếng) bám sát mép Live.
+        // HLS.js sẽ liên tục nạp sẵn 30-60s video 1080p gốc vào RAM.
+        // Khi bấm tua lại, video lấy trực tiếp từ RAM, nét căng 100% không lo 4G yếu!
         if (replayVideoRef.current) {
-          replayVideoRef.current.pause();
-          replayVideoRef.current.muted = true;
+          const video = replayVideoRef.current;
+          video.muted = true;
+          video.playbackRate = 1.0;
+          if (video.seekable.length > 0) {
+            const end = video.seekable.end(video.seekable.length - 1);
+            if (video.currentTime < end - 3 || video.currentTime === 0) {
+              video.currentTime = Math.max(0, end - 1.5);
+            }
+          }
+          video.play().catch(() => {});
         }
       } else if (replayVideoRef.current) {
         // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
@@ -1568,9 +1580,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
       if (isLiveRef.current) {
         const lag = hlsLiveEdge - video.currentTime;
-        // Nếu còn < 2s lệch live -> tự nhảy về edge để tránh bị stuck ở đầu playlist.
-        if (lag >= 0 && lag < 2) {
-          video.currentTime = hlsLiveEdge;
+        // Giữ video HLS đệm mượt mà ở khoảng cách 1.5s sau mép live để liên tục nạp segment mới vào RAM
+        if (lag > 4 || (lag >= 0 && lag < 0.5)) {
+          video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
         }
       }
     };
