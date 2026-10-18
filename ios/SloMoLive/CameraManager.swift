@@ -981,39 +981,41 @@ public class CameraManager: NSObject, ObservableObject {
             device.isVideoHDREnabled = false
         }
 
-        if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
-            let targetDuration = CMTimeMake(value: 1, timescale: 240)
-            let minDur = device.activeFormat.minExposureDuration
-            let maxDur = device.activeFormat.maxExposureDuration
-            let clampedDuration = max(minDur, min(targetDuration, maxDur))
+        let shutterDenominator: Int32 = self.isActionShutterEnabled ? 240 : 120
+        let maxDuration = CMTimeMake(value: 1, timescale: shutterDenominator)
 
-            let minISO = device.activeFormat.minISO
-            let maxISO = device.activeFormat.maxISO
-            // Mở rộng ISO tối đa theo cảm biến để hình ảnh sáng rõ ban đêm mà không bị nhòe vệt
-            let targetISO = max(minISO, min(3600.0, maxISO))
-
-            device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
-            DispatchQueue.main.async {
-                self.currentShutterText = "1/240s ⚡"
-            }
-            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Triệt tiêu bóng ma & sáng ban đêm)")
-        } else if device.isExposureModeSupported(.continuousAutoExposure) {
+        if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
-            // Khóa chặn activeMaxExposureDuration ở 1/120s hoặc 1/240s khi dùng auto exposure (đặc biệt cho camera trước).
-            // Ngăn iOS tự ý kéo dài thời gian phơi sáng xuống 1/30s-1/60s gây nhòe mờ khi vung bài / tay chuyển động nhanh!
-            let maxDuration = CMTimeMake(value: 1, timescale: 120)
+            // Khóa chặn activeMaxExposureDuration ở 1/240s khi bật Action Shutter (hoặc 1/120s ở chế độ thường).
+            // Cơ chế này ép màn trập luôn siêu nhanh (khử triệt để nhòe mờ khi vung bài), đồng thời để
+            // iOS tự cân chỉnh ISO ở mức sạch nhất (100 - 400), ngăn Apple ISP gộp frame khử nhiễu gây bóng ma!
             if device.activeFormat.minExposureDuration <= maxDuration && device.activeFormat.maxExposureDuration >= maxDuration {
                 device.activeMaxExposureDuration = maxDuration
                 DispatchQueue.main.async {
-                    self.currentShutterText = "Auto (Max 1/120s) ⚡"
+                    self.currentShutterText = self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡"
                 }
-                print("[CameraManager] 🔄 Phơi sáng tự động có khóa tốc độ Max 1/120s (Khử triệt để nhòe chuyển động nhanh)")
+                print("[CameraManager] ⚡ Đã khóa Max Exposure ở 1/\(shutterDenominator)s (Sạch bóng ma, giữ nét quang học 100%)")
             } else {
                 DispatchQueue.main.async {
                     self.currentShutterText = "Auto Phơi Sáng"
                 }
                 print("[CameraManager] 🔄 Phơi sáng tự động liên tục")
             }
+        } else if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
+            let minDur = device.activeFormat.minExposureDuration
+            let maxDur = device.activeFormat.maxExposureDuration
+            let clampedDuration = max(minDur, min(maxDuration, maxDur))
+
+            let minISO = device.activeFormat.minISO
+            let maxISO = device.activeFormat.maxISO
+            // Giữ ISO ở mức sạch (tối đa 800) để không kích hoạt bộ lọc pha trộn frame của Apple
+            let targetISO = max(minISO, min(800.0, maxISO))
+
+            device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
+            DispatchQueue.main.async {
+                self.currentShutterText = "1/240s ⚡"
+            }
+            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Triệt tiêu bóng ma & giữ độ chi tiết)")
         }
     }
 
