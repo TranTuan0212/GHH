@@ -1626,38 +1626,32 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
 
-    // 1. Tạm dừng video xem lại (Replay)
-    replayVideoRef.current?.pause();
-
-    // 2. Kích hoạt và bật tiếng (nếu không mute) cho luồng trực tiếp Live WebRTC
+    // 1. Kích hoạt và bật tiếng cho luồng trực tiếp Live WebRTC
     const liveVid = liveVideoRef.current;
     if (liveVid) {
       liveVid.muted = isMuted;
       liveVid.play().catch(() => {});
 
-      // Sức khỏe WebRTC: nếu video live bị khựng hoặc readyState thấp hoặc mất kết nối
-      if (liveVid.readyState < 2 || liveVid.paused || !peerConnectionRef.current || peerConnectionRef.current.connectionState !== 'connected') {
-        if (liveVid.srcObject) {
-          console.log('[LivePlayer] Đánh thức WebRTC live stream...');
-          const stream = liveVid.srcObject as MediaStream;
-          liveVid.srcObject = stream;
-          liveVid.play().catch(() => {});
-        }
-        if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'failed' || peerConnectionRef.current.connectionState === 'disconnected') {
-          setWebrtcReconnectCount((c) => c + 1);
-        }
+      // Sức khỏe WebRTC: nếu video live bị ngắt kết nối thực sự
+      if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'failed' || peerConnectionRef.current.connectionState === 'disconnected') {
+        setWebrtcReconnectCount((c) => c + 1);
       }
     }
 
-    // 3. Nếu chưa có WebRTC live frame, HLS chính là luồng xem Live đồng bộ mép trực tiếp!
-    if (!hasLiveFrameRef.current && replayVideoRef.current) {
+    // 2. Chuyển đổi thông minh tránh màn hình đen:
+    // Nếu WebRTC đã có frame và đang chạy tốt, dừng replay video.
+    // Nếu WebRTC chưa kịp có frame hoặc đang kết nối, HLS replay video tiếp tục chạy ở Live Edge
+    // để người dùng LUÔN thấy hình ảnh liên tục, tuyệt đối không bị đen màn hình!
+    if (hasLiveFrameRef.current && liveVid && liveVid.readyState >= 2) {
+      replayVideoRef.current?.pause();
+    } else if (replayVideoRef.current) {
       const video = replayVideoRef.current;
       video.playbackRate = 1.0;
       video.muted = isMuted;
       if (video.seekable.length > 0) {
-        video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
+        video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 0.5);
       } else if (hlsLiveEdge > 0) {
-        video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
+        video.currentTime = Math.max(0, hlsLiveEdge - 0.5);
       }
       video.play().catch(() => {});
     }
@@ -2375,6 +2369,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
+            imageRendering: '-webkit-optimize-contrast' as any,
             filter: isSharpBoost ? 'url(#slomo-sharp-filter) contrast(1.04) saturate(1.05)' : 'none'
           }}
           playsInline
@@ -2426,6 +2421,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out',
+              imageRendering: '-webkit-optimize-contrast' as any,
               filter: isSharpBoost && isLive ? 'url(#slomo-sharp-filter) contrast(1.04) saturate(1.05)' : 'none'
             }}
             playsInline

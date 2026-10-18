@@ -617,13 +617,14 @@ public class CameraManager: NSObject, ObservableObject {
                 videoDevice.unlockForConfiguration()
 
                 if self.captureSession.canAddOutput(self.videoDataOutput) {
-                    // Với 240fps, CPU không kịp xử lý frame BGRA -> nên cho phép drop frame khi quá tải.
-                    // Mặc định true sẽ bỏ frame trễ -> tránh queue overflow gây crash LFLiveKit encoder.
-                    // Nếu muốn giữ nguyên từng frame (khuyến nghị cho Slo-Mo), đặt false nhưng phải
-                    // đảm bảo thiết bị đủ mạnh. Hiện tại đặt false để khớp với tinh thần "không bỏ frame".
-                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = false
+                    // Với 120 FPS / 240 FPS, đặt alwaysDiscardsLateVideoFrames = true đóng vai trò như cầu chì
+                    // bảo hiểm: nếu 1 frame đơn lẻ bị trễ, nó xả frame đó thay vì làm nghẽn đầy buffer pool
+                    // của camera khiến rớt cả cụm 50-100 frames như khi để false.
+                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
+                    // Dùng định dạng gốc phần cứng NV12 (BiPlanar 420 YpCbCr). VideoToolbox encode trực tiếp
+                    // không qua chuyển đổi RGB <-> YUV, triệt tiêu hoàn toàn hiện tượng vỡ nét/mờ màu khi tua lại.
                     self.videoDataOutput.videoSettings = [
-                        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+                        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
                     ]
                     self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
                     self.captureSession.addOutput(self.videoDataOutput)
