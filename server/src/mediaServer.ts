@@ -288,16 +288,15 @@ function startHlsSession(streamKey: string): void {
     '-pix_fmt', 'yuv420p',
     '-bf', '0',
     '-x264-params', 'scenecut=0:repeat-headers=1',
-    // Bitrate tối ưu 2.5Mbps - 3.0Mbps: siêu nét mà nhẹ mạng, không bao giờ tràn write queue WebRTC
-    '-b:v', '2500k',
-    '-maxrate', '3000k',
-    '-bufsize', '3500k',
-    '-g', '15',
-    '-keyint_min', '8',
+    // Live preview siêu nhẹ 2.0Mbps: trễ cực thấp (<0.2s), không ngốn mạng, nhường toàn bộ băng thông cho Replay
+    '-b:v', '2000k',
+    '-maxrate', '2200k',
+    '-bufsize', '2500k',
+    '-g', '30',
+    '-keyint_min', '15',
     '-sc_threshold', '0',
-    // Chèn IDR Keyframe mỗi 0.25s (giảm từ 0.5s): khi mạng rớt gói, màn hình phục hồi
-    // trong tối đa 0.25s. DVR cũng thừa hưởng keyframe dày hơn từ nguồn iOS (fps/4).
-    '-force_key_frames', 'expr:gte(t,n_forced*0.25)',
+    // Keyframe 0.5s cho Live preview: phục hồi nhanh khi mạng rớt mà không tốn dung lượng
+    '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
     // Hỗ trợ âm thanh cho Live qua WebRTC (Opus tiêu chuẩn WebRTC)
     '-c:a', 'libopus',
     '-b:a', '96k',

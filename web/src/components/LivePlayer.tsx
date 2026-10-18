@@ -1130,21 +1130,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
-        // BẬT ĐỆM NGẦM VÀO RAM KHI XEM LIVE:
-        // Luồng Replay tiếp tục chạy ngầm (tắt tiếng) bám sát mép Live.
-        // HLS.js liên tục nạp sẵn và giải mã các segment 1080p gốc vào RAM.
-        // Khi bấm tua lại, video lấy trực tiếp từ RAM, nét căng tức thì 0ms, không bị vỡ khối!
+        // Khi đang xem Live: Tạm dừng HLS để dành 100% băng thông cho luồng Live siêu mượt, không bị nghẽn bởi luồng Replay 16-22Mbps
         if (replayVideoRef.current) {
-          const video = replayVideoRef.current;
-          video.muted = true;
-          video.playbackRate = 1.0;
-          if (video.seekable.length > 0) {
-            const end = video.seekable.end(video.seekable.length - 1);
-            if (video.currentTime < end - 3 || video.currentTime === 0) {
-              video.currentTime = Math.max(0, end - 1.5);
-            }
-          }
-          video.play().catch(() => {});
+          replayVideoRef.current.pause();
+          replayVideoRef.current.muted = true;
         }
       } else if (replayVideoRef.current) {
         // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
