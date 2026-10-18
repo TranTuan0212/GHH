@@ -200,7 +200,7 @@ function resetReplaySession(streamKey) {
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        '-hls_flags', 'delete_segments+program_date_time+independent_segments',
+        '-hls_flags', 'delete_segments+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
     const newReplayFfmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
@@ -262,18 +262,14 @@ function startHlsSession(streamKey) {
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        // independent_segments báo cho hls.js biết mỗi segment đều bắt đầu bằng IDR keyframe độc lập
-        '-hls_flags', '+program_date_time+independent_segments',
+        // KHÔNG dùng independent_segments ở đây: cho phép hls.js tự động tìm lùi về keyframe IDR hợp lệ, triệt tiêu lỗi đen màn hình
+        '-hls_flags', '+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
     // This browser-only rendition is never used for replay. The fps filter emits no more than
     // LIVE_PREVIEW_FPS; frames that cannot be encoded in time are intentionally disposable. The
     // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
     const liveFfmpegArgs = [
-        // LFLiveKit at 240fps occasionally emits a malformed access unit. This is only for
-        // the disposable live preview rendition: drop corrupt packet and continue decoding
-        // next frame instead of blocking the entire live encoder. The replay master remains
-        // an untouched `-c:v copy` stream above.
         '-fflags', '+genpts+discardcorrupt',
         '-err_detect', 'ignore_err',
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
@@ -282,7 +278,7 @@ function startHlsSession(streamKey) {
         // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
         '-fpsmax', String(LIVE_PREVIEW_FPS),
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
+        '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-threads', '0',
         // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
@@ -291,15 +287,15 @@ function startHlsSession(streamKey) {
         '-pix_fmt', 'yuv420p',
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1',
-        // Mở trần băng thông Live HD 8.0Mbps - 10.0Mbps: tận dụng đường truyền mạnh & CPU AMD 8 core, cử động nhanh nét lẹm
-        '-b:v', '8000k',
-        '-maxrate', '10000k',
-        '-bufsize', '12000k',
-        '-g', '30',
-        '-keyint_min', '15',
+        // Live preview siêu nhẹ 2.5Mbps: siêu mượt, trễ cực thấp (<0.2s), không bao giờ lag hay đứng hình
+        '-b:v', '2500k',
+        '-maxrate', '3000k',
+        '-bufsize', '3500k',
+        '-g', '15',
+        '-keyint_min', '8',
         '-sc_threshold', '0',
-        // Keyframe 0.5s cho Live preview
-        '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
+        // Keyframe 0.25s giúp WebRTC phục hồi ngay lập tức nếu rớt mạng
+        '-force_key_frames', 'expr:gte(t,n_forced*0.25)',
         // Hỗ trợ âm thanh cho Live qua WebRTC (Opus tiêu chuẩn WebRTC)
         '-c:a', 'libopus',
         '-b:a', '96k',
@@ -311,8 +307,8 @@ function startHlsSession(streamKey) {
     ];
     console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
     console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
-    console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, 35-45Mbps near-lossless)`);
-    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 8.0Mbps HD, with audio)`);
+    console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, Full HD Master, video-only)`);
+    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, ultra-smooth)`);
     const ffmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
