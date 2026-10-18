@@ -282,7 +282,7 @@ function startHlsSession(streamKey) {
         // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
         '-fpsmax', String(LIVE_PREVIEW_FPS),
         '-c:v', 'libx264',
-        '-preset', 'ultrafast',
+        '-preset', 'veryfast',
         '-tune', 'zerolatency',
         '-threads', '0',
         // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
@@ -291,14 +291,14 @@ function startHlsSession(streamKey) {
         '-pix_fmt', 'yuv420p',
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1',
-        // Live preview siêu nhẹ 2.0Mbps: trễ cực thấp (<0.2s), không ngốn mạng, nhường toàn bộ băng thông cho Replay
-        '-b:v', '2000k',
-        '-maxrate', '2200k',
-        '-bufsize', '2500k',
+        // Mở trần băng thông Live HD 8.0Mbps - 10.0Mbps: tận dụng đường truyền mạnh & CPU AMD 8 core, cử động nhanh nét lẹm
+        '-b:v', '8000k',
+        '-maxrate', '10000k',
+        '-bufsize', '12000k',
         '-g', '30',
         '-keyint_min', '15',
         '-sc_threshold', '0',
-        // Keyframe 0.5s cho Live preview: phục hồi nhanh khi mạng rớt mà không tốn dung lượng
+        // Keyframe 0.5s cho Live preview
         '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
         // Hỗ trợ âm thanh cho Live qua WebRTC (Opus tiêu chuẩn WebRTC)
         '-c:a', 'libopus',
@@ -311,8 +311,8 @@ function startHlsSession(streamKey) {
     ];
     console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
     console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
-    console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, video-only)`);
-    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, with audio)`);
+    console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, 35-45Mbps near-lossless)`);
+    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 8.0Mbps HD, with audio)`);
     const ffmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
