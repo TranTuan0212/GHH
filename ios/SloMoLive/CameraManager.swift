@@ -66,6 +66,11 @@ public class CameraManager: NSObject, ObservableObject {
     /// Mức thu phóng Zoom — giúp iPhone 14 Pro Max đặt ở khoảng cách lấy nét chuẩn (>22cm) vẫn soi cận cảnh lá bài nét căng
     @Published public var currentZoom: CGFloat = 1.0
 
+    /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
+    @Published public var debugFormatInfo: String = ""
+    @Published public var debugEncoderInfo: String = ""
+    @Published public var debugPushedFrames: Int = 0
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -350,6 +355,10 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoBitRate = targetBitrate
         videoCfg.videoMaxBitRate = 24_000_000
         videoCfg.videoMinBitRate = 8_000_000
+        let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
+        DispatchQueue.main.async {
+            self.debugEncoderInfo = encStr
+        }
         print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 1.0s GOP Keyframe, bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 24Mbps, Floor: 8Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
@@ -499,6 +508,10 @@ public class CameraManager: NSObject, ObservableObject {
                 let isBinned = fmt.isVideoBinned
                 let minISO = fmt.minISO
                 let maxISO = fmt.maxISO
+                let infoStr = "\(isFront ? "Trước" : "Sau") \(dims.width)x\(dims.height) @ \(Int(targetRate))fps\(isBinned ? " (Binned)" : "")"
+                DispatchQueue.main.async {
+                    self.debugFormatInfo = infoStr
+                }
                 print("[CameraManager] 🎯 Đã chọn format cho [\(isFront ? "Cam Trước" : "Cam Sau")]: Target \(targetRate)fps (Max \(maxRate)fps), Res: \(dims.width)x\(dims.height), Binned: \(isBinned), ISO: \(minISO)-\(maxISO)")
                 return (fmt, targetRate)
             }
@@ -1085,6 +1098,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             // DEBUG: đếm frames để biết capture có chạy thật sự không. Log mỗi 240 frames (~1s ở 240fps).
             _frameCounter += 1
+            if _frameCounter % 60 == 1 {
+                let count = self._frameCounter
+                DispatchQueue.main.async {
+                    self.debugPushedFrames = count
+                }
+            }
             if _frameCounter % 240 == 1 {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")], latest PTS=\(CMTimeGetSeconds(pts))s")

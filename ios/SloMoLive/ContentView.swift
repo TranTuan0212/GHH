@@ -237,31 +237,55 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                HStack {
+                                HStack(spacing: 6) {
                                     Circle()
                                         .fill(cameraManager.isStreaming ? Color.red : Color.gray)
-                                        .frame(width: 12, height: 12)
-                                    Text(cameraManager.isStreaming ? "LIVE \(Int(cameraManager.currentFPS)) FPS" : "SẴN SÀNG")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.white)
+                                        .frame(width: 10, height: 10)
+                                    Text(cameraManager.isStreaming ? "LIVE" : "SẴN SÀNG")
+                                        .font(.system(size: 11, weight: .black))
+                                        .foregroundColor(cameraManager.isStreaming ? .red : .white)
+                                    Text("[\(cameraManager.currentDevicePosition == .front ? "CAM TRƯỚC" : "CAM SAU")]")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(.cyan)
                                 }
 
-                                Text("FPS: \(Int(cameraManager.currentFPS)) | \(cameraManager.currentShutterText) | User: \(networkManager.currentUsername ?? "")")
-                                    .font(.caption2)
-                                    .foregroundColor(.yellow)
+                                if !cameraManager.debugFormatInfo.isEmpty {
+                                    Text("Sensor: \(cameraManager.debugFormatInfo)")
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.yellow)
+                                }
+
+                                if !cameraManager.debugEncoderInfo.isEmpty {
+                                    Text("\(cameraManager.debugEncoderInfo)")
+                                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.9))
+                                }
+
+                                HStack(spacing: 6) {
+                                    Text("FPS: \(Int(cameraManager.currentFPS)) | \(cameraManager.currentShutterText)")
+                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                        .foregroundColor(.yellow)
+                                    if cameraManager.debugPushedFrames > 0 {
+                                        Text("Pushed: \(cameraManager.debugPushedFrames)f")
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundColor(.green)
+                                    }
+                                }
 
                                 HStack(spacing: 4) {
                                     Image(systemName: "hourglass")
-                                        .font(.system(size: 10))
+                                        .font(.system(size: 9))
                                     Text("Hạn: \(networkManager.getRemainingTimeText())")
-                                        .font(.system(size: 11, weight: .bold))
+                                        .font(.system(size: 10, weight: .bold))
+                                    Text("| User: \(networkManager.currentUsername ?? "")")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.white.opacity(0.7))
                                 }
                                 .foregroundColor(networkManager.getRemainingTimeText().contains("hết hạn") ? .red : .green)
                             }
-                            .padding(12)
-                            .background(Color.black.opacity(0.7))
-                            .cornerRadius(16)
+                            .padding(10)
+                            .background(Color.black.opacity(0.75))
+                            .cornerRadius(14)
 
                             Spacer()
 

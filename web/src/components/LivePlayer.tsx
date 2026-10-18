@@ -145,6 +145,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   });
 
+  // Độ phân giải thực tế của video stream nhận được (WebRTC Live hoặc HLS Replay)
+  const [streamDimensions, setStreamDimensions] = useState<{ width: number; height: number } | null>(null);
+
   const toggleFlip = () => {
     setIsFlipped((prev) => {
       const next = !prev;
@@ -1100,6 +1103,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (video.videoWidth > 0 && video.videoHeight > 0) {
         const isPortrait = video.videoHeight > video.videoWidth;
         setSourceIsPortrait(isPortrait);
+        setStreamDimensions({ width: video.videoWidth, height: video.videoHeight });
         console.log(`[LivePlayer] WebRTC video dimensions: ${video.videoWidth}x${video.videoHeight} (isPortrait: ${isPortrait})`);
       }
     };
@@ -1402,6 +1406,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const onVideoEvent = (ev: Event) => {
         if (ev.type === 'loadedmetadata' && video.videoWidth > 0 && video.videoHeight > 0) {
           setSourceIsPortrait(video.videoHeight > video.videoWidth);
+          setStreamDimensions({ width: video.videoWidth, height: video.videoHeight });
         }
 
         // Xử lý tự động cứu khi video bị khựng (stalled / waiting)
@@ -2608,13 +2613,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       {/* Controls Bar */}
       <div className="p-2 sm:p-2.5 bg-slate-900/95 space-y-1.5 border-t border-white/5">
         <div className="flex items-center justify-between gap-2 pb-1">
-          <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[11px] sm:text-xs font-black font-mono ${
-            isLive
-              ? 'bg-red-600/20 text-red-300 border-red-500/40'
-              : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-          }`}>
-            <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-red-400 animate-pulse' : 'bg-amber-400'}`} />
-            {isLive ? 'CHẾ ĐỘ: LIVE - TRỰC TIẾP' : `CHẾ ĐỘ: SLOW - ${playbackRate}x`}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[11px] sm:text-xs font-black font-mono ${
+              isLive
+                ? 'bg-red-600/20 text-red-300 border-red-500/40'
+                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-red-400 animate-pulse' : 'bg-amber-400'}`} />
+              {isLive ? 'CHẾ ĐỘ: LIVE - TRỰC TIẾP' : `CHẾ ĐỘ: SLOW - ${playbackRate}x`}
+            </div>
+            {streamDimensions && (
+              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/10 text-[10px] font-mono font-bold">
+                {streamDimensions.width}x{streamDimensions.height}
+              </span>
+            )}
           </div>
           {!isLive && (
             <button
