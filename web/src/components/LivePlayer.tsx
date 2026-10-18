@@ -1270,23 +1270,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
 
       const hls = new Hls({
-        // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio, tận dụng RAM lớn):
-        maxBufferLength: 90,
-        maxMaxBufferLength: 180,
-        maxBufferSize: 512 * 1024 * 1024, // 512MB RAM buffer cho 120fps source giữ trọn vẹn frame
-        backBufferLength: 300, // Giữ 5 phút buffer lùi trong RAM để tua đi tua lại tức thì không mất frame
-        maxBufferHole: 0.4, // Ngưỡng nhỏ để không nhảy cóc frame
-        nudgeOffset: 0.05, // Nhích nhẹ (~6 frame) nếu kẹt buffer thay vì nhảy nửa giây
+        // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio, tải tức thì):
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        maxBufferSize: 256 * 1024 * 1024,
+        backBufferLength: 60,
+        maxBufferHole: 0.2,
+        nudgeOffset: 0.1,
         nudgeMaxRetry: 5,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
         highBufferWatchdogPeriod: 0,
-        liveSyncDuration: 3,
+        liveSyncDuration: 2,
         // Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay
         liveMaxLatencyDuration: 86400,
         // Không cho HLS.js tự tăng video.playbackRate để catch-up live edge
         maxLiveSyncPlaybackRate: 1,
         enableWorker: true,
-        lowLatencyMode: false,
+        lowLatencyMode: true,
         debug: false
       });
       hlsInstance = hls;
@@ -1411,8 +1411,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             stallTimer = window.setTimeout(() => {
               if (!video.paused && video.readyState < 3) {
                 if (!isLiveRef.current) {
-                  console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 3500ms -> Nhích nhẹ để tiếp tục phát...');
-                  video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.1);
+                  console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 1000ms -> Nhích nhẹ để tiếp tục phát...');
+                  video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.05);
                 } else if (!hasLiveFrameRef.current) {
                   console.log('[LivePlayer] Video live HLS bị khựng -> Nhảy về live edge...');
                   const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0;
@@ -1422,7 +1422,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   }
                 }
               }
-            }, 2500);
+            }, 1000);
           }
         } else if (ev.type === 'playing' || ev.type === 'canplay') {
           if (stallTimer) {
@@ -1649,9 +1649,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       video.playbackRate = 1.0;
       video.muted = isMuted;
       if (video.seekable.length > 0) {
-        video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 0.5);
+        video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
       } else if (hlsLiveEdge > 0) {
-        video.currentTime = Math.max(0, hlsLiveEdge - 0.5);
+        video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
       }
       video.play().catch(() => {});
     }
@@ -1751,8 +1751,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: lùi 1.0 giây từ mép Live để lấy đoạn buffer đã giải mã hoàn chỉnh trong RAM
-        const targetTime = Math.max(start, end - 1.0);
+        // Chuyển từ Live sang Slow: lùi 1.5 giây từ mép Live để lấy đoạn buffer đã nạp hoàn chỉnh trong RAM
+        const targetTime = Math.max(start, end - 1.5);
         if (video.readyState >= 1) {
           video.currentTime = targetTime;
           setCurrentTime(targetTime);

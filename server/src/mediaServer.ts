@@ -36,7 +36,8 @@ const MEDIA_ROOT = path.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
-const HLS_SEGMENT_SECONDS = 0.5;
+// Phân đoạn 1.0s là chuẩn vàng cho Low-Latency DVR: giảm 50% số request, giúp kéo tua mượt tức thì và không bị khựng buffer
+const HLS_SEGMENT_SECONDS = 1.0;
 // Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
 // avoids the visibly choppy 30fps motion in the operator's live monitor. The master
 // still keeps every source frame for slow motion.
@@ -258,8 +259,8 @@ function startHlsSession(streamKey: string): void {
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
     '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
-    // KHÔNG dùng independent_segments ở đây: cho phép hls.js tự động tìm lùi về keyframe IDR hợp lệ, triệt tiêu lỗi đen màn hình
-    '-hls_flags', '+program_date_time',
+    // delete_segments tự động dọn dẹp các segment cũ vượt ngoài cửa sổ DVR, program_date_time đồng bộ mốc thời gian thực
+    '-hls_flags', 'delete_segments+program_date_time',
     path.join(outputDir, 'index.m3u8')
   ];
 
