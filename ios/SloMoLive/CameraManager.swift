@@ -323,20 +323,20 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
-        // Bitrate an toàn 100% cho 4G trong phòng mà vẫn giữ độ nét tối đa cho 1080p 120fps:
-        // - Target: 7.5 Mbps (mạng 4G gánh nhẹ nhàng, mượt mà không khựng)
-        // - Max: 9.5 Mbps (bùng nổ khi lá bài di chuyển nhanh)
-        // - Min: 4.5 Mbps (tự động co giãn khi sóng 4G chập chờn để không bao giờ lag stream)
-        let targetBitrate: UInt = 7_500_000
+        // Khóa chất lượng sàn nét căng Full HD 1080p 120fps (ngăn tụt bitrate khi 4G dao động):
+        // - Target: 8.0 Mbps (chuẩn Full HD sắc lẹm từng chi tiết)
+        // - Max: 10.0 Mbps (bùng nổ chi tiết khi bài di chuyển nhanh)
+        // - Min: 6.5 Mbps (khóa cứng sàn tối thiểu, chống mờ vỡ hạt khi 4G yếu)
+        let targetBitrate: UInt = 8_000_000
 
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
-        videoCfg.videoMinFrameRate = max(1, targetFps / 2)
+        videoCfg.videoMinFrameRate = targetFps
         videoCfg.videoMaxKeyframeInterval = targetFps * 1
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = 9_500_000
-        videoCfg.videoMinBitRate = 4_500_000
-        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), target bitrate \(Double(targetBitrate) / 1_000_000)Mbps (4G safe)")
+        videoCfg.videoMaxBitRate = 10_000_000
+        videoCfg.videoMinBitRate = 6_500_000
+        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), locked bitrate \(Double(targetBitrate) / 1_000_000)Mbps (min 6.5Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
