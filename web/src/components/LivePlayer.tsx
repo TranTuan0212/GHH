@@ -121,6 +121,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const pendingScrubTimeRef = useRef<number | null>(null);
   const scrubRafRef = useRef<number | null>(null);
   const seekingTimeoutRef = useRef<number | null>(null);
+  const targetSeekTimeRef = useRef<number | null>(null);
+  const pendingPlayAfterSeekRef = useRef<boolean>(false);
   const wasPlayingBeforeDragRef = useRef<boolean>(false);
   const isLiveRef = useRef<boolean>(true);
 
@@ -585,11 +587,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const frozenTimelineRef = useRef<FrozenTimeline | null>(null);
 
   const updateFrozenTimeline = (ft: FrozenTimeline | null | ((prev: FrozenTimeline | null) => FrozenTimeline | null)) => {
-    setFrozenTimeline((prev) => {
-      const next = typeof ft === 'function' ? ft(prev) : ft;
-      frozenTimelineRef.current = next;
-      return next;
-    });
+    const next = typeof ft === 'function' ? ft(frozenTimelineRef.current) : ft;
+    frozenTimelineRef.current = next;
+    setFrozenTimeline(next);
   };
   const [sourceIsPortrait, setSourceIsPortrait] = useState(true);
   const [liveElapsedSeconds, setLiveElapsedSeconds] = useState<number>(0);
@@ -1211,8 +1211,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: dính ngay mốc hiện tại
-        targetTime = video.currentTime > 0 ? Math.min(end, video.currentTime) : end;
+        // Bấm Slow từ Live: dính ngay mốc mép live mới nhất (không dùng currentTime cũ đang chạy trễ)
+        targetTime = end;
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1465,6 +1465,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const liveVid = liveVideoRef.current;
 
     const onTime = () => {
+      // Đang kéo tua hoặc đang chờ trình duyệt hoàn tất seek: không ghi đè currentTime để tránh mốc tua bị giật lùi
+      if (isDraggingSeekRef.current || isSeekingRef.current || targetSeekTimeRef.current !== null) return;
       if (replayVid) {
         setCurrentTime(replayVid.currentTime);
         if (Number.isFinite(replayVid.duration)) {
@@ -1555,16 +1557,31 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         seekingTimeoutRef.current = null;
       }
       isSeekingRef.current = false;
+      targetSeekTimeRef.current = null;
 
       // Nếu trong lúc vừa decode frame trước, tay người dùng đã kéo tới vị trí mới -> seek tiếp ngay!
       if (pendingScrubTimeRef.current !== null) {
         const nextTime = pendingScrubTimeRef.current;
         pendingScrubTimeRef.current = null;
         isSeekingRef.current = true;
+        targetSeekTimeRef.current = nextTime;
         // Dùng currentTime chính xác để giải mã đầy đủ 100% chi tiết, không dùng fastSeek làm nhòe/vỡ khối
         video.currentTime = nextTime;
         setCurrentTime(nextTime);
         return;
+      }
+
+      // Khi không xem live, luôn khóa chắc chắn currentTime tại vị trí decoder vừa hạ cánh
+      if (!isLiveRef.current) {
+        setCurrentTime(video.currentTime);
+      }
+
+      // Nếu có yêu cầu phát tiếp sau khi seek xong
+      if (pendingPlayAfterSeekRef.current) {
+        pendingPlayAfterSeekRef.current = false;
+        video.playbackRate = playbackRate;
+        video.play().catch(() => {});
+        setIsPlaying(true);
       }
 
       if (isLiveRef.current) {
@@ -1751,15 +1768,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: DÍNH NGAY LẬP TỨC tại khung hình hiện tại, không nhảy lùi thời gian
-        const currentPos = video.currentTime > 0 ? video.currentTime : end;
-        const targetTime = Math.max(start, Math.min(end, currentPos));
-        if (Math.abs(video.currentTime - targetTime) > 0.05) {
-          if (video.readyState >= 1) {
-            video.currentTime = targetTime;
-          } else {
-            pendingReplayTimeRef.current = targetTime;
-          }
+        // Chuyển từ Live sang Slow: DÍNH NGAY LẬP TỨC tại mép live mới nhất (end), không nhảy lùi thời gian
+        const targetTime = end;
+        if (video.readyState >= 1) {
+          video.currentTime = targetTime;
+        } else {
+          pendingReplayTimeRef.current = targetTime;
         }
         setCurrentTime(targetTime);
         video.playbackRate = speed;
@@ -1810,6 +1824,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
       pendingScrubTimeRef.current = null;
       isSeekingRef.current = true;
+      targetSeekTimeRef.current = safeTime;
+      if (seekingTimeoutRef.current !== null) {
+        window.clearTimeout(seekingTimeoutRef.current);
+      }
+      seekingTimeoutRef.current = window.setTimeout(() => {
+        isSeekingRef.current = false;
+        targetSeekTimeRef.current = null;
+        seekingTimeoutRef.current = null;
+      }, 800);
       video.currentTime = safeTime;
       return;
     }
@@ -2143,11 +2166,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả chuột: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
-      // Tự động phát tiếp ngay lập tức tại mốc vừa kéo với đúng tốc độ slow đang chọn
-      if (replayVideoRef.current) {
-        replayVideoRef.current.playbackRate = playbackRate;
-        replayVideoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+      // Chỉ phát tiếp nếu trước đó người dùng đang xem live hoặc đang phát;
+      // Nếu đang tạm dừng (pause), giữ nguyên trạng thái tạm dừng tại đúng frame vừa chọn!
+      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+        if (!replayVideoRef.current.seeking) {
+          replayVideoRef.current.playbackRate = playbackRate;
+          replayVideoRef.current.play().catch(() => {});
+          setIsPlaying(true);
+        } else {
+          // Trình duyệt đang nạp frame mục tiêu: chờ onSeeked hoàn tất rồi mới phát để không bị giật lùi
+          pendingPlayAfterSeekRef.current = true;
+        }
       }
     };
 
@@ -2211,11 +2240,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả tay: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
-      // Tự động phát tiếp ngay lập tức tại mốc vừa kéo với đúng tốc độ slow đang chọn
-      if (replayVideoRef.current) {
-        replayVideoRef.current.playbackRate = playbackRate;
-        replayVideoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+      // Chỉ phát tiếp nếu trước đó người dùng đang xem live hoặc đang phát;
+      // Nếu đang tạm dừng (pause), giữ nguyên trạng thái tạm dừng tại đúng frame vừa chọn!
+      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+        if (!replayVideoRef.current.seeking) {
+          replayVideoRef.current.playbackRate = playbackRate;
+          replayVideoRef.current.play().catch(() => {});
+          setIsPlaying(true);
+        } else {
+          // Trình duyệt đang nạp frame mục tiêu: chờ onSeeked hoàn tất rồi mới phát để không bị giật lùi
+          pendingPlayAfterSeekRef.current = true;
+        }
       }
     };
 

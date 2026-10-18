@@ -306,15 +306,15 @@ public class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        // QUAN TRỌNG: Khớp hoàn hảo videoSize của bộ nén với resolution thực tế của camera (1080p hoặc 720p).
-        var captureWidth: CGFloat = 1920
-        var captureHeight: CGFloat = 1080
+        // QUAN TRỌNG: Khớp hoàn hảo videoSize của bộ nén với resolution thực tế của camera (1280x720 hoặc 1920x1080).
+        var captureWidth: CGFloat = 1280
+        var captureHeight: CGFloat = 720
         if let device = videoDeviceInput?.device {
             let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
             let maxDim = max(CGFloat(dims.width), CGFloat(dims.height))
             let minDim = min(CGFloat(dims.width), CGFloat(dims.height))
-            captureWidth = maxDim >= 1920 ? 1920 : 1280
-            captureHeight = maxDim >= 1920 ? 1080 : 720
+            captureWidth = maxDim
+            captureHeight = minDim
         }
 
         if isLandscape {
@@ -447,38 +447,29 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     /// Chọn format HFR chuẩn 120fps/60fps:
-    /// Ưu tiên độ phân giải Full HD 1080p (1920x1080) để số bài và chất bài sắc lẹm, rõ nét từng chi tiết;
-    /// Nếu thiết bị không hỗ trợ 1080p sẽ tự động fallback về 720p (1280x720).
+    /// Ưu tiên độ phân giải Native 1280x720 (khớp 1:1 với RTMP encoder, kích hoạt chế độ gộp điểm ảnh Pixel Binning
+    /// trên cảm biến 48MP của iPhone 14 Pro Max giúp thu sáng gấp 4 lần, khử triệt để nhòe mờ khi chuyển động trong phòng).
     private func selectBestHFRFormat(for device: AVCaptureDevice, targetRates: [Double]) -> (format: AVCaptureDevice.Format, fps: Double)? {
+        let idealPixels: Int32 = 1280 * 720 // Chuẩn 720p khớp 1:1 với encoder RTMP
+
         for targetRate in targetRates {
             var bestFormat: AVCaptureDevice.Format? = nil
-            var bestScore: Int64 = -1
+            var bestScore: Int64 = Int64.max
 
             for format in device.formats {
                 let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                let maxDim = max(dims.width, dims.height)
-                let minDim = min(dims.width, dims.height)
+                let pixels = dims.width * dims.height
 
                 for range in format.videoSupportedFrameRateRanges {
                     // minFrameDuration phải đủ nhanh (1/targetRate) VÀ maxFrameRate phải >= targetRate
                     if range.minFrameDuration <= CMTime(value: 1, timescale: CMTimeScale(targetRate)) &&
                        range.maxFrameRate >= targetRate {
                         
-                        var score: Int64 = 0
-                        if maxDim == 1920 && minDim == 1080 {
-                            score = 1000 // Ưu tiên số 1 tuyệt đối: Full HD 1080p
-                        } else if maxDim == 1280 && minDim == 720 {
-                            score = 200  // Ưu tiên số 2: HD 720p
-                        } else if maxDim <= 1920 {
-                            score = 50
-                        }
+                        let isExact720p = (dims.width == 1280 && dims.height == 720) || (dims.width == 720 && dims.height == 1280)
+                        let diff = abs(Int64(pixels) - Int64(idealPixels))
+                        let score: Int64 = isExact720p ? 0 : (diff + 10_000)
 
-                        // Ưu tiên định dạng Unbinned (không gộp pixel) để giữ độ sắc nét quang học tối đa
-                        if !format.isVideoBinned {
-                            score += 50
-                        }
-
-                        if score > bestScore {
+                        if score < bestScore {
                             bestScore = score
                             bestFormat = format
                         }
