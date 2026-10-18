@@ -588,7 +588,7 @@ public class CameraManager: NSObject, ObservableObject {
                 }
 
                 // Tắt hoàn toàn Video HDR để không chụp ghép đa phơi sáng (short + long) gây hiện tượng bóng ma kép (ghosting)
-                if videoDevice.isAutomaticallyAdjustsVideoHDREnabledSupported {
+                if videoDevice.automaticallyAdjustsVideoHDREnabled {
                     videoDevice.automaticallyAdjustsVideoHDREnabled = false
                 }
                 if videoDevice.isVideoHDREnabled {
@@ -816,7 +816,7 @@ public class CameraManager: NSObject, ObservableObject {
                     }
 
                     // Tắt hoàn toàn Video HDR để không chụp ghép đa phơi sáng gây bóng ma
-                    if newDevice.isAutomaticallyAdjustsVideoHDREnabledSupported {
+                    if newDevice.automaticallyAdjustsVideoHDREnabled {
                         newDevice.automaticallyAdjustsVideoHDREnabled = false
                     }
                     if newDevice.isVideoHDREnabled {
@@ -964,7 +964,7 @@ public class CameraManager: NSObject, ObservableObject {
     /// Áp dụng phơi sáng tối ưu: 1/240s (khử bóng ma chuyển động bài bay) và tận dụng ISO cao để sáng rõ trong đêm
     public func applyExposureSettings(device: AVCaptureDevice) {
         // Luôn tắt Video HDR để tránh chồng ảnh kép
-        if device.isAutomaticallyAdjustsVideoHDREnabledSupported {
+        if device.automaticallyAdjustsVideoHDREnabled {
             device.automaticallyAdjustsVideoHDREnabled = false
         }
         if device.isVideoHDREnabled {
