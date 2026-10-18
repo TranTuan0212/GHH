@@ -252,19 +252,28 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Cấu hình toàn diện video connection của AVCaptureVideoDataOutput:
+    /// - Tắt hoàn toàn chống rung nội suy (tránh iOS crop và resample gây méo mờ khi chuyển động)
+    /// - Tắt mirror ở nguồn (tránh resample thêm trên GPU, giao việc lật cho player)
+    /// - Đồng bộ hướng quay orientation
+    public func configureVideoOutputConnection() {
+        guard let connection = self.videoDataOutput.connection(with: .video) else { return }
+        if connection.isVideoOrientationSupported {
+            connection.videoOrientation = self.currentCaptureOrientation
+        }
+        if connection.isVideoMirroringSupported {
+            // Tắt mirror ở nguồn để tránh resample thêm trên GPU, player web/app đã có nút lật ảnh
+            connection.isVideoMirrored = false
+        }
+        if connection.isVideoStabilizationSupported {
+            connection.preferredVideoStabilizationMode = .off
+        }
+    }
+
     /// Đồng bộ videoOrientation của camera output theo orientation nhận diện từ cảm biến
     private func updateVideoOrientation() {
-        let orientation = self.currentCaptureOrientation
-        let isFront = (self.cameraPosition == .front)
-
         sessionQueue.async { [weak self] in
-            guard let self = self,
-                  let connection = self.videoDataOutput.connection(with: .video),
-                  connection.isVideoOrientationSupported else { return }
-            connection.videoOrientation = orientation
-            if connection.isVideoMirroringSupported {
-                connection.isVideoMirrored = isFront
-            }
+            self?.configureVideoOutputConnection()
         }
     }
 
@@ -341,7 +350,7 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoBitRate = targetBitrate
         videoCfg.videoMaxBitRate = 24_000_000
         videoCfg.videoMinBitRate = 8_000_000
-        print("[CameraManager] LFLive encoder configured: 1080p Full HD \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 1.0s GOP Keyframe, bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 24Mbps, Floor: 8Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 1.0s GOP Keyframe, bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 24Mbps, Floor: 8Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -361,8 +370,8 @@ public class CameraManager: NSObject, ObservableObject {
         }
         // Cho phép phát âm thanh, không mute micro
         session.muted = false
-        // Capture từ AVCaptureVideoDataOutput -> LFLiveKit ghép thành access unit H.264, đẩy ra RTMP.
-        session.captureDevicePosition = AVCaptureDevice.Position.back
+        // Đồng bộ đúng vị trí camera thực tế (cam trước hoặc cam sau) cho pipeline LFLiveKit
+        session.captureDevicePosition = self.currentDevicePosition
 
         // QUAN TRỌNG: PHẢI set delegate. Nếu delegate = nil, một số bản LFLiveKit (đặc biệt fork đã
         // vá cho iOS 14+) sẽ crash khi gọi sessionDidChangeState / session:didFailWithError mà
@@ -447,9 +456,10 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     /// Chọn format HFR chuẩn 120fps/60fps:
-    /// Ưu tiên độ phân giải Native 1280x720 (khớp 1:1 với RTMP encoder, kích hoạt chế độ gộp điểm ảnh Pixel Binning
-    /// trên cảm biến 48MP của iPhone 14 Pro Max giúp thu sáng gấp 4 lần, khử triệt để nhòe mờ khi chuyển động trong phòng).
+    /// - Cam sau: Ưu tiên Native 1280x720 (khớp 1:1 RTMP encoder, kích hoạt Quad-Bayer Pixel Binning thu sáng tối đa).
+    /// - Cam trước: Ưu tiên Native 720p 120fps nếu có; nếu không có 720p mà có 1080p 120fps (chuẩn TrueDepth Slo-mo trên 14 Pro Max) thì chọn ngay 1080p 120fps.
     private func selectBestHFRFormat(for device: AVCaptureDevice, targetRates: [Double]) -> (format: AVCaptureDevice.Format, fps: Double)? {
+        let isFront = (device.position == .front)
         let idealPixels: Int32 = 1280 * 720 // Chuẩn 720p khớp 1:1 với encoder RTMP
 
         for targetRate in targetRates {
@@ -466,8 +476,14 @@ public class CameraManager: NSObject, ObservableObject {
                        range.maxFrameRate >= targetRate {
                         
                         let isExact720p = (dims.width == 1280 && dims.height == 720) || (dims.width == 720 && dims.height == 1280)
+                        let isExact1080p = (dims.width == 1920 && dims.height == 1080) || (dims.width == 1080 && dims.height == 1920)
                         let diff = abs(Int64(pixels) - Int64(idealPixels))
-                        let score: Int64 = isExact720p ? 0 : (diff + 10_000)
+                        
+                        var score: Int64 = isExact720p ? 0 : (diff + 10_000)
+                        // Với cam trước: nếu không có 720p 120fps mà có 1080p 120fps, ưu tiên 1080p hơn các resolution phụ khác
+                        if isFront && isExact1080p {
+                            score = 100
+                        }
 
                         if score < bestScore {
                             bestScore = score
@@ -479,10 +495,15 @@ public class CameraManager: NSObject, ObservableObject {
 
             if let fmt = bestFormat {
                 let dims = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
-                print("[CameraManager] Chọn format \(targetRate)fps, resolution: \(dims.width)x\(dims.height) (Khớp chuẩn 1:1 encoder)")
+                let maxRate = fmt.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+                let isBinned = fmt.isVideoBinned
+                let minISO = fmt.minISO
+                let maxISO = fmt.maxISO
+                print("[CameraManager] 🎯 Đã chọn format cho [\(isFront ? "Cam Trước" : "Cam Sau")]: Target \(targetRate)fps (Max \(maxRate)fps), Res: \(dims.width)x\(dims.height), Binned: \(isBinned), ISO: \(minISO)-\(maxISO)")
                 return (fmt, targetRate)
             }
         }
+        print("[CameraManager] ⚠️ Không tìm thấy format HFR nào cho [\(device.position == .front ? "Cam Trước" : "Cam Sau")] trong targetRates \(targetRates). Sẽ dùng activeFormat mặc định.")
         return nil
     }
 
@@ -623,19 +644,9 @@ public class CameraManager: NSObject, ObservableObject {
                     self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
                     self.captureSession.addOutput(self.videoDataOutput)
 
-                    // Đồng bộ video orientation theo orientation đã nhận diện từ cảm biến
-                    if let connection = self.videoDataOutput.connection(with: .video) {
-                        if connection.isVideoOrientationSupported {
-                            connection.videoOrientation = self.currentCaptureOrientation
-                        }
-                        if connection.isVideoMirroringSupported {
-                            connection.isVideoMirrored = (self.cameraPosition == .front)
-                        }
-                        if connection.isVideoStabilizationSupported {
-                            // Tắt chống rung nội suy để tránh méo viền và mờ chuyển động khi quay 120 FPS
-                            connection.preferredVideoStabilizationMode = .off
-                        }
-                    }
+                    // Cấu hình video connection chuẩn: tắt chống rung, tắt mirror ở nguồn, đặt orientation
+                    self.currentDevicePosition = .back
+                    self.configureVideoOutputConnection()
                 } else {
                     DispatchQueue.main.async {
                         self.errorMessage = "Không thể thêm video output."
@@ -662,6 +673,7 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    public private(set) var currentDevicePosition: AVCaptureDevice.Position = .back
     @Published public var cameraPosition: AVCaptureDevice.Position = .back
 
     public func startLiveStream() {
@@ -775,7 +787,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     public func switchCamera(completion: ((Bool) -> Void)? = nil) {
-        let newPosition: AVCaptureDevice.Position = (self.cameraPosition == .back) ? .front : .back
+        let newPosition: AVCaptureDevice.Position = (self.currentDevicePosition == .back) ? .front : .back
         sessionQueue.async {
             self.captureSession.beginConfiguration()
 
@@ -801,7 +813,8 @@ public class CameraManager: NSObject, ObservableObject {
 
                 do {
                     try newDevice.lockForConfiguration()
-                    let result = self.selectBestHFRFormat(for: newDevice, targetRates: [240.0, 120.0, 60.0])
+                    // Đồng bộ chuẩn targetRates [120, 60] cho cả cam trước và cam sau
+                    let result = self.selectBestHFRFormat(for: newDevice, targetRates: [120.0, 60.0])
                     if let (format, fps) = result {
                         newDevice.activeFormat = format
                         let targetTimescale = Int32(fps)
@@ -830,7 +843,7 @@ public class CameraManager: NSObject, ObservableObject {
                     if newDevice.isAutoFocusRangeRestrictionSupported {
                         newDevice.autoFocusRangeRestriction = .none
                     }
-                    // Cấu hình phơi sáng 1/240s + ISO mở rộng (khử bóng ma & nhòe chuyển động cho Cam trước)
+                    // Cấu hình phơi sáng tối ưu theo vị trí camera (cam trước vs cam sau)
                     self.applyExposureSettings(device: newDevice)
 
                     if newDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
@@ -843,14 +856,17 @@ public class CameraManager: NSObject, ObservableObject {
                 }
 
                 self.captureSession.commitConfiguration()
+                // Cập nhật vị trí camera tức thì trên session queue trước khi rebuild encoder
+                self.currentDevicePosition = newPosition
+                // Cấu hình lại connection mới: tắt chống rung số (không crop/warp hình), tắt mirror nguồn
+                self.configureVideoOutputConnection()
                 self.liveSession?.captureDevicePosition = newPosition
-                // Tái cấu hình lại Encoder RTMP khớp chuẩn 1:1 với camera trước
+                // Tái cấu hình lại Encoder RTMP khớp chuẩn 1:1 với camera mới
                 if !self.streamKey.isEmpty && !self.rtmpIngestUrl.isEmpty {
                     self.rebuildLiveSession()
                 }
                 DispatchQueue.main.async {
                     self.cameraPosition = newPosition
-                    self.updateVideoOrientation()
                     completion?(true)
                 }
             } catch {
@@ -965,7 +981,9 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Áp dụng phơi sáng tối ưu: 1/240s (khử bóng ma chuyển động bài bay) và tận dụng ISO cao để sáng rõ trong đêm
+    /// Áp dụng phơi sáng tối ưu:
+    /// - Cam sau: 1/240s khi bật Action Shutter (hoặc 1/120s ở chế độ thường) để triệt tiêu bóng ma bài bay.
+    /// - Cam trước: 1/120s khi bật Action Shutter (hoặc 1/60s thường) vì cảm biến trước nhỏ hơn, cần nhiều ánh sáng để không bị noise và không kích hoạt bộ khử nhiễu gộp frame gây nhòe của Apple.
     public func applyExposureSettings(device: AVCaptureDevice) {
         // Luôn tắt Video HDR để tránh chồng ảnh kép
         if device.automaticallyAdjustsVideoHDREnabled {
@@ -975,25 +993,27 @@ public class CameraManager: NSObject, ObservableObject {
             device.isVideoHDREnabled = false
         }
 
-        let shutterDenominator: Int32 = self.isActionShutterEnabled ? 240 : 120
+        let isFront = (device.position == .front)
+        let shutterDenominator: Int32 = isFront
+            ? (self.isActionShutterEnabled ? 120 : 60)
+            : (self.isActionShutterEnabled ? 240 : 120)
         let maxDuration = CMTimeMake(value: 1, timescale: shutterDenominator)
 
         if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
-            // Khóa chặn activeMaxExposureDuration ở 1/240s khi bật Action Shutter (hoặc 1/120s ở chế độ thường).
-            // Cơ chế này ép màn trập luôn siêu nhanh (khử triệt để nhòe mờ khi vung bài), đồng thời để
-            // iOS tự cân chỉnh ISO ở mức sạch nhất (100 - 400), ngăn Apple ISP gộp frame khử nhiễu gây bóng ma!
             if device.activeFormat.minExposureDuration <= maxDuration && device.activeFormat.maxExposureDuration >= maxDuration {
                 device.activeMaxExposureDuration = maxDuration
                 DispatchQueue.main.async {
-                    self.currentShutterText = self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡"
+                    self.currentShutterText = isFront
+                        ? (self.isActionShutterEnabled ? "Front 1/120s ⚡" : "Front Auto Max 1/60s ⚡")
+                        : (self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡")
                 }
-                print("[CameraManager] ⚡ Đã khóa Max Exposure ở 1/\(shutterDenominator)s (Sạch bóng ma, giữ nét quang học 100%)")
+                print("[CameraManager] ⚡ Khóa Max Exposure [\(isFront ? "Cam Trước" : "Cam Sau")] ở 1/\(shutterDenominator)s (Sạch bóng ma, giữ nét quang học)")
             } else {
                 DispatchQueue.main.async {
                     self.currentShutterText = "Auto Phơi Sáng"
                 }
-                print("[CameraManager] 🔄 Phơi sáng tự động liên tục")
+                print("[CameraManager] 🔄 Phơi sáng tự động liên tục cho \(isFront ? "Cam Trước" : "Cam Sau")")
             }
         } else if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
             let minDur = device.activeFormat.minExposureDuration
@@ -1007,9 +1027,9 @@ public class CameraManager: NSObject, ObservableObject {
 
             device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
             DispatchQueue.main.async {
-                self.currentShutterText = "1/240s ⚡"
+                self.currentShutterText = isFront ? "Front 1/\(shutterDenominator)s ⚡" : "1/\(shutterDenominator)s ⚡"
             }
-            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Triệt tiêu bóng ma & giữ độ chi tiết)")
+            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/\(shutterDenominator)s, ISO \(targetISO)")
         }
     }
 
@@ -1067,7 +1087,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             _frameCounter += 1
             if _frameCounter % 240 == 1 {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames, latest PTS=\(CMTimeGetSeconds(pts))s")
+                print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")], latest PTS=\(CMTimeGetSeconds(pts))s")
             }
 
             // Bọc trong objc exception handler để nếu liveSession đã bị dealloc, queue đầy, hoặc
