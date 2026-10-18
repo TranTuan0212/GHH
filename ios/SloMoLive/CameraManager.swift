@@ -323,20 +323,22 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
-        // Khóa chất lượng sàn nét căng Full HD 1080p 120fps (ngăn tụt bitrate khi 4G dao động):
-        // - Target: 8.0 Mbps (chuẩn Full HD sắc lẹm từng chi tiết)
-        // - Max: 10.0 Mbps (bùng nổ chi tiết khi bài di chuyển nhanh)
-        // - Min: 6.5 Mbps (khóa cứng sàn tối thiểu, chống mờ vỡ hạt khi 4G yếu)
-        let targetBitrate: UInt = 8_000_000
+        // Chuẩn Full HD 1080p 120fps tối ưu hoàn hảo cho đường truyền 4G (chống drop frame, giữ nguyên độ nét gốc):
+        // - Keyframe: mỗi 0.5 giây (khớp 100% với HLS 0.5s của Server, giúp tua bắt dính tức thì)
+        // - Target Bitrate: 4.8 Mbps (Full HD 1080p sắc lẹm hoa văn và số bài)
+        // - Max Bitrate: 6.0 Mbps (bùng nổ chi tiết khi bài di chuyển nhanh)
+        // - Min Bitrate: 3.5 Mbps (giữ ổn định không nghẽn sóng 4G)
+        let targetBitrate: UInt = 4_800_000
 
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
         videoCfg.videoMinFrameRate = targetFps
-        videoCfg.videoMaxKeyframeInterval = targetFps * 1
+        // Đặt Keyframe 0.5s (targetFps / 2) để khớp hoàn hảo với phân đoạn HLS 0.5s của Server
+        videoCfg.videoMaxKeyframeInterval = max(1, targetFps / 2)
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = 10_000_000
-        videoCfg.videoMinBitRate = 6_500_000
-        print("[CameraManager] LFLive encoder configured: \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) (\(isLandscape ? "Landscape 16:9" : "Portrait 9:16")), locked bitrate \(Double(targetBitrate) / 1_000_000)Mbps (min 6.5Mbps)")
+        videoCfg.videoMaxBitRate = 6_000_000
+        videoCfg.videoMinBitRate = 3_500_000
+        print("[CameraManager] LFLive encoder configured: 1080p Full HD \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP, bitrate \(Double(targetBitrate) / 1_000_000)Mbps")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.

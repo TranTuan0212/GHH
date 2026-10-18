@@ -1130,21 +1130,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
-        // BẬT ĐỆM NGẦM VÀO RAM CHO 4G:
-        // Replay video tiếp tục chạy ngầm (tắt tiếng) bám sát mép Live.
-        // HLS.js sẽ liên tục nạp sẵn 30-60s video 1080p gốc vào RAM.
-        // Khi bấm tua lại, video lấy trực tiếp từ RAM, nét căng 100% không lo 4G yếu!
+        // Khi đang xem Live: Tạm dừng HLS để dành 100% băng thông 4G cho luồng Live siêu mượt, không bị nghẽn
         if (replayVideoRef.current) {
-          const video = replayVideoRef.current;
-          video.muted = true;
-          video.playbackRate = 1.0;
-          if (video.seekable.length > 0) {
-            const end = video.seekable.end(video.seekable.length - 1);
-            if (video.currentTime < end - 3 || video.currentTime === 0) {
-              video.currentTime = Math.max(0, end - 1.5);
-            }
-          }
-          video.play().catch(() => {});
+          replayVideoRef.current.pause();
+          replayVideoRef.current.muted = true;
         }
       } else if (replayVideoRef.current) {
         // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
@@ -1153,8 +1142,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.playbackRate = 1.0;
         if (video.seekable.length > 0) {
           const end = video.seekable.end(video.seekable.length - 1);
-          if (video.currentTime < end - 3 || video.currentTime === 0) {
-            video.currentTime = Math.max(0, end - 1.5);
+          if (video.currentTime < end - 2 || video.currentTime === 0) {
+            video.currentTime = Math.max(0, end - 0.8);
           }
         }
         video.play().catch(() => {});
@@ -1222,8 +1211,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: lùi đúng 1 giây từ mép HLS Live edge
-        targetTime = Math.max(start, end - 1.0);
+        // Bấm Slow từ Live: lùi đúng 0.5 giây khớp với phân đoạn 0.5s của Server để bắt dính mép Live
+        targetTime = Math.max(start, end - 0.5);
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1768,8 +1757,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: lùi đúng 1 giây từ mép HLS Live edge
-        const targetTime = Math.max(start, end - 1.0);
+        // Chuyển từ Live sang Slow: lùi đúng 0.5 giây khớp với phân đoạn 0.5s của Server để bắt dính mép Live
+        const targetTime = Math.max(start, end - 0.5);
         if (video.readyState >= 1) {
           video.currentTime = targetTime;
           setCurrentTime(targetTime);
@@ -1853,7 +1842,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const v = replayVideoRef.current;
       const start = (v && v.seekable.length > 0) ? v.seekable.start(0) : hlsWindowStart;
       const end = (v && v.seekable.length > 0) ? v.seekable.end(v.seekable.length - 1) : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : start);
-      const target = Math.max(start, end - 1.0);
+      const target = Math.max(start, end - 0.5);
       updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;

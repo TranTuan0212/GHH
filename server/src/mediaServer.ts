@@ -36,7 +36,7 @@ const MEDIA_ROOT = path.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
-const HLS_SEGMENT_SECONDS = 1;
+const HLS_SEGMENT_SECONDS = 0.5;
 // Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
 // avoids the visibly choppy 30fps motion in the operator's live monitor. The master
 // still keeps every source frame for slow motion.
