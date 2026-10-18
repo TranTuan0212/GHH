@@ -1210,9 +1210,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: tua ngay từ đoạn đó hoặc lùi 1s thôi chứ đừng tua từ điểm xuất phát
-        const livePos = (liveVideoRef.current && liveVideoRef.current.currentTime > 0) ? liveVideoRef.current.currentTime : end;
-        targetTime = Math.max(start, livePos - 1.0);
+        // Bấm Slow từ Live: lùi đúng 1 giây từ mép HLS Live edge
+        targetTime = Math.max(start, end - 1.0);
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1747,20 +1746,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (video) {
       video.playbackRate = speed;
       video.muted = true;
-      const start = hlsWindowStart;
-      const liveVideoTime = (liveVideoRef.current && liveVideoRef.current.currentTime > 0) ? liveVideoRef.current.currentTime : 0;
+      const start = video.seekable.length > 0 ? video.seekable.start(0) : hlsWindowStart;
       const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
-      const end = Math.max(liveVideoTime, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration));
+      const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration));
       
-      updateFrozenTimeline((prev) => prev ?? { start, end });
+      updateFrozenTimeline({ start, end });
 
       if (keepCurrentPosition) {
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: tua ngay từ đoạn đó hoặc lùi 1s thôi chứ đừng tua từ điểm xuất phát
-        const livePos = liveVideoTime > 0 ? liveVideoTime : end;
-        const targetTime = Math.max(start, livePos - 1.0);
+        // Chuyển từ Live sang Slow: lùi đúng 1 giây từ mép HLS Live edge
+        const targetTime = Math.max(start, end - 1.0);
         if (video.readyState >= 1) {
           video.currentTime = targetTime;
           setCurrentTime(targetTime);
@@ -1841,11 +1838,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      const start = hlsWindowStart;
-      const liveVideoTime = (liveVideoRef.current && liveVideoRef.current.currentTime > 0) ? liveVideoRef.current.currentTime : 0;
-      const end = Math.max(liveVideoTime, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : start);
-      const livePos = liveVideoTime > 0 ? liveVideoTime : end;
-      const target = Math.max(start, livePos - 1.0);
+      const v = replayVideoRef.current;
+      const start = (v && v.seekable.length > 0) ? v.seekable.start(0) : hlsWindowStart;
+      const end = (v && v.seekable.length > 0) ? v.seekable.end(v.seekable.length - 1) : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : start);
+      const target = Math.max(start, end - 1.0);
       updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;
