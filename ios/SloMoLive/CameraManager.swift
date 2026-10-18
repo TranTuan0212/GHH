@@ -587,6 +587,14 @@ public class CameraManager: NSObject, ObservableObject {
                     videoDevice.automaticallyEnablesLowLightBoostWhenAvailable = false
                 }
 
+                // Tắt hoàn toàn Video HDR để không chụp ghép đa phơi sáng (short + long) gây hiện tượng bóng ma kép (ghosting)
+                if videoDevice.isAutomaticallyAdjustsVideoHDREnabledSupported {
+                    videoDevice.automaticallyAdjustsVideoHDREnabled = false
+                }
+                if videoDevice.isVideoHDREnabled {
+                    videoDevice.isVideoHDREnabled = false
+                }
+
                 // Cấu hình tự động lấy nét và đo sáng liên tục toàn dải (cả gần và xa vô cực)
                 if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
                     videoDevice.focusMode = .continuousAutoFocus
@@ -594,7 +602,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if videoDevice.isAutoFocusRangeRestrictionSupported {
                     videoDevice.autoFocusRangeRestriction = .none
                 }
-                // Cấu hình phơi sáng 1/240s + ISO 2400 (hoặc Auto)
+                // Cấu hình phơi sáng 1/240s + ISO mở rộng (khử bóng ma chuyển động bài bay)
                 self.applyExposureSettings(device: videoDevice)
 
                 if videoDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
@@ -807,6 +815,14 @@ public class CameraManager: NSObject, ObservableObject {
                         DispatchQueue.main.async { self.currentFPS = 30.0 }
                     }
 
+                    // Tắt hoàn toàn Video HDR để không chụp ghép đa phơi sáng gây bóng ma
+                    if newDevice.isAutomaticallyAdjustsVideoHDREnabledSupported {
+                        newDevice.automaticallyAdjustsVideoHDREnabled = false
+                    }
+                    if newDevice.isVideoHDREnabled {
+                        newDevice.isVideoHDREnabled = false
+                    }
+
                     // Cấu hình tự động lấy nét và đo sáng liên tục toàn dải (cả gần và xa vô cực)
                     if newDevice.isFocusModeSupported(.continuousAutoFocus) {
                         newDevice.focusMode = .continuousAutoFocus
@@ -945,8 +961,16 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Áp dụng phơi sáng tối ưu: 1/240s + ISO 2400 (khử nhòe chuyển động bài bay mà vẫn sáng rực rỡ trong phòng)
+    /// Áp dụng phơi sáng tối ưu: 1/240s (khử bóng ma chuyển động bài bay) và tận dụng ISO cao để sáng rõ trong đêm
     public func applyExposureSettings(device: AVCaptureDevice) {
+        // Luôn tắt Video HDR để tránh chồng ảnh kép
+        if device.isAutomaticallyAdjustsVideoHDREnabledSupported {
+            device.automaticallyAdjustsVideoHDREnabled = false
+        }
+        if device.isVideoHDREnabled {
+            device.isVideoHDREnabled = false
+        }
+
         if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
             let targetDuration = CMTimeMake(value: 1, timescale: 240)
             let minDur = device.activeFormat.minExposureDuration
@@ -955,13 +979,14 @@ public class CameraManager: NSObject, ObservableObject {
 
             let minISO = device.activeFormat.minISO
             let maxISO = device.activeFormat.maxISO
-            let targetISO = max(minISO, min(2400.0, maxISO))
+            // Mở rộng ISO tối đa theo cảm biến để hình ảnh sáng rõ ban đêm mà không bị nhòe vệt
+            let targetISO = max(minISO, min(3600.0, maxISO))
 
             device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
             DispatchQueue.main.async {
                 self.currentShutterText = "1/240s ⚡"
             }
-            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Khử nhòe & sáng trong phòng)")
+            print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Triệt tiêu bóng ma & sáng ban đêm)")
         } else if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
             DispatchQueue.main.async {
