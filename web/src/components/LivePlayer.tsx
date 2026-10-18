@@ -1130,10 +1130,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
-        // Khi đang xem Live: Tạm dừng HLS để dành 100% băng thông 4G cho luồng Live siêu mượt, không bị nghẽn
+        // BẬT ĐỆM NGẦM VÀO RAM KHI XEM LIVE:
+        // Luồng Replay tiếp tục chạy ngầm (tắt tiếng) bám sát mép Live.
+        // HLS.js liên tục nạp sẵn và giải mã các segment 1080p gốc vào RAM.
+        // Khi bấm tua lại, video lấy trực tiếp từ RAM, nét căng tức thì 0ms, không bị vỡ khối!
         if (replayVideoRef.current) {
-          replayVideoRef.current.pause();
-          replayVideoRef.current.muted = true;
+          const video = replayVideoRef.current;
+          video.muted = true;
+          video.playbackRate = 1.0;
+          if (video.seekable.length > 0) {
+            const end = video.seekable.end(video.seekable.length - 1);
+            if (video.currentTime < end - 3 || video.currentTime === 0) {
+              video.currentTime = Math.max(0, end - 1.5);
+            }
+          }
+          video.play().catch(() => {});
         }
       } else if (replayVideoRef.current) {
         // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
@@ -1211,8 +1222,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: lùi đúng 0.5 giây khớp với phân đoạn 0.5s của Server để bắt dính mép Live
-        targetTime = Math.max(start, end - 0.5);
+        // Bấm Slow từ Live: lùi 1.0 giây từ mép Live để lấy đoạn buffer đã giải mã hoàn chỉnh trong RAM
+        targetTime = Math.max(start, end - 1.0);
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1757,8 +1768,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: lùi đúng 0.5 giây khớp với phân đoạn 0.5s của Server để bắt dính mép Live
-        const targetTime = Math.max(start, end - 0.5);
+        // Chuyển từ Live sang Slow: lùi 1.0 giây từ mép Live để lấy đoạn buffer đã giải mã hoàn chỉnh trong RAM
+        const targetTime = Math.max(start, end - 1.0);
         if (video.readyState >= 1) {
           video.currentTime = targetTime;
           setCurrentTime(targetTime);
@@ -1842,7 +1853,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const v = replayVideoRef.current;
       const start = (v && v.seekable.length > 0) ? v.seekable.start(0) : hlsWindowStart;
       const end = (v && v.seekable.length > 0) ? v.seekable.end(v.seekable.length - 1) : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : start);
-      const target = Math.max(start, end - 0.5);
+      const target = Math.max(start, end - 1.0);
       updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;
@@ -2356,7 +2367,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               <feConvolveMatrix
                 order="3"
                 preserveAlpha="true"
-                kernelMatrix="0 -0.5 0 -0.5 3.0 -0.5 0 -0.5 0"
+                kernelMatrix="0 -0.25 0 -0.25 2.0 -0.25 0 -0.25 0"
               />
             </filter>
           </defs>
@@ -2375,8 +2386,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
-            imageRendering: '-webkit-optimize-contrast' as any,
-            filter: isSharpBoost ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
+            filter: isSharpBoost ? 'url(#slomo-sharp-filter) contrast(1.04) saturate(1.05)' : 'none'
           }}
           playsInline
           muted={true}
@@ -2427,8 +2437,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out',
-              imageRendering: '-webkit-optimize-contrast' as any,
-              filter: isSharpBoost && isLive ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
+              filter: isSharpBoost && isLive ? 'url(#slomo-sharp-filter) contrast(1.04) saturate(1.05)' : 'none'
             }}
             playsInline
             muted={isMuted}

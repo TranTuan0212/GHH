@@ -998,10 +998,21 @@ public class CameraManager: NSObject, ObservableObject {
             print("[CameraManager] ⚡ Đã áp dụng Shutter 1/240s, ISO \(targetISO) (Triệt tiêu bóng ma & sáng ban đêm)")
         } else if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
-            DispatchQueue.main.async {
-                self.currentShutterText = "Auto Phơi Sáng"
+            // Khóa chặn activeMaxExposureDuration ở 1/120s hoặc 1/240s khi dùng auto exposure (đặc biệt cho camera trước).
+            // Ngăn iOS tự ý kéo dài thời gian phơi sáng xuống 1/30s-1/60s gây nhòe mờ khi vung bài / tay chuyển động nhanh!
+            let maxDuration = CMTimeMake(value: 1, timescale: 120)
+            if device.activeFormat.minExposureDuration <= maxDuration && device.activeFormat.maxExposureDuration >= maxDuration {
+                device.activeMaxExposureDuration = maxDuration
+                DispatchQueue.main.async {
+                    self.currentShutterText = "Auto (Max 1/120s) ⚡"
+                }
+                print("[CameraManager] 🔄 Phơi sáng tự động có khóa tốc độ Max 1/120s (Khử triệt để nhòe chuyển động nhanh)")
+            } else {
+                DispatchQueue.main.async {
+                    self.currentShutterText = "Auto Phơi Sáng"
+                }
+                print("[CameraManager] 🔄 Phơi sáng tự động liên tục")
             }
-            print("[CameraManager] 🔄 Phơi sáng tự động liên tục")
         }
     }
 

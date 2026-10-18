@@ -194,12 +194,13 @@ function resetReplaySession(streamKey) {
     const ffmpegArgs = [
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
         '-c:v', 'copy',
+        '-bsf:v', 'h264_mp4toannexb',
         '-an',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        '-hls_flags', 'delete_segments+program_date_time',
+        '-hls_flags', 'delete_segments+program_date_time+independent_segments',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
     const newReplayFfmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
@@ -249,12 +250,11 @@ function startHlsSession(streamKey) {
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
         // Input: RTMP từ NMS (NMS listen trên 1935, ta connect với tư cách viewer).
-        // KHÔNG dùng '-re' ở đây: '-re' chỉ có ý nghĩa khi đọc FILE TĨNH để giả lập tốc độ
-        // đọc real-time; input ở đây đã là luồng RTMP sống (đã tự "real-time" theo timestamp
-        // gốc), dùng '-re' có thể gây sai pacing/trễ không cần thiết.
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
         // Codec: giữ nguyên video H.264 từ LFLiveKit (không re-encode)
         '-c:v', 'copy',
+        // Bắt buộc chèn SPS/PPS vào đầu MỌI segment .ts để trình duyệt tua đến bất kỳ đâu cũng giải mã nét 100%
+        '-bsf:v', 'h264_mp4toannexb',
         // KHÔNG có audio - iOS LFLiveKit không push audio track
         '-an',
         // HLS output
@@ -262,11 +262,8 @@ function startHlsSession(streamKey) {
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        // This is a stream copy, therefore FFmpeg cannot guarantee that the first segment
-        // (when it attaches mid-GOP) starts with an IDR frame. Advertising all segments as
-        // independent makes hls.js seek straight into an undecodable GOP and render black.
-        // Without the flag, hls.js backtracks to a decodable segment before the requested PTS.
-        '-hls_flags', '+program_date_time',
+        // independent_segments báo cho hls.js biết mỗi segment đều bắt đầu bằng IDR keyframe độc lập
+        '-hls_flags', '+program_date_time+independent_segments',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
     // This browser-only rendition is never used for replay. The fps filter emits no more than
