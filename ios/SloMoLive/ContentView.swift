@@ -268,14 +268,14 @@ struct ContentView: View {
 
                             VStack(alignment: .trailing, spacing: 8) {
                                 HStack(spacing: 6) {
-                                    // Nút Bật/Tắt Shutter 1/240s
+                                    // Nút Bật/Tắt Shutter Thông Minh (1/240s khi đủ sáng, 1/120s khi thiếu sáng)
                                     Button(action: {
                                         cameraManager.toggleActionShutter()
                                     }) {
                                         HStack(spacing: 3) {
                                             Image(systemName: cameraManager.isActionShutterEnabled ? "bolt.fill" : "bolt.slash.fill")
                                                 .font(.system(size: 11, weight: .bold))
-                                            Text(cameraManager.isActionShutterEnabled ? "1/240s ⚡" : "Auto Sáng")
+                                            Text(cameraManager.isActionShutterEnabled ? cameraManager.currentShutterText : "Auto Sáng")
                                                 .font(.caption2)
                                                 .fontWeight(.bold)
                                         }

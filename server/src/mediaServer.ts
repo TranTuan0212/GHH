@@ -281,23 +281,22 @@ function startHlsSession(streamKey: string): void {
     // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
     '-fpsmax', String(LIVE_PREVIEW_FPS),
     '-c:v', 'libx264',
-    '-preset', 'ultrafast',
+    '-preset', 'veryfast',
     '-tune', 'zerolatency',
     '-threads', '0',
-    // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
-    '-profile:v', 'baseline',
-    '-level:v', '4.1',
+    // High profile + no B-frames (tương thích 100% WebRTC trình duyệt hiện đại và giữ chi tiết màu vượt trội so với baseline).
+    '-profile:v', 'high',
+    '-level:v', '4.2',
     '-pix_fmt', 'yuv420p',
     '-colorspace', 'bt709',
     '-color_primaries', 'bt709',
     '-color_trc', 'bt709',
     '-bf', '0',
     '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
-    // Điểm cân bằng vàng Live HD 4.5Mbps (Max 5.0Mbps, bufsize nhỏ 2500k chống nổ gói UDP):
-    // Vừa sắc nét gấp đôi 2.5Mbps cũ, vừa nhẹ CPU và mượt 100% không bao giờ khựng/đứng hình
-    '-b:v', '4500k',
-    '-maxrate', '5000k',
-    '-bufsize', '2500k',
+    // Live HD 7.0 Mbps (Max 8.5 Mbps, bufsize 4250k): chống bệt màu và giữ rõ chi tiết chuyển động nhanh
+    '-b:v', '7000k',
+    '-maxrate', '8500k',
+    '-bufsize', '4250k',
     '-g', '30',
     '-keyint_min', '15',
     '-sc_threshold', '0',

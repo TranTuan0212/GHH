@@ -59,9 +59,9 @@ public class CameraManager: NSObject, ObservableObject {
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
     @Published public var isFocusLocked: Bool = false
 
-    /// Trạng thái tốc độ màn trập & chuẩn màu sRGB đậm cho Cam Trước
+    /// Trạng thái tốc độ màn trập thông minh cho Cam Trước (đủ sáng -> 1/240s, thiếu sáng -> 1/120s)
     @Published public var isActionShutterEnabled: Bool = true
-    @Published public var currentShutterText: String = "Front sRGB Đậm ⚡"
+    @Published public var currentShutterText: String = "Auto ⚡"
 
     /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
     @Published public var debugFormatInfo: String = ""
@@ -77,6 +77,15 @@ public class CameraManager: NSObject, ObservableObject {
     private var _frameCounter: Int = 0
     private var _previewFrameCounter: Int = 0
 
+    /// Màn trập thông minh Cam Trước: timer nhẹ 1s/lần trên sessionQueue đọc ISO/độ lệch sáng
+    /// để quyết định khóa 1/240s (đủ sáng) hay nhả về 1/120s (thiếu sáng). Chỉ truy cập trên sessionQueue.
+    private var frontShutterMonitor: DispatchSourceTimer?
+    private var isFrontFastShutterActive: Bool = false
+
+    /// Vị trí ống kính Cam Trước người dùng đã hiệu chỉnh (chạm lấy nét / bấm khóa), lưu lại cho lần mở app sau.
+    private static let savedFrontLensKey = "SloMoLive.frontLensPosition"
+    private static let defaultFrontLensPosition: Float = 0.35
+
     public override init() {
         super.init()
         startMotionUpdates()
@@ -84,6 +93,8 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     deinit {
+        frontShutterMonitor?.cancel()
+        frontShutterMonitor = nil
         stopMotionUpdates()
         removeAudioSessionObservers()
     }
@@ -345,12 +356,12 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
-        // Chuẩn Full HD 1080p 120fps Master Replay Ultra HD (H.264 High Profile CABAC):
-        // - Keyframe: mỗi 0.5 giây (targetFps / 2 = 60 frames @ 120fps) khớp chuẩn 1:1 với phân đoạn HLS 0.5s để bấm Slow dính khớp tức thì với Live
-        // - Target Bitrate: 9.0 Mbps (Với 0.5s GOP 60 frames + High Profile CABAC, cho chất lượng P-frame sắc nét tuyệt đối 100%, không bóng ma, đường truyền TCP RTMP nhẹ nhàng không nghẽn)
-        // - Max Bitrate: 12.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
-        // - Min Bitrate: 6.0 Mbps (Sàn an toàn giữ độ nét căng liên tục)
-        let targetBitrate: UInt = 9_000_000
+        // Chuẩn Full HD 1080p 120fps Master Replay (H.264 High Profile CABAC, encode bằng chip phần cứng — không tốn CPU):
+        // - Keyframe: mỗi 0.5 giây (targetFps / 2 = 60 frames @ 120fps) khớp chuẩn 1:1 với phân đoạn HLS 0.5s
+        // - Target Bitrate: 14 Mbps (~117 kbit/frame @120fps) giữ chi tiết nhỏ & chuyển sắc, không bị bệt màu khi ảnh có nhiễu
+        // - Max Bitrate: 18 Mbps (Peak khi chuyển động bài & tay cực nhanh)
+        // - Min Bitrate: 10 Mbps (Sàn giữ độ nét liên tục)
+        let targetBitrate: UInt = 14_000_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -359,14 +370,14 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 12_000_000
+        videoCfg.videoMaxBitRate = 18_000_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 6_000_000
+        videoCfg.videoMinBitRate = 10_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 12Mbps, Floor: 6Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 18Mbps, Floor: 10Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -664,14 +675,15 @@ public class CameraManager: NSObject, ObservableObject {
                     videoDevice.isVideoHDREnabled = false
                 }
 
-                // Khóa mặc định tiêu cự Cam trước ở mốc cố định ~30cm (lensPosition = 0.35, nét toàn dải 21cm - 55cm giống hệt Fixed-Focus của iPhone 13)
+                // Khóa tiêu cự Cam trước ở vị trí người dùng đã hiệu chỉnh (chạm lấy nét vào bài), mặc định 0.35 (~30cm) nếu chưa hiệu chỉnh
                 if videoDevice.isLockingFocusWithCustomLensPositionSupported {
-                    videoDevice.setFocusModeLocked(lensPosition: 0.35, completionHandler: nil)
+                    let lens = self.savedFrontLensPosition()
+                    videoDevice.setFocusModeLocked(lensPosition: lens, completionHandler: nil)
                     videoDevice.isSubjectAreaChangeMonitoringEnabled = false
                     DispatchQueue.main.async {
                         self.isFocusLocked = true
                     }
-                    print("[CameraManager] 🔒 Đã khóa tiêu cự Cam trước cố định ở lensPosition=0.35 (vùng nét 21cm-55cm chuẩn như iPhone 13)")
+                    print("[CameraManager] 🔒 Đã khóa tiêu cự Cam trước ở lensPosition=\(String(format: "%.2f", lens))")
                 } else if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
                     videoDevice.focusMode = .continuousAutoFocus
                 }
@@ -947,19 +959,24 @@ public class CameraManager: NSObject, ObservableObject {
                     device.focusMode = .autoFocus
                 }
 
-                // Cấu hình điểm đo sáng hoặc giữ 1/240s
-                if !self.isActionShutterEnabled && device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
+                // Đo sáng ưu tiên vùng chạm nhưng vẫn giữ phơi sáng TỰ ĐỘNG LIÊN TỤC (không khóa cứng 1 lần như .autoExpose
+                // để tránh ảnh bị tối/sáng sai khi ánh sáng phòng thay đổi). applyExposureSettings đặt lại exposureMode -> áp dụng POI.
+                if device.isExposurePointOfInterestSupported {
                     device.exposurePointOfInterest = devicePoint
-                    device.exposureMode = .autoExpose
-                } else if self.isActionShutterEnabled {
-                    self.applyExposureSettings(device: device)
                 }
+                self.applyExposureSettings(device: device)
 
                 if shouldLock {
                     // Tắt giám sát thay đổi vùng cảnh để KHÔNG tự động chuyển về Continuous Auto Focus khi tay người di chuyển
                     device.isSubjectAreaChangeMonitoringEnabled = false
                     DispatchQueue.main.async {
                         self.isFocusLocked = true
+                    }
+                    // .autoFocus lấy nét 1 lần rồi tự giữ nguyên -> chờ ống kính ổn định rồi lưu vị trí cho lần mở app sau
+                    if device.position == .front {
+                        self.sessionQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                            self?.persistFrontLensWhenSettled(attempt: 0)
+                        }
                     }
                     print("[CameraManager] 🔒 Đã KHÓA NÉT cố định tại điểm chạm mặt bàn (Không đảo nét khi chia bài)")
                 } else {
@@ -994,23 +1011,55 @@ public class CameraManager: NSObject, ObservableObject {
                     }
                     print("[CameraManager] 🔄 Đã mở khóa nét -> Tự động lấy nét liên tục")
                 } else {
-                    // Khóa cứng tiêu cự siêu nét ~30cm (Lens 0.35, rõ nét 21cm–55cm như Fixed-Focus của iPhone 13)
+                    // Khóa đúng vị trí ống kính hiện tại (vừa lấy nét xong) và lưu lại cho lần sau
+                    let lens = device.lensPosition
                     if device.isLockingFocusWithCustomLensPositionSupported {
-                        device.setFocusModeLocked(lensPosition: 0.35, completionHandler: nil)
+                        device.setFocusModeLocked(lensPosition: lens, completionHandler: nil)
                     } else if device.isFocusModeSupported(.locked) {
                         device.focusMode = .locked
                     }
                     device.isSubjectAreaChangeMonitoringEnabled = false
+                    if device.position == .front {
+                        self.saveFrontLensPosition(lens)
+                    }
                     DispatchQueue.main.async {
                         self.isFocusLocked = true
                     }
-                    print("[CameraManager] 🔒 Đã khóa tiêu cự cố định Lens=0.35 (21cm-55cm)")
+                    print("[CameraManager] 🔒 Đã khóa tiêu cự tại Lens=\(String(format: "%.2f", lens))")
                 }
                 device.unlockForConfiguration()
             } catch {
                 print("[CameraManager] Lỗi toggle focus lock: \(error)")
             }
         }
+    }
+
+    // MARK: - Hiệu chỉnh & lưu vị trí ống kính Cam Trước
+
+    private func savedFrontLensPosition() -> Float {
+        if let n = UserDefaults.standard.object(forKey: CameraManager.savedFrontLensKey) as? NSNumber {
+            let v = n.floatValue
+            if v >= 0.0 && v <= 1.0 { return v }
+        }
+        return CameraManager.defaultFrontLensPosition
+    }
+
+    private func saveFrontLensPosition(_ lens: Float) {
+        guard lens >= 0.0 && lens <= 1.0 else { return }
+        UserDefaults.standard.set(lens, forKey: CameraManager.savedFrontLensKey)
+        print("[CameraManager] 💾 Đã lưu vị trí nét Cam trước Lens=\(String(format: "%.2f", lens))")
+    }
+
+    /// Chạy trên sessionQueue: chờ ống kính lấy nét xong (tối đa ~2.5s) rồi lưu vị trí
+    private func persistFrontLensWhenSettled(attempt: Int) {
+        guard let device = videoDeviceInput?.device, device.position == .front, isFocusLocked else { return }
+        if device.isAdjustingFocus && attempt < 3 {
+            sessionQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.persistFrontLensWhenSettled(attempt: attempt + 1)
+            }
+            return
+        }
+        saveFrontLensPosition(device.lensPosition)
     }
 
     /// Khôi phục chế độ tự động lấy nét liên tục (Continuous Auto Focus)
@@ -1053,18 +1102,25 @@ public class CameraManager: NSObject, ObservableObject {
         let isFront = (device.position == .front)
 
         if isFront {
-            // Cam trước: Để Auto Exposure 100% tự nhiên của Apple (Bias = 0.0, không khóa cứng tốc độ màn trập)
-            // giúp hình ảnh luôn đủ sáng, trong trẻo trong mọi điều kiện ánh sáng như iPhone 13.
+            // Cam trước: Auto Exposure liên tục của Apple (Bias = 0.0).
+            // Màn trập thông minh: chỉ giới hạn 1/240s khi đủ sáng (còn dư ISO), thiếu sáng thì nhả về 1/120s để ảnh không bị tối.
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
-                device.activeMaxExposureDuration = .invalid
             }
             device.setExposureTargetBias(0.0, completionHandler: nil)
 
+            let fastDuration = CMTimeMake(value: 1, timescale: 240)
+            let useFast = self.isActionShutterEnabled
+                && self.isFrontFastShutterActive
+                && device.activeFormat.minExposureDuration <= fastDuration
+            device.activeMaxExposureDuration = useFast ? fastDuration : .invalid
+
+            let text = !self.isActionShutterEnabled ? "Auto Sáng" : (useFast ? "1/240s ⚡" : "1/120s 🌙")
             DispatchQueue.main.async {
-                self.currentShutterText = "Auto Chuẩn ✨"
+                self.currentShutterText = text
             }
-            print("[CameraManager] 🎨 [Cam Trước] Phơi sáng & Dải màu Tự Động 100% (Bias: 0.0 EV, Wide Color -> BT.709 HW)")
+            self.updateFrontShutterMonitor(for: device)
+            print("[CameraManager] 🎨 [Cam Trước] Auto Exposure (Bias 0.0) | Màn trập: \(text)")
             return
         }
 
@@ -1111,6 +1167,9 @@ public class CameraManager: NSObject, ObservableObject {
             do {
                 try device.lockForConfiguration()
                 self.isActionShutterEnabled = !self.isActionShutterEnabled
+                if !self.isActionShutterEnabled {
+                    self.isFrontFastShutterActive = false
+                }
                 self.applyExposureSettings(device: device)
                 device.unlockForConfiguration()
             } catch {
@@ -1118,41 +1177,69 @@ public class CameraManager: NSObject, ObservableObject {
             }
         }
     }
+
+    // MARK: - Màn trập thông minh Cam Trước (1/240s khi đủ sáng <-> 1/120s khi thiếu sáng)
+
+    private func updateFrontShutterMonitor(for device: AVCaptureDevice) {
+        guard device.position == .front && isActionShutterEnabled else {
+            frontShutterMonitor?.cancel()
+            frontShutterMonitor = nil
+            return
+        }
+        guard frontShutterMonitor == nil else { return }
+
+        let timer = DispatchSource.makeTimerSource(queue: sessionQueue)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.5, leeway: .milliseconds(300))
+        timer.setEventHandler { [weak self] in
+            self?.evaluateFrontShutter()
+        }
+        timer.resume()
+        frontShutterMonitor = timer
+    }
+
+    private func evaluateFrontShutter() {
+        guard let device = videoDeviceInput?.device,
+              device.position == .front,
+              isActionShutterEnabled,
+              !device.isAdjustingExposure else { return }
+
+        let offset = device.exposureTargetOffset
+        let iso = device.iso
+        let maxISO = max(100.0, device.activeFormat.maxISO)
+
+        // Hysteresis chống nhấp nháy:
+        // - Đang ở 1/120s: chỉ lên 1/240s khi đủ sáng (offset >= -0.15 và ISO còn dư <= 55% maxISO để khi tăng gấp đôi tốc độ màn trập không bị kịch trần ISO).
+        // - Đang ở 1/240s: nếu thiếu sáng (offset < -0.45) thì tự động nhả về 1/120s để ảnh sáng rõ, không nhiễu bệt.
+        let shouldUseFast: Bool
+        if isFrontFastShutterActive {
+            shouldUseFast = (offset >= -0.45)
+        } else {
+            shouldUseFast = (offset >= -0.15) && (iso <= maxISO * 0.55)
+        }
+
+        guard shouldUseFast != isFrontFastShutterActive else { return }
+        do {
+            try device.lockForConfiguration()
+            isFrontFastShutterActive = shouldUseFast
+            let fastDuration = CMTimeMake(value: 1, timescale: 240)
+            let useFast = shouldUseFast && device.activeFormat.minExposureDuration <= fastDuration
+            device.activeMaxExposureDuration = useFast ? fastDuration : .invalid
+            device.unlockForConfiguration()
+
+            let text = useFast ? "1/240s ⚡" : "1/120s 🌙"
+            DispatchQueue.main.async {
+                self.currentShutterText = text
+            }
+            print("[CameraManager] ⚡ [Màn trập thông minh Cam Trước] Chuyển sang \(text) (Offset: \(String(format: "%+.2f", offset)), ISO: \(Int(iso))/\(Int(maxISO)))")
+        } catch {
+            print("[CameraManager] Lỗi cập nhật màn trập thông minh: \(error)")
+        }
+    }
 }
 
 // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
-    private func fourCCString(_ code: FourCharCode) -> String {
-        let bytes: [CChar] = [
-            CChar(truncatingIfNeeded: (code >> 24) & 0xff),
-            CChar(truncatingIfNeeded: (code >> 16) & 0xff),
-            CChar(truncatingIfNeeded: (code >> 8) & 0xff),
-            CChar(truncatingIfNeeded: code & 0xff),
-            0
-        ]
-        return String(cString: bytes)
-    }
-
-    private func colorSpaceName(_ cs: AVCaptureColorSpace) -> String {
-        switch cs {
-        case .sRGB: return "sRGB"
-        case .P3_D65: return "P3"
-        case .HLG_BT2020: return "BT2020"
-        default: return "CS(\(cs.rawValue))"
-        }
-    }
-
-    private func shortColorTag(_ raw: String) -> String {
-        if raw.contains("709") { return "709" }
-        if raw.contains("601") { return "601" }
-        if raw.contains("2020") { return "2020" }
-        if raw.contains("P3") { return "P3" }
-        if raw.contains("sRGB") || raw.contains("IEC") { return "sRGB" }
-        if raw.contains("Linear") { return "Lin" }
-        return raw
-    }
-
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         autoreleasepool {
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }

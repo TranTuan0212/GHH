@@ -16,9 +16,12 @@ public class LocationManager: NSObject, ObservableObject, CLLocationManagerDeleg
     private override init() {
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        // Dùng độ chính xác 100m + chỉ cập nhật khi di chuyển >50m để tắt chip GPS tần số cao,
+        // giúp máy mát hơn đáng kể khi quay 120fps liên tục mà vẫn đủ tọa độ cho Server.
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = 50
         locationManager.allowsBackgroundLocationUpdates = true
-        locationManager.pausesLocationUpdatesAutomatically = false
+        locationManager.pausesLocationUpdatesAutomatically = true
     }
 
     public func requestPermissions() {
