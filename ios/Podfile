@@ -46,6 +46,23 @@ post_install do |installer|
         )
         File.write(video_cfg, cfg_patched) if cfg_patched != cfg_source
       end
+
+      # Prevent LFStreamingBuffer from prematurely deleting unsent P/I frames during brief
+      # network jitter at 120fps (600 frames = only 5s at 120fps). Increase max unsent buffer
+      # to 3600 frames (30s at 120fps); once a frame is sent to the server, popFirstObject
+      # immediately removes it from RAM as usual.
+      streaming_buf = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'buffer', 'LFStreamingBuffer.m')
+      if File.exist?(streaming_buf)
+        buf_source = File.read(streaming_buf)
+        buf_patched = buf_source.gsub(
+          'defaultSendBufferMaxCount = 600;',
+          'defaultSendBufferMaxCount = 3600;'
+        ).gsub(
+          'defaultSortBufferMaxCount = 5;',
+          'defaultSortBufferMaxCount = 2;'
+        )
+        File.write(streaming_buf, buf_patched) if buf_patched != buf_source
+      end
     end
   end
 end

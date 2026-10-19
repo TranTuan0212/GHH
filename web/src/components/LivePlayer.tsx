@@ -1295,9 +1295,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         maxMaxBufferLength: 120,
         maxBufferSize: 256 * 1024 * 1024,
         backBufferLength: 180,
-        maxBufferHole: 0.2,
-        nudgeOffset: 0.1,
-        nudgeMaxRetry: 5,
+        maxBufferHole: 0.05,
+        nudgeOffset: 0.01,
+        nudgeMaxRetry: 3,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
         highBufferWatchdogPeriod: 0,
         liveSyncDuration: 0.6,
@@ -1466,13 +1466,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             stallTimer = window.setTimeout(() => {
               if (!video.paused && video.readyState < 3) {
                 if (!isLiveRef.current) {
-                  // Chỉ nhích qua lỗ hổng buffer nếu phía trước thực sự có vùng buffer đã tải
+                  // Kiểm tra xem currentTime có đang nằm trong vùng đã nạp buffer hay không;
+                  // Nếu đang nằm trong vùng buffer (hoặc đang đợi tải segment kế tiếp ở mép cuối), TUYỆT ĐỐI KHÔNG nhảy cóc làm mất frame!
+                  let insideBuffered = false;
                   for (let i = 0; i < video.buffered.length; i++) {
-                    const bStart = video.buffered.start(i);
-                    if (bStart > video.currentTime && bStart - video.currentTime < 1.5) {
-                      console.log('[LivePlayer] Nhảy qua lỗ hổng buffer tới:', bStart + 0.02);
-                      video.currentTime = bStart + 0.02;
+                    if (video.currentTime >= video.buffered.start(i) - 0.05 && video.currentTime <= video.buffered.end(i) + 0.05) {
+                      insideBuffered = true;
                       break;
+                    }
+                  }
+                  if (!insideBuffered) {
+                    for (let i = 0; i < video.buffered.length; i++) {
+                      const bStart = video.buffered.start(i);
+                      if (bStart > video.currentTime && bStart - video.currentTime < 1.0) {
+                        console.log('[LivePlayer] Nhảy qua lỗ hổng buffer tới:', bStart + 0.008);
+                        video.currentTime = bStart + 0.008;
+                        break;
+                      }
                     }
                   }
                 } else if (!hasLiveFrameRef.current) {

@@ -344,10 +344,10 @@ public class CameraManager: NSObject, ObservableObject {
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
         // Chuẩn Full HD 1080p 120fps Master Replay Ultra HD (H.264 High Profile CABAC):
         // - Keyframe: mỗi 0.5 giây (targetFps / 2 = 60 frames @ 120fps) khớp chuẩn 1:1 với phân đoạn HLS 0.5s để bấm Slow dính khớp tức thì với Live
-        // - Target Bitrate: 14.0 Mbps (Với 0.5s GOP 60 frames + High Profile CABAC, cho chất lượng P-frame sắc nét tuyệt đối 100%, không bóng ma, đường truyền TCP RTMP mượt mà)
-        // - Max Bitrate: 18.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
-        // - Min Bitrate: 8.0 Mbps (Sàn an toàn giữ độ nét căng liên tục)
-        let targetBitrate: UInt = 14_000_000
+        // - Target Bitrate: 9.0 Mbps (Với 0.5s GOP 60 frames + High Profile CABAC, cho chất lượng P-frame sắc nét tuyệt đối 100%, không bóng ma, đường truyền TCP RTMP nhẹ nhàng không nghẽn)
+        // - Max Bitrate: 12.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
+        // - Min Bitrate: 6.0 Mbps (Sàn an toàn giữ độ nét căng liên tục)
+        let targetBitrate: UInt = 9_000_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -356,14 +356,14 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 18_000_000
+        videoCfg.videoMaxBitRate = 12_000_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 8_000_000
+        videoCfg.videoMinBitRate = 6_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 18Mbps, Floor: 8Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 12Mbps, Floor: 6Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -669,10 +669,9 @@ public class CameraManager: NSObject, ObservableObject {
                 videoDevice.unlockForConfiguration()
 
                 if self.captureSession.canAddOutput(self.videoDataOutput) {
-                    // Với 120 FPS / 240 FPS, đặt alwaysDiscardsLateVideoFrames = true đóng vai trò như cầu chì
-                    // bảo hiểm: nếu 1 frame đơn lẻ bị trễ, nó xả frame đó thay vì làm nghẽn đầy buffer pool
-                    // của camera khiến rớt cả cụm 50-100 frames như khi để false.
-                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
+                    // Đặt alwaysDiscardsLateVideoFrames = false để AVFoundation dùng buffer pool nội bộ
+                    // giữ lại mọi frame 120fps khi encoder bận nén Keyframe (>8.33ms), đảm bảo không rơi 1 frame nào khi tua lại.
+                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = false
                     // Dùng định dạng gốc phần cứng NV12 (BiPlanar 420 YpCbCr). VideoToolbox encode trực tiếp
                     // không qua chuyển đổi RGB <-> YUV, triệt tiêu hoàn toàn hiện tượng vỡ nét/mờ màu khi tua lại.
                     self.videoDataOutput.videoSettings = [
