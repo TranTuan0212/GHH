@@ -65,6 +65,8 @@ public class CameraManager: NSObject, ObservableObject {
 
     /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
     @Published public var debugFormatInfo: String = ""
+    @Published public var debugColorInfo: String = ""
+    @Published public var debugSensorLiveInfo: String = ""
     @Published public var debugEncoderInfo: String = ""
     @Published public var debugPushedFrames: Int = 0
 
@@ -73,6 +75,7 @@ public class CameraManager: NSObject, ObservableObject {
 
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
+    private var _previewFrameCounter: Int = 0
 
     public override init() {
         super.init()
@@ -1118,16 +1121,92 @@ public class CameraManager: NSObject, ObservableObject {
 // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    private func fourCCString(_ code: FourCharCode) -> String {
+        let bytes: [CChar] = [
+            CChar(truncatingIfNeeded: (code >> 24) & 0xff),
+            CChar(truncatingIfNeeded: (code >> 16) & 0xff),
+            CChar(truncatingIfNeeded: (code >> 8) & 0xff),
+            CChar(truncatingIfNeeded: code & 0xff),
+            0
+        ]
+        return String(cString: bytes)
+    }
+
+    private func colorSpaceName(_ cs: AVCaptureColorSpace) -> String {
+        switch cs {
+        case .sRGB: return "sRGB"
+        case .P3_D65: return "P3"
+        case .HLG_BT2020: return "BT2020"
+        default: return "CS(\(cs.rawValue))"
+        }
+    }
+
+    private func shortColorTag(_ raw: String) -> String {
+        if raw.contains("709") { return "709" }
+        if raw.contains("601") { return "601" }
+        if raw.contains("2020") { return "2020" }
+        if raw.contains("P3") { return "P3" }
+        if raw.contains("sRGB") || raw.contains("IEC") { return "sRGB" }
+        if raw.contains("Linear") { return "Lin" }
+        return raw
+    }
+
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         autoreleasepool {
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+            // Cập nhật thông số phần cứng & hệ màu thực tế mỗi 60 frames (~0.5s ở 120fps) ngay cả khi chưa bấm Live
+            _previewFrameCounter += 1
+            if _previewFrameCounter % 60 == 1 {
+                let bufFmt = self.fourCCString(CVPixelBufferGetPixelFormatType(pixelBuffer))
+                let rawMat = (CVBufferGetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue() as? String) ?? "nil"
+                let rawPri = (CVBufferGetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey, nil)?.takeUnretainedValue() as? String) ?? "nil"
+                let rawTF = (CVBufferGetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue() as? String) ?? "nil"
+                let matStr = self.shortColorTag(rawMat)
+                let priStr = self.shortColorTag(rawPri)
+                let tfStr = self.shortColorTag(rawTF)
+
+                if let dev = self.videoDeviceInput?.device {
+                    let fmtDesc = dev.activeFormat.formatDescription
+                    let dims = CMVideoFormatDescriptionGetDimensions(fmtDesc)
+                    let fmtSub = self.fourCCString(CMFormatDescriptionGetMediaSubType(fmtDesc))
+                    let isBinned = dev.activeFormat.isVideoBinned
+                    let activeCS = self.colorSpaceName(dev.activeColorSpace)
+                    let supCS = dev.activeFormat.supportedColorSpaces.map { self.colorSpaceName($0) }.joined(separator: ",")
+
+                    let isoVal = Int(dev.iso.rounded())
+                    let expSec = CMTimeGetSeconds(dev.exposureDuration)
+                    let shutDenom = expSec > 0 ? Int((1.0 / expSec).rounded()) : 0
+                    let biasVal = dev.exposureTargetBias
+                    let offVal = dev.exposureTargetOffset
+                    let wb = dev.deviceWhiteBalanceGains
+                    let hdrOn = dev.isVideoHDREnabled
+
+                    let fmtLine = "\(dev.position == .front ? "Trước" : "Sau") \(dims.width)x\(dims.height)@\(Int(self.activeCaptureFPS)) | Fmt:\(fmtSub)\(isBinned ? "(Bin)" : "(Unbin)")"
+                    let colorLine = "CS:\(activeCS)[\(supCS)] | Buf:\(bufFmt) | M:\(matStr) P:\(priStr) T:\(tfStr)"
+                    let liveLine = String(
+                        format: "ISO:%d | 1/%ds | Bias:%.1f(Off:%+.1f) | WB:%.1f/%.1f/%.1f | HDR:%@",
+                        isoVal,
+                        shutDenom,
+                        biasVal,
+                        offVal,
+                        wb.redGain,
+                        wb.greenGain,
+                        wb.blueGain,
+                        hdrOn ? "ON" : "OFF"
+                    )
+
+                    DispatchQueue.main.async {
+                        self.debugFormatInfo = fmtLine
+                        self.debugColorInfo = colorLine
+                        self.debugSensorLiveInfo = liveLine
+                    }
+                }
+            }
+
             // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
             // from background threads" và truy cập thread-safe.
             guard isStreamingAtomic else { return }
-
-            // LFLiveKit.pushVideo(_:) nhận CVPixelBuffer, không nhận CMSampleBuffer trực tiếp. Ta chỉ
-            // lấy image buffer đã có sẵn trong sampleBuffer (không decode/convert format gì thêm, đã ở
-            // dạng BGRA theo videoSettings) rồi đưa cho LFLiveKit tự encode H.264 nội bộ.
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
             // DEBUG: đếm frames để biết capture có chạy thật sự không. Log mỗi 240 frames (~1s ở 240fps).
             _frameCounter += 1

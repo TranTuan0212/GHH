@@ -255,6 +255,18 @@ struct ContentView: View {
                                         .foregroundColor(.yellow)
                                 }
 
+                                if !cameraManager.debugColorInfo.isEmpty {
+                                    Text("Color: \(cameraManager.debugColorInfo)")
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.cyan)
+                                }
+
+                                if !cameraManager.debugSensorLiveInfo.isEmpty {
+                                    Text("\(cameraManager.debugSensorLiveInfo)")
+                                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                        .foregroundColor(.orange)
+                                }
+
                                 if !cameraManager.debugEncoderInfo.isEmpty {
                                     Text("\(cameraManager.debugEncoderInfo)")
                                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
