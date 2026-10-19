@@ -370,26 +370,6 @@ struct ContentView: View {
                         // Banner cảnh báo loại mạng — quan trọng cho việc chọn RTMP URL
                         NetworkStatusBanner(monitor: networkMonitor, networkManager: networkManager)
                             .padding(.horizontal)
-                        // Thanh Zoom nhanh: 1.0x, 1.2x, 1.5x, 2.0x (Tối ưu khoảng cách lấy nét >22cm cho iPhone 14 Pro Max)
-                        HStack(spacing: 8) {
-                            ForEach([1.0, 1.2, 1.5, 2.0], id: \.self) { z in
-                                Button(action: {
-                                    cameraManager.setZoom(CGFloat(z))
-                                }) {
-                                    Text(z == 1.0 ? "1x" : "\(String(format: "%.1f", z))x")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundColor(abs(cameraManager.currentZoom - CGFloat(z)) < 0.05 ? .yellow : .white)
-                                        .frame(minWidth: 44, minHeight: 28)
-                                        .background(abs(cameraManager.currentZoom - CGFloat(z)) < 0.05 ? Color.yellow.opacity(0.25) : Color.black.opacity(0.65))
-                                        .cornerRadius(14)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 14)
-                                                .stroke(abs(cameraManager.currentZoom - CGFloat(z)) < 0.05 ? Color.yellow : Color.white.opacity(0.2), lineWidth: 1)
-                                        )
-                                }
-                            }
-                        }
-                        .padding(.bottom, 4)
 
                         // Controls Bar
                         VStack(spacing: 16) {
