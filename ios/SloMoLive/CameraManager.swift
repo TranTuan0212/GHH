@@ -579,6 +579,9 @@ public class CameraManager: NSObject, ObservableObject {
 
             self.captureSession.beginConfiguration()
 
+            // Tắt tự động bật Wide Color (P3_D65) để giữ chuẩn màu sRGB/Rec.709 đậm đà, không bị lợt/nhạt màu trên Cam trước 14 Pro Max
+            self.captureSession.automaticallyConfiguresCaptureDeviceForWideColor = false
+
             // Không để preset .high/.medium giới hạn activeFormat HFR. inputPriority cho phép
             // activeFormat 120/240fps của camera quyết định cấu hình capture thực tế.
             if self.captureSession.canSetSessionPreset(.inputPriority) {
@@ -1019,9 +1022,10 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Áp dụng phơi sáng tối ưu:
-    /// - Cam sau: 1/240s khi bật Action Shutter (hoặc 1/120s ở chế độ thường) để triệt tiêu bóng ma bài bay.
-    /// - Cam trước: 1/120s khi bật Action Shutter (hoặc 1/60s thường) vì cảm biến trước nhỏ hơn, cần nhiều ánh sáng để không bị noise và không kích hoạt bộ khử nhiễu gộp frame gây nhòe của Apple.
+    /// Áp dụng hệ màu sRGB chuẩn và phơi sáng tối ưu:
+    /// - Khóa không gian màu .sRGB (Rec.709) để màu sắc Cam trước 14 Pro Max đậm đà, không bị lợt 20-25% do lệch hệ màu P3_D65.
+    /// - Cam trước: Giữ activeMaxExposureDuration = .invalid (ở 120fps tốc độ màn trập tự động khóa tối đa 1/120s) để giữ nguyên bảng Dynamic Tone Mapping gốc của Apple + hạ nhẹ Bias -0.2 EV giúp màu đen sâu và màu đỏ rực rỡ như Cam sau.
+    /// - Cam sau: Khóa 1/240s khi bật Action Shutter (hoặc 1/120s ở chế độ thường) để triệt tiêu bóng ma bài bay.
     public func applyExposureSettings(device: AVCaptureDevice) {
         // Luôn tắt Video HDR để tránh chồng ảnh kép
         if device.automaticallyAdjustsVideoHDREnabled {
@@ -1031,27 +1035,50 @@ public class CameraManager: NSObject, ObservableObject {
             device.isVideoHDREnabled = false
         }
 
+        // Khóa chuẩn không gian màu sRGB (Rec.709) — triệt tiêu hiện tượng màu lợt/bạc màu do P3 Wide Color
+        if device.activeFormat.supportedColorSpaces.contains(.sRGB) && device.activeColorSpace != .sRGB {
+            device.activeColorSpace = .sRGB
+        }
+
         let isFront = (device.position == .front)
-        let shutterDenominator: Int32 = isFront
-            ? (self.isActionShutterEnabled ? 120 : 60)
-            : (self.isActionShutterEnabled ? 240 : 120)
+
+        if isFront {
+            // Cảm biến TrueDepth Cam trước nhỏ hơn 6 lần Cam sau:
+            // Ở 120fps, chu kỳ mỗi frame đã là 1/120s nên không gán cứng activeMaxExposureDuration (tránh làm tắt Dynamic Tone Mapping gây bệch màu xám).
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+                device.activeMaxExposureDuration = .invalid
+            }
+            // Hạ nhẹ Exposure Bias (-0.2 EV khi bật chế độ nét căng) để ngăn ISP kích ISO quá đà làm bạc màu đen/đỏ
+            let targetBias: Float = self.isActionShutterEnabled ? -0.2 : 0.0
+            let clampedBias = max(device.minExposureTargetBias, min(targetBias, device.maxExposureTargetBias))
+            device.setExposureTargetBias(clampedBias, completionHandler: nil)
+
+            DispatchQueue.main.async {
+                self.currentShutterText = self.isActionShutterEnabled ? "Front sRGB Đậm ⚡" : "Front Auto sRGB"
+            }
+            print("[CameraManager] 🎨 [Cam Trước] Đã khóa chuẩn màu sRGB + Dynamic Tone Mapping (Bias: \(clampedBias) EV) -> Màu đậm nét như Cam Sau")
+            return
+        }
+
+        // Cam sau: cảm biến lớn, khóa màn trập 1/240s (hoặc 1/120s) để bắt dính chuyển động nhanh
+        let shutterDenominator: Int32 = self.isActionShutterEnabled ? 240 : 120
         let maxDuration = CMTimeMake(value: 1, timescale: shutterDenominator)
+        device.setExposureTargetBias(0.0, completionHandler: nil)
 
         if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
             if device.activeFormat.minExposureDuration <= maxDuration && device.activeFormat.maxExposureDuration >= maxDuration {
                 device.activeMaxExposureDuration = maxDuration
                 DispatchQueue.main.async {
-                    self.currentShutterText = isFront
-                        ? (self.isActionShutterEnabled ? "Front 1/120s ⚡" : "Front Auto Max 1/60s ⚡")
-                        : (self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡")
+                    self.currentShutterText = self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡"
                 }
-                print("[CameraManager] ⚡ Khóa Max Exposure [\(isFront ? "Cam Trước" : "Cam Sau")] ở 1/\(shutterDenominator)s (Sạch bóng ma, giữ nét quang học)")
+                print("[CameraManager] ⚡ Khóa Max Exposure [Cam Sau] ở 1/\(shutterDenominator)s (Sạch bóng ma, chuẩn màu sRGB)")
             } else {
                 DispatchQueue.main.async {
                     self.currentShutterText = "Auto Phơi Sáng"
                 }
-                print("[CameraManager] 🔄 Phơi sáng tự động liên tục cho \(isFront ? "Cam Trước" : "Cam Sau")")
+                print("[CameraManager] 🔄 Phơi sáng tự động liên tục cho Cam Sau")
             }
         } else if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
             let minDur = device.activeFormat.minExposureDuration
@@ -1060,12 +1087,11 @@ public class CameraManager: NSObject, ObservableObject {
 
             let minISO = device.activeFormat.minISO
             let maxISO = device.activeFormat.maxISO
-            // Giữ ISO ở mức sạch (tối đa 800) để không kích hoạt bộ lọc pha trộn frame của Apple
             let targetISO = max(minISO, min(800.0, maxISO))
 
             device.setExposureModeCustom(duration: clampedDuration, iso: targetISO) { _ in }
             DispatchQueue.main.async {
-                self.currentShutterText = isFront ? "Front 1/\(shutterDenominator)s ⚡" : "1/\(shutterDenominator)s ⚡"
+                self.currentShutterText = "1/\(shutterDenominator)s ⚡"
             }
             print("[CameraManager] ⚡ Đã áp dụng Shutter 1/\(shutterDenominator)s, ISO \(targetISO)")
         }
