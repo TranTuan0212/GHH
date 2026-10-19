@@ -33,6 +33,19 @@ post_install do |installer|
         )
         File.write(encoder, patched) if patched != source
       end
+
+      # Prevent LFLiveVideoConfiguration from creating a dummy AVCaptureSession attached to
+      # AVCaptureDevicePositionFront, which resets the front camera's activeFormat (1080p 120fps)
+      # back to 720p 30fps whenever defaultConfiguration is called.
+      video_cfg = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'configuration', 'LFLiveVideoConfiguration.m')
+      if File.exist?(video_cfg)
+        cfg_source = File.read(video_cfg)
+        cfg_patched = cfg_source.gsub(
+          "- (LFLiveVideoSessionPreset)supportSessionPreset:(LFLiveVideoSessionPreset)sessionPreset {",
+          "- (LFLiveVideoSessionPreset)supportSessionPreset:(LFLiveVideoSessionPreset)sessionPreset {\n    return sessionPreset;"
+        )
+        File.write(video_cfg, cfg_patched) if cfg_patched != cfg_source
+      end
     end
   end
 end

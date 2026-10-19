@@ -71,6 +71,9 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var debugEncoderInfo: String = ""
     @Published public var debugPushedFrames: Int = 0
 
+    /// FPS thực tế đang cấu hình trên phần cứng (đồng bộ tức thì trên sessionQueue để rebuildLiveSession đọc chính xác)
+    private var activeCaptureFPS: Double = 120.0
+
     /// DEBUG: đếm số frame đã push để log realtime biết capture có chạy đều không.
     private var _frameCounter: Int = 0
 
@@ -313,22 +316,24 @@ public class CameraManager: NSObject, ObservableObject {
             }
         }()
 
-        guard let videoCfg = LFLiveVideoConfiguration.defaultConfiguration(for: .high3, outputImageOrientation: uiOrientation) ?? LFLiveVideoConfiguration.defaultConfiguration(for: .high3) else {
-            DispatchQueue.main.async {
-                self.errorMessage = "Không tạo được cấu hình video cho encoder live."
-            }
-            return
-        }
+        // QUAN TRỌNG: Khởi tạo trực tiếp LFLiveVideoConfiguration() thay vì gọi defaultConfiguration(for: .high3)
+        // vì defaultConfiguration trong LFLiveKit gọi supportSessionPreset: tạo một AVCaptureSession phụ gắn đè
+        // lên Camera Trước (AVCaptureDevicePositionFront), làm iOS reset activeFormat 1080p 120fps của Cam Trước!
+        let videoCfg = LFLiveVideoConfiguration()
+        videoCfg.autorotate = false
+        videoCfg.videoSizeRespectingAspectRatio = false
 
-        // QUAN TRỌNG: Khớp hoàn hảo videoSize của bộ nén với resolution thực tế của camera (1280x720 hoặc 1920x1080).
-        var captureWidth: CGFloat = 1280
-        var captureHeight: CGFloat = 720
+        // Khớp hoàn hảo videoSize của bộ nén với resolution thực tế của camera (mặc định chuẩn Full HD 1920x1080).
+        var captureWidth: CGFloat = 1920
+        var captureHeight: CGFloat = 1080
         if let device = videoDeviceInput?.device {
             let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
             let maxDim = max(CGFloat(dims.width), CGFloat(dims.height))
             let minDim = min(CGFloat(dims.width), CGFloat(dims.height))
-            captureWidth = maxDim
-            captureHeight = minDim
+            if maxDim > 0 && minDim > 0 {
+                captureWidth = maxDim
+                captureHeight = minDim
+            }
         }
 
         if isLandscape {
@@ -339,27 +344,28 @@ public class CameraManager: NSObject, ObservableObject {
             videoCfg.outputImageOrientation = .portrait
         }
 
-        let targetFps: UInt = max(30, UInt(currentFPS.rounded()))
+        let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
         // Chuẩn Full HD 1080p 120fps Master Replay Ultra HD:
         // - Keyframe: mỗi 1.0 giây (targetFps) khớp chuẩn vàng 1:1 với phân đoạn HLS 1.0s
-        // - Target Bitrate: 18.0 Mbps (Chất lượng Full HD 1080p 120fps nét căng từng chi tiết như app Camera iPhone)
-        // - Max Bitrate: 24.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
-        // - Min Bitrate: 8.0 Mbps (Sàn an toàn giữ độ nét cao liên tục)
-        let targetBitrate: UInt = 18_000_000
+        // - Target Bitrate: 20.0 Mbps (Chất lượng Full HD 1080p 120fps nét căng từng chi tiết như app Camera iPhone)
+        // - Max Bitrate: 25.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
+        // - Min Bitrate: 10.0 Mbps (Sàn an toàn giữ độ nét cao liên tục)
+        let targetBitrate: UInt = 20_000_000
 
+        // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
-        videoCfg.videoMinFrameRate = targetFps
+        videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 1.0s (targetFps) khớp hoàn hảo với phân đoạn HLS 1.0s
         videoCfg.videoMaxKeyframeInterval = max(1, targetFps)
+        videoCfg.videoMaxBitRate = 25_000_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMaxBitRate = 24_000_000
-        videoCfg.videoMinBitRate = 8_000_000
+        videoCfg.videoMinBitRate = 10_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 1.0s GOP Keyframe, bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 24Mbps, Floor: 8Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 1.0s GOP Keyframe, bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 25Mbps, Floor: 10Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -465,36 +471,54 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     /// Chọn format HFR chuẩn 120fps/60fps:
-    /// - Cam sau: Ưu tiên Native 1280x720 (khớp 1:1 RTMP encoder, kích hoạt Quad-Bayer Pixel Binning thu sáng tối đa).
-    /// - Cam trước: Ưu tiên Native 720p 120fps nếu có; nếu không có 720p mà có 1080p 120fps (chuẩn TrueDepth Slo-mo trên 14 Pro Max) thì chọn ngay 1080p 120fps.
+    /// - Ưu tiên số 1 tuyệt đối: Full HD 1080p (1920x1080) Unbinned, định dạng 8-bit 420v chuẩn SDR
+    ///   (loại bỏ x420 10-bit HDR để tránh sai lệch không gian màu BT.2020 làm tối/mờ hình trên 14 Pro Max).
+    /// - Ưu tiên số 2: HD 720p (1280x720) nếu thiết bị không có 1080p ở mức FPS đó.
     private func selectBestHFRFormat(for device: AVCaptureDevice, targetRates: [Double]) -> (format: AVCaptureDevice.Format, fps: Double)? {
         let isFront = (device.position == .front)
-        let idealPixels: Int32 = 1280 * 720 // Chuẩn 720p khớp 1:1 với encoder RTMP
 
         for targetRate in targetRates {
             var bestFormat: AVCaptureDevice.Format? = nil
-            var bestScore: Int64 = Int64.max
+            var bestScore: Int64 = -1
 
             for format in device.formats {
                 let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                let pixels = dims.width * dims.height
+                let maxDim = max(dims.width, dims.height)
+                let minDim = min(dims.width, dims.height)
+                let subType = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+
+                // Chỉ chọn định dạng 8-bit YUV (420v / 420f), bỏ qua x420 (10-bit HDR) gây tối/đục màu khi encode H.264 8-bit
+                let isVideoRange8Bit = (subType == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+                let isFullRange8Bit = (subType == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+                guard isVideoRange8Bit || isFullRange8Bit else { continue }
 
                 for range in format.videoSupportedFrameRateRanges {
                     // minFrameDuration phải đủ nhanh (1/targetRate) VÀ maxFrameRate phải >= targetRate
                     if range.minFrameDuration <= CMTime(value: 1, timescale: CMTimeScale(targetRate)) &&
                        range.maxFrameRate >= targetRate {
                         
-                        let isExact720p = (dims.width == 1280 && dims.height == 720) || (dims.width == 720 && dims.height == 1280)
-                        let isExact1080p = (dims.width == 1920 && dims.height == 1080) || (dims.width == 1080 && dims.height == 1920)
-                        let diff = abs(Int64(pixels) - Int64(idealPixels))
-                        
-                        var score: Int64 = isExact720p ? 0 : (diff + 10_000)
-                        // Với cam trước: nếu không có 720p 120fps mà có 1080p 120fps, ưu tiên 1080p hơn các resolution phụ khác
-                        if isFront && isExact1080p {
-                            score = 100
+                        var score: Int64 = 0
+                        if maxDim == 1920 && minDim == 1080 {
+                            score = 1000 // Ưu tiên số 1 tuyệt đối: Full HD 1080p (cả Cam Trước & Cam Sau)
+                        } else if maxDim == 1280 && minDim == 720 {
+                            score = 200  // Ưu tiên số 2: HD 720p
+                        } else if maxDim <= 1920 {
+                            score = 50
+                        } else {
+                            continue
                         }
 
-                        if score < bestScore {
+                        // Ưu tiên định dạng Unbinned (không gộp pixel) để giữ độ sắc nét quang học tối đa
+                        if !format.isVideoBinned {
+                            score += 50
+                        }
+
+                        // Ưu tiên 420v khớp 1:1 với videoDataOutput.videoSettings (không cần chuyển đổi dải màu)
+                        if isVideoRange8Bit {
+                            score += 20
+                        }
+
+                        if score > bestScore {
                             bestScore = score
                             bestFormat = format
                         }
@@ -508,7 +532,7 @@ public class CameraManager: NSObject, ObservableObject {
                 let isBinned = fmt.isVideoBinned
                 let minISO = fmt.minISO
                 let maxISO = fmt.maxISO
-                let infoStr = "\(isFront ? "Trước" : "Sau") \(dims.width)x\(dims.height) @ \(Int(targetRate))fps\(isBinned ? " (Binned)" : "")"
+                let infoStr = "\(isFront ? "Trước" : "Sau") \(dims.width)x\(dims.height) @ \(Int(targetRate))fps\(isBinned ? " (Binned)" : " (Unbinned)")"
                 DispatchQueue.main.async {
                     self.debugFormatInfo = infoStr
                 }
@@ -597,6 +621,7 @@ public class CameraManager: NSObject, ObservableObject {
                     let timescale = Int32(fps)
                     videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: timescale)
                     videoDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: timescale)
+                    self.activeCaptureFPS = fps
 
                     DispatchQueue.main.async {
                         self.currentFPS = fps
@@ -608,6 +633,7 @@ public class CameraManager: NSObject, ObservableObject {
                     let timescale: Int32 = 30
                     videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: timescale)
                     videoDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: timescale)
+                    self.activeCaptureFPS = 30.0
                     DispatchQueue.main.async {
                         self.currentFPS = 30.0
                         self.errorMessage = "Thiết bị không hỗ trợ 60/120/240fps, dùng 30fps"
@@ -833,11 +859,13 @@ public class CameraManager: NSObject, ObservableObject {
                         let targetTimescale = Int32(fps)
                         newDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: targetTimescale)
                         newDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: targetTimescale)
+                        self.activeCaptureFPS = fps
                         DispatchQueue.main.async { self.currentFPS = fps }
                     } else {
                         // Front camera thường không có HFR — fallback 30fps
                         newDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: 30)
                         newDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: 30)
+                        self.activeCaptureFPS = 30.0
                         DispatchQueue.main.async { self.currentFPS = 30.0 }
                     }
 
@@ -874,8 +902,8 @@ public class CameraManager: NSObject, ObservableObject {
                 // Cấu hình lại connection mới: tắt chống rung số (không crop/warp hình), tắt mirror nguồn
                 self.configureVideoOutputConnection()
                 self.liveSession?.captureDevicePosition = newPosition
-                // Tái cấu hình lại Encoder RTMP khớp chuẩn 1:1 với camera mới
-                if !self.streamKey.isEmpty && !self.rtmpIngestUrl.isEmpty {
+                // Tái cấu hình lại Encoder RTMP khớp chuẩn 1:1 với camera mới (khi chưa phát live)
+                if !self.streamKey.isEmpty && !self.rtmpIngestUrl.isEmpty && !self.isStreamingAtomic && !self.isConnecting {
                     self.rebuildLiveSession()
                 }
                 DispatchQueue.main.async {

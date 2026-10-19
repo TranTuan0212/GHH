@@ -279,7 +279,7 @@ function startHlsSession(streamKey) {
         // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
         '-fpsmax', String(LIVE_PREVIEW_FPS),
         '-c:v', 'libx264',
-        '-preset', 'ultrafast',
+        '-preset', 'veryfast',
         '-tune', 'zerolatency',
         '-threads', '0',
         // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
@@ -288,15 +288,15 @@ function startHlsSession(streamKey) {
         '-pix_fmt', 'yuv420p',
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1',
-        // Live preview siêu nhẹ 2.5Mbps: siêu mượt, trễ cực thấp (<0.2s), không bao giờ lag hay đứng hình
-        '-b:v', '2500k',
-        '-maxrate', '3000k',
-        '-bufsize', '3500k',
-        '-g', '15',
-        '-keyint_min', '8',
+        // Mở băng thông Live HD 8.0Mbps - 10.0Mbps: giữ nguyên độ sắc nét Full HD trên luồng TRỰC TIẾP
+        '-b:v', '8000k',
+        '-maxrate', '10000k',
+        '-bufsize', '12000k',
+        '-g', '60',
+        '-keyint_min', '30',
         '-sc_threshold', '0',
-        // Keyframe 0.25s giúp WebRTC phục hồi ngay lập tức nếu rớt mạng
-        '-force_key_frames', 'expr:gte(t,n_forced*0.25)',
+        // Keyframe 1.0s giúp tập trung băng thông nuôi chi tiết từng frame, không bị nén bệt hình
+        '-force_key_frames', 'expr:gte(t,n_forced*1.0)',
         // Hỗ trợ âm thanh cho Live qua WebRTC (Opus tiêu chuẩn WebRTC)
         '-c:a', 'libopus',
         '-b:a', '96k',
@@ -309,7 +309,7 @@ function startHlsSession(streamKey) {
     console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
     console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
     console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, Full HD Master, video-only)`);
-    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps, ultra-smooth)`);
+    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 8.0-10.0Mbps Full HD)`);
     const ffmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
     });
