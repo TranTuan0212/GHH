@@ -77,11 +77,6 @@ public class CameraManager: NSObject, ObservableObject {
     private var _frameCounter: Int = 0
     private var _previewFrameCounter: Int = 0
 
-    /// Màn trập thông minh Cam Trước: timer nhẹ 1s/lần trên sessionQueue đọc ISO/độ lệch sáng
-    /// để quyết định khóa 1/240s (đủ sáng) hay nhả về 1/120s (thiếu sáng). Chỉ truy cập trên sessionQueue.
-    private var frontShutterMonitor: DispatchSourceTimer?
-    private var isFrontFastShutterActive: Bool = false
-
     /// Vị trí ống kính Cam Trước người dùng đã hiệu chỉnh (chạm lấy nét / bấm khóa), lưu lại cho lần mở app sau.
     private static let savedFrontLensKey = "SloMoLive.frontLensPosition"
     private static let defaultFrontLensPosition: Float = 0.35
@@ -93,8 +88,6 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     deinit {
-        frontShutterMonitor?.cancel()
-        frontShutterMonitor = nil
         stopMotionUpdates()
         removeAudioSessionObservers()
     }
@@ -358,10 +351,9 @@ public class CameraManager: NSObject, ObservableObject {
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
         // Chuẩn Full HD 1080p 120fps Master Replay (H.264 High Profile CABAC, encode bằng chip phần cứng — không tốn CPU):
         // - Keyframe: mỗi 0.5 giây (targetFps / 2 = 60 frames @ 120fps) khớp chuẩn 1:1 với phân đoạn HLS 0.5s
-        // - Target Bitrate: 14 Mbps (~117 kbit/frame @120fps) giữ chi tiết nhỏ & chuyển sắc, không bị bệt màu khi ảnh có nhiễu
-        // - Max Bitrate: 18 Mbps (Peak khi chuyển động bài & tay cực nhanh)
-        // - Min Bitrate: 10 Mbps (Sàn giữ độ nét liên tục)
-        let targetBitrate: UInt = 14_000_000
+        // - Target Bitrate: 10 Mbps (Peak 12 Mbps, Floor 8 Mbps): mỗi segment 0.5s chỉ ~600KB giúp tải ngầm vào RAM tức thì,
+        //   không nghẽn mạng mà vẫn giữ độ nét căng cho từng frame khi tua lại.
+        let targetBitrate: UInt = 10_000_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -370,14 +362,14 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 18_000_000
+        videoCfg.videoMaxBitRate = 12_000_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 10_000_000
+        videoCfg.videoMinBitRate = 8_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 18Mbps, Floor: 10Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 12Mbps, Floor: 8Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -1102,8 +1094,9 @@ public class CameraManager: NSObject, ObservableObject {
         let isFront = (device.position == .front)
 
         if isFront {
-            // Cam trước: Auto Exposure liên tục của Apple (Bias = 0.0).
-            // Màn trập thông minh: chỉ giới hạn 1/240s khi đủ sáng (còn dư ISO), thiếu sáng thì nhả về 1/120s để ảnh không bị tối.
+            // Cam trước: Khi bật nút 1/240s ⚡ (mặc định bật), khóa cứng tốc độ màn trập tối đa 1/240s
+            // để triệt tiêu hoàn toàn nhòe bóng (motion blur) khi chia/lật bài, giúp từng frame khi tua lại sắc nét tuyệt đối.
+            // Khi tắt nút ⚡ -> nhả về .invalid (1/120s) để ưu tiên độ sáng tối đa trong phòng tối.
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
             }
@@ -1111,16 +1104,15 @@ public class CameraManager: NSObject, ObservableObject {
 
             let fastDuration = CMTimeMake(value: 1, timescale: 240)
             let useFast = self.isActionShutterEnabled
-                && self.isFrontFastShutterActive
                 && device.activeFormat.minExposureDuration <= fastDuration
+                && device.activeFormat.maxExposureDuration >= fastDuration
             device.activeMaxExposureDuration = useFast ? fastDuration : .invalid
 
-            let text = !self.isActionShutterEnabled ? "Auto Sáng" : (useFast ? "1/240s ⚡" : "1/120s 🌙")
+            let text = useFast ? "1/240s ⚡" : "Auto Sáng"
             DispatchQueue.main.async {
                 self.currentShutterText = text
             }
-            self.updateFrontShutterMonitor(for: device)
-            print("[CameraManager] 🎨 [Cam Trước] Auto Exposure (Bias 0.0) | Màn trập: \(text)")
+            print("[CameraManager] ⚡ [Cam Trước] Auto Exposure (Bias 0.0) | Màn trập: \(text)")
             return
         }
 
@@ -1167,72 +1159,11 @@ public class CameraManager: NSObject, ObservableObject {
             do {
                 try device.lockForConfiguration()
                 self.isActionShutterEnabled = !self.isActionShutterEnabled
-                if !self.isActionShutterEnabled {
-                    self.isFrontFastShutterActive = false
-                }
                 self.applyExposureSettings(device: device)
                 device.unlockForConfiguration()
             } catch {
                 print("[CameraManager] Lỗi toggle action shutter: \(error)")
             }
-        }
-    }
-
-    // MARK: - Màn trập thông minh Cam Trước (1/240s khi đủ sáng <-> 1/120s khi thiếu sáng)
-
-    private func updateFrontShutterMonitor(for device: AVCaptureDevice) {
-        guard device.position == .front && isActionShutterEnabled else {
-            frontShutterMonitor?.cancel()
-            frontShutterMonitor = nil
-            return
-        }
-        guard frontShutterMonitor == nil else { return }
-
-        let timer = DispatchSource.makeTimerSource(queue: sessionQueue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.5, leeway: .milliseconds(300))
-        timer.setEventHandler { [weak self] in
-            self?.evaluateFrontShutter()
-        }
-        timer.resume()
-        frontShutterMonitor = timer
-    }
-
-    private func evaluateFrontShutter() {
-        guard let device = videoDeviceInput?.device,
-              device.position == .front,
-              isActionShutterEnabled,
-              !device.isAdjustingExposure else { return }
-
-        let offset = device.exposureTargetOffset
-        let iso = device.iso
-        let maxISO = max(100.0, device.activeFormat.maxISO)
-
-        // Hysteresis chống nhấp nháy:
-        // - Đang ở 1/120s: chỉ lên 1/240s khi đủ sáng (offset >= -0.15 và ISO còn dư <= 55% maxISO để khi tăng gấp đôi tốc độ màn trập không bị kịch trần ISO).
-        // - Đang ở 1/240s: nếu thiếu sáng (offset < -0.45) thì tự động nhả về 1/120s để ảnh sáng rõ, không nhiễu bệt.
-        let shouldUseFast: Bool
-        if isFrontFastShutterActive {
-            shouldUseFast = (offset >= -0.45)
-        } else {
-            shouldUseFast = (offset >= -0.15) && (iso <= maxISO * 0.55)
-        }
-
-        guard shouldUseFast != isFrontFastShutterActive else { return }
-        do {
-            try device.lockForConfiguration()
-            isFrontFastShutterActive = shouldUseFast
-            let fastDuration = CMTimeMake(value: 1, timescale: 240)
-            let useFast = shouldUseFast && device.activeFormat.minExposureDuration <= fastDuration
-            device.activeMaxExposureDuration = useFast ? fastDuration : .invalid
-            device.unlockForConfiguration()
-
-            let text = useFast ? "1/240s ⚡" : "1/120s 🌙"
-            DispatchQueue.main.async {
-                self.currentShutterText = text
-            }
-            print("[CameraManager] ⚡ [Màn trập thông minh Cam Trước] Chuyển sang \(text) (Offset: \(String(format: "%+.2f", offset)), ISO: \(Int(iso))/\(Int(maxISO)))")
-        } catch {
-            print("[CameraManager] Lỗi cập nhật màn trập thông minh: \(error)")
         }
     }
 }

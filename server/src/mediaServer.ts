@@ -281,22 +281,22 @@ function startHlsSession(streamKey: string): void {
     // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
     '-fpsmax', String(LIVE_PREVIEW_FPS),
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
+    '-preset', 'ultrafast',
     '-tune', 'zerolatency',
     '-threads', '0',
-    // High profile + no B-frames (tương thích 100% WebRTC trình duyệt hiện đại và giữ chi tiết màu vượt trội so với baseline).
-    '-profile:v', 'high',
-    '-level:v', '4.2',
+    // Baseline + no B-frames: siêu nhẹ CPU và nhường tối đa băng thông đường truyền cho luồng Replay 120fps.
+    '-profile:v', 'baseline',
+    '-level:v', '4.1',
     '-pix_fmt', 'yuv420p',
     '-colorspace', 'bt709',
     '-color_primaries', 'bt709',
     '-color_trc', 'bt709',
     '-bf', '0',
     '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
-    // Live HD 7.0 Mbps (Max 8.5 Mbps, bufsize 4250k): chống bệt màu và giữ rõ chi tiết chuyển động nhanh
-    '-b:v', '7000k',
-    '-maxrate', '8500k',
-    '-bufsize', '4250k',
+    // Live 2.5 Mbps (Max 3.0 Mbps, bufsize 1500k): nhẹ băng thông để trình duyệt tải ngầm các segment .ts Replay 120fps tức thì không bị nghẽn
+    '-b:v', '2500k',
+    '-maxrate', '3000k',
+    '-bufsize', '1500k',
     '-g', '30',
     '-keyint_min', '15',
     '-sc_threshold', '0',
