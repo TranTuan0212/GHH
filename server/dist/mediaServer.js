@@ -45,8 +45,8 @@ const MEDIA_ROOT = path_1.default.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
-// Phân đoạn 1.0s là chuẩn vàng cho Low-Latency DVR: giảm 50% số request, giúp kéo tua mượt tức thì và không bị khựng buffer
-const HLS_SEGMENT_SECONDS = 1.0;
+// Phân đoạn 0.5s khớp 1:1 với Keyframe 0.5s từ iOS: giúp xuất segment .ts mới mỗi nửa giây, bấm Slow từ Live dính khớp ngay khoảnh khắc đang xem
+const HLS_SEGMENT_SECONDS = 0.5;
 // Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
 // avoids the visibly choppy 30fps motion in the operator's live monitor. The master
 // still keeps every source frame for slow motion.
@@ -193,10 +193,12 @@ function resetReplaySession(streamKey) {
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
+        '-fflags', '+nobuffer+flush_packets',
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb',
         '-an',
+        '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
@@ -250,6 +252,8 @@ function startHlsSession(streamKey) {
     // The encoded source is copied, so the DVR retains its original frame rate.
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
+        // Xả gói tin tức thì, không giữ demux buffer để segment .ts 0.5s xuất ra ngay lập tức khi gặp Keyframe
+        '-fflags', '+nobuffer+flush_packets',
         // Input: RTMP từ NMS (NMS listen trên 1935, ta connect với tư cách viewer).
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
         // Codec: giữ nguyên video H.264 từ LFLiveKit (không re-encode)
@@ -258,13 +262,14 @@ function startHlsSession(streamKey) {
         '-bsf:v', 'h264_mp4toannexb',
         // KHÔNG có audio - iOS LFLiveKit không push audio track
         '-an',
+        '-flush_packets', '1',
         // HLS output
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        // delete_segments tự động dọn dẹp các segment cũ vượt ngoài cửa sổ DVR, program_date_time đồng bộ mốc thời gian thực
-        '-hls_flags', 'delete_segments+program_date_time',
+        // delete_segments tự động dọn dẹp các segment cũ vượt ngoài cửa sổ DVR, append_list nối tiếp playlist khi iPhone kết nối lại
+        '-hls_flags', 'append_list+delete_segments+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
     // This browser-only rendition is never used for replay. The fps filter emits no more than
@@ -282,17 +287,19 @@ function startHlsSession(streamKey) {
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-threads', '0',
-        // Baseline + no B-frames is the common denominator for browser WebRTC decoders.
+        // Baseline + no B-frames: siêu nhẹ CPU và nhường tối đa băng thông đường truyền cho luồng Replay 120fps.
         '-profile:v', 'baseline',
         '-level:v', '4.1',
         '-pix_fmt', 'yuv420p',
+        '-colorspace', 'bt709',
+        '-color_primaries', 'bt709',
+        '-color_trc', 'bt709',
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
-        // Điểm cân bằng vàng Live HD 4.5Mbps (Max 5.0Mbps, bufsize nhỏ 2500k chống nổ gói UDP):
-        // Vừa sắc nét gấp đôi 2.5Mbps cũ, vừa nhẹ CPU và mượt 100% không bao giờ khựng/đứng hình
-        '-b:v', '4500k',
-        '-maxrate', '5000k',
-        '-bufsize', '2500k',
+        // Live 2.5 Mbps (Max 3.0 Mbps, bufsize 1500k): nhẹ băng thông để trình duyệt tải ngầm các segment .ts Replay 120fps tức thì không bị nghẽn
+        '-b:v', '2500k',
+        '-maxrate', '3000k',
+        '-bufsize', '1500k',
         '-g', '30',
         '-keyint_min', '15',
         '-sc_threshold', '0',
@@ -310,13 +317,82 @@ function startHlsSession(streamKey) {
     console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
     console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
     console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, Full HD Master, video-only)`);
-    console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 4.5-5.0Mbps ultrafast smooth HD)`);
-    const ffmpeg = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
-        stdio: ['ignore', 'pipe', 'pipe']
-    });
-    const liveFfmpeg = (0, child_process_1.spawn)(ffmpegPath, liveFfmpegArgs, {
-        stdio: ['ignore', 'pipe', 'pipe']
-    });
+    console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps ultrafast)`);
+    const isProcessRunning = (p) => !!p && p.exitCode === null && p.signalCode === null && !p.killed;
+    const isRtmpActive = () => Array.from(nmsSessions.values()).some(s => s.streamKey === streamKey);
+    const spawnReplayProcess = () => {
+        const proc = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        proc.stdout?.on('data', (data) => {
+            const line = data.toString().trim();
+            if (line)
+                console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
+        });
+        proc.stderr?.on('data', (data) => {
+            const line = data.toString().trim();
+            if (!line)
+                return;
+            const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
+            if (isImportant)
+                console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
+            const s = exports.hlsSessions.get(streamKey);
+            if (s)
+                s.lastSeen = Date.now() / 1000;
+        });
+        proc.on('error', (err) => {
+            console.error(`[MediaServer] ffmpeg error for ${streamKey}:`, err);
+        });
+        proc.on('close', (code, signal) => {
+            console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+            const cur = exports.hlsSessions.get(streamKey);
+            if (cur && cur.ffmpegProcesses[0] === proc && isRtmpActive() && !pendingDisconnects.has(streamKey)) {
+                setTimeout(() => {
+                    const active = exports.hlsSessions.get(streamKey);
+                    if (active && !isProcessRunning(active.ffmpegProcesses[0]) && isRtmpActive()) {
+                        console.log(`[MediaServer] 🔄 Tự động khởi động lại replay FFmpeg cho ${streamKey}`);
+                        active.ffmpegProcesses[0] = spawnReplayProcess();
+                    }
+                }, 1000);
+            }
+        });
+        return proc;
+    };
+    const spawnLiveProcess = () => {
+        const proc = (0, child_process_1.spawn)(ffmpegPath, liveFfmpegArgs, {
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        proc.stderr?.on('data', (data) => {
+            const line = data.toString().trim();
+            if (!line)
+                return;
+            const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
+            if (isImportant)
+                console.log(`[MediaServer] [live ${streamKey}] ${line}`);
+            const active = exports.hlsSessions.get(streamKey);
+            if (active)
+                active.lastSeen = Date.now() / 1000;
+        });
+        proc.on('error', (err) => {
+            console.error(`[MediaServer] live FFmpeg error for ${streamKey}:`, err);
+        });
+        proc.on('close', (code, signal) => {
+            console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+            const cur = exports.hlsSessions.get(streamKey);
+            if (cur && cur.ffmpegProcesses[1] === proc && isRtmpActive() && !pendingDisconnects.has(streamKey)) {
+                setTimeout(() => {
+                    const active = exports.hlsSessions.get(streamKey);
+                    if (active && !isProcessRunning(active.ffmpegProcesses[1]) && isRtmpActive()) {
+                        console.log(`[MediaServer] 🔄 Tự động khởi động lại live FFmpeg (WHEP) cho ${streamKey}`);
+                        active.ffmpegProcesses[1] = spawnLiveProcess();
+                    }
+                }, 1000);
+            }
+        });
+        return proc;
+    };
+    const ffmpeg = spawnReplayProcess();
+    const liveFfmpeg = spawnLiveProcess();
     const session = {
         streamKey,
         startTime: Date.now() / 1000,
@@ -324,51 +400,6 @@ function startHlsSession(streamKey) {
         ffmpegProcesses: [ffmpeg, liveFfmpeg]
     };
     exports.hlsSessions.set(streamKey, session);
-    ffmpeg.stdout.on('data', (data) => {
-        const line = data.toString().trim();
-        if (line) {
-            console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
-        }
-    });
-    ffmpeg.stderr.on('data', (data) => {
-        const line = data.toString().trim();
-        if (line) {
-            // CHỈ log những dòng quan trọng để tránh spam. Giữ progress frame.
-            const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
-            if (isImportant) {
-                console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
-            }
-            // Cập nhật lastSeen khi ffmpeg nhận được dữ liệu (bất kỳ output nào)
-            const s = exports.hlsSessions.get(streamKey);
-            if (s)
-                s.lastSeen = Date.now() / 1000;
-        }
-    });
-    ffmpeg.on('error', (err) => {
-        console.error(`[MediaServer] ffmpeg error for ${streamKey}:`, err);
-        cleanupStreamSession(streamKey);
-    });
-    ffmpeg.on('close', (code, signal) => {
-        console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-    });
-    liveFfmpeg.stderr.on('data', (data) => {
-        const line = data.toString().trim();
-        if (!line)
-            return;
-        const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
-        if (isImportant)
-            console.log(`[MediaServer] [live ${streamKey}] ${line}`);
-        const active = exports.hlsSessions.get(streamKey);
-        if (active)
-            active.lastSeen = Date.now() / 1000;
-    });
-    liveFfmpeg.on('error', (err) => {
-        console.error(`[MediaServer] live FFmpeg error for ${streamKey}:`, err);
-        cleanupStreamSession(streamKey);
-    });
-    liveFfmpeg.on('close', (code, signal) => {
-        console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-    });
     console.log(`[MediaServer] DVR + WebRTC session started for ${streamKey}`);
 }
 /** Called when NMS detects a new RTMP publish */
@@ -384,10 +415,20 @@ function onStreamStart(sessionId, streamPath) {
     }
     const existingSession = exports.hlsSessions.get(streamKey);
     if (existingSession) {
-        const anyAlive = existingSession.ffmpegProcesses.some(p => !p.killed);
-        if (anyAlive) {
-            console.log(`[MediaServer] Stream ${streamKey} đã có HLS/FFmpeg session đang chạy, tái sử dụng.`);
+        const allRunning = existingSession.ffmpegProcesses.length >= 2 &&
+            existingSession.ffmpegProcesses.every(p => p && p.exitCode === null && p.signalCode === null && !p.killed);
+        if (allRunning) {
+            console.log(`[MediaServer] Stream ${streamKey} đã có đầy đủ HLS + Live FFmpeg đang chạy, tái sử dụng.`);
             return;
+        }
+        // Dọn tiến trình cũ bị treo hoặc đã chết trước khi khởi tạo lại cặp tiến trình mới cho kết nối RTMP mới
+        for (const p of existingSession.ffmpegProcesses) {
+            if (p && p.exitCode === null && !p.killed) {
+                try {
+                    p.kill('SIGTERM');
+                }
+                catch { }
+            }
         }
     }
     startHlsSession(streamKey);

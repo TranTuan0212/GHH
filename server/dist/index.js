@@ -201,6 +201,9 @@ app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'rep
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
+            // Mỗi file .ts chỉ được thêm vào playlist sau khi FFmpeg đã đóng gói hoàn chỉnh (bất biến).
+            // Cho phép trình duyệt & Cloudflare lưu vào Memory Cache để Pre-fetch và tua đi tua lại 0ms!
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
@@ -215,6 +218,7 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'live'
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
