@@ -59,9 +59,9 @@ public class CameraManager: NSObject, ObservableObject {
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
     @Published public var isFocusLocked: Bool = false
 
-    /// Trạng thái tốc độ màn trập thông minh cho Cam Trước (đủ sáng -> 1/240s, thiếu sáng -> 1/120s)
-    @Published public var isActionShutterEnabled: Bool = true
-    @Published public var currentShutterText: String = "Auto ⚡"
+    /// Trạng thái tốc độ màn trập thông minh cho Cam Trước (mặc định Auto Sáng 1/120s để ảnh sáng rõ, ISO thấp không bị bệt mờ)
+    @Published public var isActionShutterEnabled: Bool = false
+    @Published public var currentShutterText: String = "Auto Sáng"
 
     /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
     @Published public var debugFormatInfo: String = ""
@@ -668,19 +668,20 @@ public class CameraManager: NSObject, ObservableObject {
                     videoDevice.isVideoHDREnabled = false
                 }
 
-                // Khóa tiêu cự Cam trước ở vị trí người dùng đã hiệu chỉnh (chạm lấy nét vào bài), mặc định 0.35 (~30cm) nếu chưa hiệu chỉnh
-                if videoDevice.isLockingFocusWithCustomLensPositionSupported {
-                    let lens = self.savedFrontLensPosition()
-                    videoDevice.setFocusModeLocked(lensPosition: lens, completionHandler: nil)
-                    videoDevice.isSubjectAreaChangeMonitoringEnabled = false
-                    DispatchQueue.main.async {
-                        self.isFocusLocked = true
-                    }
-                    print("[CameraManager] 🔒 Đã khóa tiêu cự Cam trước ở lensPosition=\(String(format: "%.2f", lens))")
-                } else if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
+                // Mặc định khởi động ở chế độ Continuous Auto Focus toàn dải để tự lấy nét chuẩn theo khoảng cách thực tế (50cm-80cm).
+                // Khi người dùng chạm vào màn hình (hoặc bấm nút Khóa Nét), hàm focus() sẽ khóa cứng tiêu cự tại vị trí đó.
+                if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
                     videoDevice.focusMode = .continuousAutoFocus
+                    if videoDevice.isAutoFocusRangeRestrictionSupported {
+                        videoDevice.autoFocusRangeRestriction = .none
+                    }
+                    videoDevice.isSubjectAreaChangeMonitoringEnabled = true
+                    DispatchQueue.main.async {
+                        self.isFocusLocked = false
+                    }
+                    print("[CameraManager] 🎯 Cam Trước: Khởi động ở Continuous Auto Focus (tự lấy nét chuẩn theo khoảng cách thực tế)")
                 }
-                // Cấu hình phơi sáng tự động chuẩn mặc định của Apple
+                // Cấu hình phơi sáng tự động chuẩn mặc định của Apple (Auto Sáng 1/120s, thu sáng tối đa, ISO thấp)
                 self.applyExposureSettings(device: videoDevice)
 
                 if videoDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
