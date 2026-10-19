@@ -36,8 +36,8 @@ const MEDIA_ROOT = path.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
-// Phân đoạn 1.0s là chuẩn vàng cho Low-Latency DVR: giảm 50% số request, giúp kéo tua mượt tức thì và không bị khựng buffer
-const HLS_SEGMENT_SECONDS = 1.0;
+// Phân đoạn 0.5s khớp 1:1 với Keyframe 0.5s từ iOS: giúp xuất segment .ts mới mỗi nửa giây, bấm Slow từ Live dính khớp ngay khoảnh khắc đang xem
+const HLS_SEGMENT_SECONDS = 0.5;
 // Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
 // avoids the visibly choppy 30fps motion in the operator's live monitor. The master
 // still keeps every source frame for slow motion.
@@ -183,10 +183,12 @@ export function resetReplaySession(streamKey: string): boolean {
   const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
 
   const ffmpegArgs = [
+    '-fflags', '+nobuffer+flush_packets',
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     '-c:v', 'copy',
     '-bsf:v', 'h264_mp4toannexb',
     '-an',
+    '-flush_packets', '1',
     '-f', 'hls',
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
@@ -246,6 +248,8 @@ function startHlsSession(streamKey: string): void {
   const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
 
   const ffmpegArgs = [
+    // Xả gói tin tức thì, không giữ demux buffer để segment .ts 0.5s xuất ra ngay lập tức khi gặp Keyframe
+    '-fflags', '+nobuffer+flush_packets',
     // Input: RTMP từ NMS (NMS listen trên 1935, ta connect với tư cách viewer).
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     // Codec: giữ nguyên video H.264 từ LFLiveKit (không re-encode)
@@ -254,6 +258,7 @@ function startHlsSession(streamKey: string): void {
     '-bsf:v', 'h264_mp4toannexb',
     // KHÔNG có audio - iOS LFLiveKit không push audio track
     '-an',
+    '-flush_packets', '1',
     // HLS output
     '-f', 'hls',
     '-hls_time', String(HLS_SEGMENT_SECONDS),

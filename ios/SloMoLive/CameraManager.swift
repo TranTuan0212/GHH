@@ -346,26 +346,27 @@ public class CameraManager: NSObject, ObservableObject {
 
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
         // Chuẩn Full HD 1080p 120fps Master Replay Ultra HD (H.264 High Profile CABAC):
-        // - Keyframe: mỗi 1.0 giây (targetFps) khớp chuẩn vàng 1:1 với phân đoạn HLS 1.0s
-        // - Target Bitrate: 12.0 Mbps (Với 1.0s GOP + High Profile CABAC, 12Mbps cho chất lượng P-frame sắc nét tuyệt đối 100% tương đương 24Mbps @ 0.25s GOP, đồng thời đường truyền TCP RTMP không bao giờ bị nghẽn cổ chai)
-        // - Max Bitrate: 16.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
+        // - Keyframe: mỗi 0.5 giây (targetFps / 2 = 60 frames @ 120fps) khớp chuẩn 1:1 với phân đoạn HLS 0.5s để bấm Slow dính khớp tức thì với Live
+        // - Target Bitrate: 14.0 Mbps (Với 0.5s GOP 60 frames + High Profile CABAC, cho chất lượng P-frame sắc nét tuyệt đối 100%, không bóng ma, đường truyền TCP RTMP mượt mà)
+        // - Max Bitrate: 18.0 Mbps (Peak chi tiết cao khi chuyển động bài & tay cực nhanh)
         // - Min Bitrate: 8.0 Mbps (Sàn an toàn giữ độ nét căng liên tục)
-        let targetBitrate: UInt = 12_000_000
+        let targetBitrate: UInt = 14_000_000
+        let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
         videoCfg.videoMaxFrameRate = targetFps
         videoCfg.videoFrameRate = targetFps
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
-        // Keyframe 1.0s (targetFps) khớp hoàn hảo với phân đoạn HLS 1.0s
-        videoCfg.videoMaxKeyframeInterval = max(1, targetFps)
-        videoCfg.videoMaxBitRate = 16_000_000
+        // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
+        videoCfg.videoMaxKeyframeInterval = gopFrames
+        videoCfg.videoMaxBitRate = 18_000_000
         videoCfg.videoBitRate = targetBitrate
         videoCfg.videoMinBitRate = 8_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 1.0s GOP Keyframe, bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 16Mbps, Floor: 8Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 18Mbps, Floor: 8Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.

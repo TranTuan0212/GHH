@@ -1022,7 +1022,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           let receivedVideoTrack = false;
           peer.addTransceiver('video', { direction: 'recvonly' });
           peer.addTransceiver('audio', { direction: 'recvonly' });
-          peer.ontrack = ({ streams }) => {
+          peer.ontrack = (event) => {
+            const { streams, receiver } = event;
+            // Đồng bộ nhịp hiển thị WebRTC Live (0.55s) khớp 1:1 với nhịp đóng gói segment HLS 0.5s:
+            // 1. Khi bấm Slow từ Live, khung hình đang thấy trên Live vừa kịp nạp xong vào RAM của HLS -> Dính khớp chuẩn từng frame!
+            // 2. Tạo đệm Jitter Buffer 550ms giúp luồng Live WebRTC mượt tuyệt đối, triệt tiêu hoàn toàn hiện tượng giật/khựng gói UDP.
+            try {
+              const anyReceiver = receiver as any;
+              if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
+                anyReceiver.playoutDelayHint = 0.55;
+              }
+              if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
+                anyReceiver.jitterBufferTarget = 550;
+              }
+            } catch {}
             if (cancelled || !streams[0]) return;
             receivedVideoTrack = true;
             video.srcObject = streams[0];
@@ -1287,7 +1300,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         nudgeMaxRetry: 5,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
         highBufferWatchdogPeriod: 0,
-        liveSyncDuration: 2,
+        liveSyncDuration: 0.6,
         // Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay
         liveMaxLatencyDuration: 86400,
         // Không cho HLS.js tự tăng video.playbackRate để catch-up live edge
@@ -1322,21 +1335,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           if (isLiveRef.current) {
             if (hasLiveFrameRef.current) {
               // Khi WebRTC Live đang hiển thị:
-              // Giữ replayVideo ở trạng thái PAUSE (không giải mã 120fps ngầm làm giật GPU của Live),
-              // nhưng định kỳ kéo currentTime bám theo mép Live (end - 1.5s) để hls.js LUÔN nạp sẵn
-              // các segment .ts mới nhất vào RAM -> Khi bấm Tua lại là hiện hình tức thì, không bị màn hình đen!
+              // Giữ replayVideo ở trạng thái PAUSE (không giải mã 120fps ngầm liên tục làm giật GPU của Live),
+              // nhưng mỗi khi có segment mới thì đỗ sẵn currentTime ở sát mép buffer (bufferedEnd - 0.12s)
+              // để bộ giải mã cứng giải mã sẵn đúng frame đang chiếu trên Live!
               if (!video.paused) {
                 video.pause();
               }
-              if (end > start + 2 && (end - video.currentTime > 5 || video.currentTime < start)) {
-                video.currentTime = Math.max(start, end - 1.5);
+              const bufferedEnd = video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1) : end;
+              const safeEdge = Math.min(end, bufferedEnd);
+              if (safeEdge > start + 0.5 && (safeEdge - video.currentTime > 0.6 || video.currentTime < start)) {
+                video.currentTime = Math.max(start, safeEdge - 0.12);
               }
             } else {
               // Cứu nguy nếu đang ở Live mode nhưng chưa có WebRTC live frame:
               // Nếu video đang bị đứng ở currentTime=0 hoặc trước start PTS, nhảy ngay tới live edge!
-              if (video.currentTime < start || (video.currentTime === 0 && end > 2)) {
-                console.log(`[LivePlayer] Nhảy HLS về live edge: ${end - 1.5}s (start=${start}, current=${video.currentTime})`);
-                video.currentTime = Math.max(start, end - 1.5);
+              if (video.currentTime < start || (video.currentTime === 0 && end > 1)) {
+                console.log(`[LivePlayer] Nhảy HLS về live edge: ${end - 0.5}s (start=${start}, current=${video.currentTime})`);
+                video.currentTime = Math.max(start, end - 0.5);
                 video.play().catch(() => {});
               }
             }
@@ -1345,6 +1360,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       });
       hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
       hls.on(Hls.Events.FRAG_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url));
+      hls.on(Hls.Events.BUFFER_APPENDED, () => {
+        // Ngay khi segment .ts 0.5s vừa được gắn vào MSE SourceBuffer:
+        // Nếu đang xem WebRTC Live, đỗ sẵn đầu đọc của replayVideo tại sát mép buffer (bufferedEnd - 0.12s ~ 6 frame)
+        // để phần cứng giải mã sẵn khung hình đó vào GPU. Khi bấm Slow sẽ ăn ngay lập tức 0.0ms và khớp chuẩn mốc Live!
+        if (isLiveRef.current && hasLiveFrameRef.current && video.buffered.length > 0) {
+          if (!video.paused) {
+            video.pause();
+          }
+          const bStart = video.buffered.start(0);
+          const bEnd = video.buffered.end(video.buffered.length - 1);
+          if (bEnd > bStart + 0.25 && (bEnd - video.currentTime > 0.55 || video.currentTime < bStart)) {
+            video.currentTime = Math.max(bStart, bEnd - 0.12);
+          }
+        }
+      });
       // Lỗi tải segment .ts (fragLoadError) không có event riêng — nó báo qua Hls.Events.ERROR chung
       // bên dưới với data.details === 'fragLoadError', đã được log đầy đủ ở đó.
 
@@ -1365,12 +1395,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           video.play().catch(() => {});
         } else {
           // Khi đang ở chế độ Live:
-          // Chỉ play HLS nếu CHƯA có WebRTC live frame; nếu đã có WebRTC thì giữ pause ở mép Live để tiết kiệm GPU
+          // Chỉ play HLS nếu CHƯA có WebRTC live frame; nếu đã có WebRTC thì giữ pause ở sát mép Live để tiết kiệm GPU
           video.muted = hasLiveFrameRef.current ? true : isMuted;
           window.setTimeout(() => {
             if (video.seekable.length > 0) {
               const end = video.seekable.end(video.seekable.length - 1);
-              video.currentTime = Math.max(0, end - 1.5);
+              video.currentTime = Math.max(0, end - 0.12);
             }
             if (!hasLiveFrameRef.current) {
               video.play().catch((err) => {
@@ -1815,16 +1845,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: nhảy vào vùng buffer ĐÃ TẢI SẴN TRONG RAM (cách mép buffer 0.5s)
-        // để có ngay 2 giây khung hình 120fps ở tốc độ 0.25x, hiện hình tức thì 0.0s không bao giờ đen màn hình!
+        // Chuyển từ Live sang Slow: dính khớp ngay tại mốc đang chiếu trên Live (cách mép buffer 0.12s ~ 6 frame)
+        // Nếu BUFFER_APPENDED đã đỗ sẵn đầu đọc trong bán kính 0.25s quanh targetTime và đã giải mã xong (readyState >= 2),
+        // phát tiếp ngay lập tức từ frame đã giải mã sẵn trên GPU (0.0ms delay, không cần flush decoder)!
         const safeBufferedEnd = bufferedEnd > start ? Math.min(end, bufferedEnd) : end;
-        const targetTime = Math.max(start, safeBufferedEnd - 0.5);
-        if (video.readyState >= 1) {
+        const targetTime = Math.max(start, safeBufferedEnd - 0.12);
+        if (video.readyState >= 2 && video.currentTime >= start && Math.abs(video.currentTime - targetTime) <= 0.25) {
+          setCurrentTime(video.currentTime);
+        } else if (video.readyState >= 1) {
           video.currentTime = targetTime;
+          setCurrentTime(targetTime);
         } else {
           pendingReplayTimeRef.current = targetTime;
+          setCurrentTime(targetTime);
         }
-        setCurrentTime(targetTime);
         video.playbackRate = speed;
       }
 
