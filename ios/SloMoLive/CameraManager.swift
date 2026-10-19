@@ -225,28 +225,26 @@ public class CameraManager: NSObject, ObservableObject {
 
         let x = acceleration.x
         let y = acceleration.y
-        let z = acceleration.z
-        // Khi điện thoại đặt nằm phẳng trên mặt bàn/sàn (|z| > 0.72): giữ nguyên hướng dọc (.portrait) mặc định,
-        // tránh việc bàn hơi nghiêng làm nhảy nhầm sang Enc: 1920x1080 ngang!
-        guard abs(z) <= 0.72 else { return }
-
         let isFront = (self.cameraPosition == .front)
 
         let newOrientation: AVCaptureVideoOrientation
         if abs(x) > abs(y) {
-            // Chỉ xoay sang Landscape khi máy thực sự nghiêng ngang rõ rệt (|x| > 0.55)
-            if x > 0.55 {
+            // Thiết bị đang nằm ngang (Landscape)
+            // x > 0: đỉnh máy nghiêng sang trái (top left, home right) -> UIDeviceOrientation.landscapeLeft
+            // Với camera sau: tương ứng AVCaptureVideoOrientation.landscapeRight
+            // Với camera trước: đối xứng gương nên là .landscapeLeft
+            if x > 0.15 {
                 newOrientation = isFront ? .landscapeLeft : .landscapeRight
-            } else if x < -0.55 {
+            } else if x < -0.15 {
                 newOrientation = isFront ? .landscapeRight : .landscapeLeft
             } else {
                 return
             }
         } else {
             // Thiết bị đang dựng đứng (Portrait)
-            if y < -0.35 {
+            if y < -0.15 {
                 newOrientation = .portrait
-            } else if y > 0.55 {
+            } else if y > 0.15 {
                 newOrientation = .portraitUpsideDown
             } else {
                 return
@@ -516,12 +514,17 @@ public class CameraManager: NSObject, ObservableObject {
                             score += 50
                         }
 
-                        // Ưu tiên 420f (Full-Range 0..255 chuẩn Apple Camera) để màu đen sâu tuyệt đối và màu sắc rực rỡ, không bị bóp hẹp 16..235 như 420v
+                        // Ưu tiên format ISP thế hệ mới (hỗ trợ dải màu rộng P3_D65 + Full Range 420f + maxISO cao ở cuối danh sách)
+                        if format.supportedColorSpaces.contains(.P3_D65) {
+                            score += 30
+                        }
                         if isFullRange8Bit {
                             score += 20
                         }
+                        score += Int64(format.maxISO / 100.0)
 
-                        if score > bestScore {
+                        // Dùng >= để lấy format hiện đại nhất ở cuối mảng device.formats của Apple
+                        if score >= bestScore {
                             bestScore = score
                             bestFormat = format
                         }
@@ -584,8 +587,8 @@ public class CameraManager: NSObject, ObservableObject {
 
             self.captureSession.beginConfiguration()
 
-            // Tắt tự động bật Wide Color (P3_D65) để giữ chuẩn màu sRGB/Rec.709 đậm đà, không bị lợt/nhạt màu trên Cam trước 14 Pro Max
-            self.captureSession.automaticallyConfiguresCaptureDeviceForWideColor = false
+            // Giữ nguyên quản lý màu tự động chuẩn của iOS (VideoToolbox sẽ tự quy đổi sang BT.709 bằng phần cứng)
+            self.captureSession.automaticallyConfiguresCaptureDeviceForWideColor = true
 
             // Không để preset .high/.medium giới hạn activeFormat HFR. inputPriority cho phép
             // activeFormat 120/240fps của camera quyết định cấu hình capture thực tế.
@@ -661,27 +664,18 @@ public class CameraManager: NSObject, ObservableObject {
                     videoDevice.isVideoHDREnabled = false
                 }
 
-                // Tắt SmoothAutoFocus để không nội suy làm chậm nhịp lấy nét ở 120fps
-                if videoDevice.isSmoothAutoFocusSupported {
-                    videoDevice.isSmoothAutoFocusEnabled = false
-                }
-                // Giới hạn dải lấy nét gần (.near) nếu phần cứng hỗ trợ để không bao giờ lấy nét nhầm lên trần nhà / hậu cảnh xa
-                if videoDevice.isAutoFocusRangeRestrictionSupported {
-                    videoDevice.autoFocusRangeRestriction = .near
-                }
-                // Khóa mô-tơ thấu kính của 14 Pro Max ở tiêu cự cố định 0.50 (~30-35cm, giống hệt ống kính Fixed-Focus của iPhone 13)
-                // để đặt máy ngửa hay thiếu sáng vẫn nét căng 100%, không bị trôi tiêu cự!
+                // Khóa mặc định tiêu cự Cam trước ở mốc cố định ~30cm (lensPosition = 0.35, nét toàn dải 21cm - 55cm giống hệt Fixed-Focus của iPhone 13)
                 if videoDevice.isLockingFocusWithCustomLensPositionSupported {
-                    videoDevice.setFocusModeLocked(lensPosition: 0.50, completionHandler: nil)
+                    videoDevice.setFocusModeLocked(lensPosition: 0.35, completionHandler: nil)
                     videoDevice.isSubjectAreaChangeMonitoringEnabled = false
                     DispatchQueue.main.async {
                         self.isFocusLocked = true
                     }
-                    print("[CameraManager] 🔒 Đã khóa tiêu cự chuẩn Fixed-Focus (lensPosition = 0.50) cho Cam Trước 14 Pro Max")
+                    print("[CameraManager] 🔒 Đã khóa tiêu cự Cam trước cố định ở lensPosition=0.35 (vùng nét 21cm-55cm chuẩn như iPhone 13)")
                 } else if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
                     videoDevice.focusMode = .continuousAutoFocus
                 }
-                // Cấu hình hệ màu sRGB chuẩn và phơi sáng tối ưu cho Cam Trước
+                // Cấu hình phơi sáng tự động chuẩn mặc định của Apple
                 self.applyExposureSettings(device: videoDevice)
 
                 if videoDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
@@ -694,9 +688,10 @@ public class CameraManager: NSObject, ObservableObject {
                     // Đặt alwaysDiscardsLateVideoFrames = false để AVFoundation dùng buffer pool nội bộ
                     // giữ lại mọi frame 120fps khi encoder bận nén Keyframe (>8.33ms), đảm bảo không rơi 1 frame nào khi tua lại.
                     self.videoDataOutput.alwaysDiscardsLateVideoFrames = false
-                    // Dùng định dạng gốc phần cứng 420f Full-Range (0..255) để giữ trọn vẹn độ tương phản và độ đậm màu của cảm biến.
+                    // Dùng định dạng gốc phần cứng NV12 (BiPlanar 420 YpCbCr). VideoToolbox encode trực tiếp
+                    // không qua chuyển đổi RGB <-> YUV, triệt tiêu hoàn toàn hiện tượng vỡ nét/mờ màu khi tua lại.
                     self.videoDataOutput.videoSettings = [
-                        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+                        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
                     ]
                     self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
                     self.captureSession.addOutput(self.videoDataOutput)
@@ -988,10 +983,7 @@ public class CameraManager: NSObject, ObservableObject {
             do {
                 try device.lockForConfiguration()
                 if self.isFocusLocked {
-                    // Mở khóa -> về lại continuous auto focus (giới hạn tầm gần .near cho bài trên bàn)
-                    if device.isAutoFocusRangeRestrictionSupported {
-                        device.autoFocusRangeRestriction = .near
-                    }
+                    // Mở khóa -> về lại continuous auto focus
                     if device.isFocusModeSupported(.continuousAutoFocus) {
                         device.focusMode = .continuousAutoFocus
                     }
@@ -1000,17 +992,19 @@ public class CameraManager: NSObject, ObservableObject {
                     DispatchQueue.main.async {
                         self.isFocusLocked = false
                     }
-                    print("[CameraManager] 🔄 Đã mở khóa nét -> Tự động lấy nét liên tục (.near)")
+                    print("[CameraManager] 🔄 Đã mở khóa nét -> Tự động lấy nét liên tục")
                 } else {
-                    // Khóa cứng tiêu cự hiện tại (hoặc 0.50 nếu người dùng chưa chạm lấy nét)
-                    if device.isFocusModeSupported(.locked) {
+                    // Khóa cứng tiêu cự siêu nét ~30cm (Lens 0.35, rõ nét 21cm–55cm như Fixed-Focus của iPhone 13)
+                    if device.isLockingFocusWithCustomLensPositionSupported {
+                        device.setFocusModeLocked(lensPosition: 0.35, completionHandler: nil)
+                    } else if device.isFocusModeSupported(.locked) {
                         device.focusMode = .locked
                     }
                     device.isSubjectAreaChangeMonitoringEnabled = false
                     DispatchQueue.main.async {
                         self.isFocusLocked = true
                     }
-                    print("[CameraManager] 🔒 Đã khóa tiêu cự hiện tại (Lens: \(String(format: "%.2f", device.lensPosition)))")
+                    print("[CameraManager] 🔒 Đã khóa tiêu cự cố định Lens=0.35 (21cm-55cm)")
                 }
                 device.unlockForConfiguration()
             } catch {
@@ -1030,7 +1024,7 @@ public class CameraManager: NSObject, ObservableObject {
                     device.focusMode = .continuousAutoFocus
                 }
                 if device.isAutoFocusRangeRestrictionSupported {
-                    device.autoFocusRangeRestriction = .near
+                    device.autoFocusRangeRestriction = .none
                 }
                 self.applyExposureSettings(device: device)
                 if device.isSubjectAreaChangeMonitoringEnabled {
@@ -1044,12 +1038,11 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Áp dụng hệ màu sRGB chuẩn và phơi sáng tối ưu:
-    /// - Khóa không gian màu .sRGB (Rec.709) để màu sắc Cam trước 14 Pro Max đậm đà, không bị lợt 20-25% do lệch hệ màu P3_D65.
-    /// - Cam trước: Giữ activeMaxExposureDuration = .invalid (ở 120fps tốc độ màn trập tự động khóa tối đa 1/120s) để giữ nguyên bảng Dynamic Tone Mapping gốc của Apple + hạ nhẹ Bias -0.2 EV giúp màu đen sâu và màu đỏ rực rỡ như Cam sau.
-    /// - Cam sau: Khóa 1/240s khi bật Action Shutter (hoặc 1/120s ở chế độ thường) để triệt tiêu bóng ma bài bay.
+    /// Áp dụng phơi sáng & dải màu hoàn toàn tự động chuẩn phần cứng Apple:
+    /// - Không ép hạ Bias thủ công hay khóa dải màu hẹp sRGB (để ISP tự động dùng format Wide Color / Dynamic Tone Mapping gốc với maxISO cao).
+    /// - Việc chuyển đổi không gian màu về chuẩn Rec.709 (BT.709) được thực hiện tự động bằng phần cứng tại bước encode H.264 (VTCompressionSession).
     public func applyExposureSettings(device: AVCaptureDevice) {
-        // Luôn tắt Video HDR để tránh chồng ảnh kép
+        // Luôn tắt Video HDR để tránh chồng ảnh kép ở 120fps
         if device.automaticallyAdjustsVideoHDREnabled {
             device.automaticallyAdjustsVideoHDREnabled = false
         }
@@ -1057,29 +1050,21 @@ public class CameraManager: NSObject, ObservableObject {
             device.isVideoHDREnabled = false
         }
 
-        // Khóa chuẩn không gian màu sRGB (Rec.709) — triệt tiêu hiện tượng màu lợt/bạc màu do P3 Wide Color
-        if device.activeFormat.supportedColorSpaces.contains(.sRGB) && device.activeColorSpace != .sRGB {
-            device.activeColorSpace = .sRGB
-        }
-
         let isFront = (device.position == .front)
 
         if isFront {
-            // Cảm biến TrueDepth Cam trước nhỏ hơn 6 lần Cam sau:
-            // Ở 120fps, chu kỳ mỗi frame đã là 1/120s nên không gán cứng activeMaxExposureDuration (tránh làm tắt Dynamic Tone Mapping gây bệch màu xám).
+            // Cam trước: Để Auto Exposure 100% tự nhiên của Apple (Bias = 0.0, không khóa cứng tốc độ màn trập)
+            // giúp hình ảnh luôn đủ sáng, trong trẻo trong mọi điều kiện ánh sáng như iPhone 13.
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
                 device.activeMaxExposureDuration = .invalid
             }
-            // Giữ Exposure Bias ở 0.0 EV chuẩn để cảm biến thu đủ sáng, không bị ép tối Off:-2.2 gây nhiễu bệt màu trên 14 Pro Max
-            let targetBias: Float = 0.0
-            let clampedBias = max(device.minExposureTargetBias, min(targetBias, device.maxExposureTargetBias))
-            device.setExposureTargetBias(clampedBias, completionHandler: nil)
+            device.setExposureTargetBias(0.0, completionHandler: nil)
 
             DispatchQueue.main.async {
-                self.currentShutterText = "Front 420f sRGB ⚡"
+                self.currentShutterText = "Auto Chuẩn ✨"
             }
-            print("[CameraManager] 🎨 [Cam Trước] Đã khóa chuẩn màu 420f Full-Range sRGB + Dynamic Tone Mapping (Bias: \(clampedBias) EV)")
+            print("[CameraManager] 🎨 [Cam Trước] Phơi sáng & Dải màu Tự Động 100% (Bias: 0.0 EV, Wide Color -> BT.709 HW)")
             return
         }
 
@@ -1095,7 +1080,7 @@ public class CameraManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     self.currentShutterText = self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡"
                 }
-                print("[CameraManager] ⚡ Khóa Max Exposure [Cam Sau] ở 1/\(shutterDenominator)s (Sạch bóng ma, chuẩn màu sRGB)")
+                print("[CameraManager] ⚡ Khóa Max Exposure [Cam Sau] ở 1/\(shutterDenominator)s")
             } else {
                 DispatchQueue.main.async {
                     self.currentShutterText = "Auto Phơi Sáng"
@@ -1194,19 +1179,20 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     let isoVal = Int(dev.iso.rounded())
                     let expSec = CMTimeGetSeconds(dev.exposureDuration)
                     let shutDenom = expSec > 0 ? Int((1.0 / expSec).rounded()) : 0
+                    let biasVal = dev.exposureTargetBias
                     let offVal = dev.exposureTargetOffset
-                    let lensVal = dev.lensPosition
+                    let lensPos = dev.lensPosition
                     let wb = dev.deviceWhiteBalanceGains
                     let hdrOn = dev.isVideoHDREnabled
 
-                    let fmtLine = "\(dev.position == .front ? "Trước" : "Sau") \(dims.width)x\(dims.height)@\(Int(self.activeCaptureFPS)) | Fmt:\(fmtSub)\(isBinned ? "(Bin)" : "(Unbin)")"
+                    let fmtLine = "\(dev.position == .front ? "Trước" : "Sau") \(dims.width)x\(dims.height)@\(Int(self.activeCaptureFPS)) | Fmt:\(fmtSub)\(isBinned ? "(Bin)" : "(Unbin)") | Lens:\(String(format: "%.2f", lensPos))"
                     let colorLine = "CS:\(activeCS)[\(supCS)] | Buf:\(bufFmt) | M:\(matStr) P:\(priStr) T:\(tfStr)"
                     let liveLine = String(
-                        format: "ISO:%d | 1/%ds | Off:%+.1f | Lens:%.2f | WB:%.1f/%.1f/%.1f | HDR:%@",
+                        format: "ISO:%d | 1/%ds | Bias:%.1f(Off:%+.1f) | WB:%.1f/%.1f/%.1f | HDR:%@",
                         isoVal,
                         shutDenom,
+                        biasVal,
                         offVal,
-                        lensVal,
                         wb.redGain,
                         wb.greenGain,
                         wb.blueGain,

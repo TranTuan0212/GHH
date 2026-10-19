@@ -28,8 +28,8 @@ post_install do |installer|
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanTrue',
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse'
         ).gsub(
-          'kVTProfileLevel_H264_Main_AutoLevel',
-          'kVTProfileLevel_H264_High_AutoLevel'
+          'VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel);',
+          "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
         )
         File.write(encoder, patched) if patched != source
       end

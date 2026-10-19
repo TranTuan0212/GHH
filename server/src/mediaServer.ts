@@ -288,6 +288,9 @@ function startHlsSession(streamKey: string): void {
     '-profile:v', 'baseline',
     '-level:v', '4.1',
     '-pix_fmt', 'yuv420p',
+    '-colorspace', 'bt709',
+    '-color_primaries', 'bt709',
+    '-color_trc', 'bt709',
     '-bf', '0',
     '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
     // Điểm cân bằng vàng Live HD 4.5Mbps (Max 5.0Mbps, bufsize nhỏ 2500k chống nổ gói UDP):
