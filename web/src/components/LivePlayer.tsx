@@ -1050,6 +1050,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               track.onended = () => {
                 console.log('[LivePlayer] WebRTC video track ended');
                 setHasLiveFrame(false);
+                if (isLiveRef.current && replayVideoRef.current) {
+                  const rv = replayVideoRef.current;
+                  rv.muted = isMuted;
+                  rv.playbackRate = 1.0;
+                  if (rv.buffered.length > 0) {
+                    const bEnd = rv.buffered.end(rv.buffered.length - 1);
+                    if (bEnd - rv.currentTime > 2.5 || rv.currentTime === 0) {
+                      rv.currentTime = Math.max(0, bEnd - 1.0);
+                    }
+                  }
+                  rv.play().catch(() => {});
+                }
                 if (!cancelled) {
                   setTimeout(() => {
                     if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
@@ -1073,10 +1085,26 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           await waitForVideoTrack(peer, () => receivedVideoTrack);
           console.log('[LivePlayer] WebRTC live connected:', whepUrl);
 
+          const resumeHlsFallbackIfLive = () => {
+            setHasLiveFrame(false);
+            if (isLiveRef.current && replayVideoRef.current) {
+              const rv = replayVideoRef.current;
+              rv.muted = isMuted;
+              rv.playbackRate = 1.0;
+              if (rv.buffered.length > 0) {
+                const bEnd = rv.buffered.end(rv.buffered.length - 1);
+                if (bEnd - rv.currentTime > 2.5 || rv.currentTime === 0) {
+                  rv.currentTime = Math.max(0, bEnd - 1.0);
+                }
+              }
+              rv.play().catch(() => {});
+            }
+          };
+
           peer.onconnectionstatechange = () => {
             console.log('[LivePlayer] WebRTC connectionState:', peer?.connectionState);
             if (peer?.connectionState === 'failed' || peer?.connectionState === 'disconnected') {
-              setHasLiveFrame(false);
+              resumeHlsFallbackIfLive();
               if (!cancelled) {
                 setTimeout(() => {
                   if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
@@ -1087,7 +1115,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peer.oniceconnectionstatechange = () => {
             console.log('[LivePlayer] WebRTC iceConnectionState:', peer?.iceConnectionState);
             if (peer?.iceConnectionState === 'failed' || peer?.iceConnectionState === 'disconnected') {
-              setHasLiveFrame(false);
+              resumeHlsFallbackIfLive();
               if (!cancelled) {
                 setTimeout(() => {
                   if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
@@ -2514,7 +2542,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           }
           className={`select-none ${
             isLive
-              ? 'absolute inset-0 w-full h-full z-10 pointer-events-auto'
+              ? hasLiveFrame
+                ? 'absolute inset-0 w-full h-full z-10 opacity-100 pointer-events-auto'
+                : 'absolute inset-0 w-full h-full z-0 opacity-0 pointer-events-none'
               : 'aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black group ring-4 ring-black/70 shadow-black'
           } ${isPipDragging ? '' : 'transition-[top,left] duration-150 ease-out'}`}
           title={!isLive ? 'Kéo để di chuyển, chạm để về Live' : undefined}

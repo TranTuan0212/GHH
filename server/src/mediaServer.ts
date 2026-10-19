@@ -264,8 +264,8 @@ function startHlsSession(streamKey: string): void {
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
     '-hls_segment_filename', path.join(outputDir, '%05d.ts'),
-    // delete_segments tự động dọn dẹp các segment cũ vượt ngoài cửa sổ DVR, program_date_time đồng bộ mốc thời gian thực
-    '-hls_flags', 'delete_segments+program_date_time',
+    // delete_segments tự động dọn dẹp các segment cũ vượt ngoài cửa sổ DVR, append_list nối tiếp playlist khi iPhone kết nối lại
+    '-hls_flags', 'append_list+delete_segments+program_date_time',
     path.join(outputDir, 'index.m3u8')
   ];
 
@@ -315,14 +315,79 @@ function startHlsSession(streamKey: string): void {
   console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
   console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
   console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, Full HD Master, video-only)`);
-  console.log(`[MediaServer]   web live HD:   WHEP /${streamKey}/whep (dynamic up to ${LIVE_PREVIEW_FPS}fps, 4.5-5.0Mbps ultrafast smooth HD)`);
+  console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps ultrafast)`);
 
-  const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  const liveFfmpeg = spawn(ffmpegPath, liveFfmpegArgs, {
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
+  const isProcessRunning = (p?: ChildProcess) => !!p && p.exitCode === null && p.signalCode === null && !p.killed;
+  const isRtmpActive = () => Array.from(nmsSessions.values()).some(s => s.streamKey === streamKey);
+
+  const spawnReplayProcess = (): ChildProcess => {
+    const proc = spawn(ffmpegPath, ffmpegArgs, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    proc.stdout?.on('data', (data: Buffer) => {
+      const line = data.toString().trim();
+      if (line) console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
+    });
+    proc.stderr?.on('data', (data: Buffer) => {
+      const line = data.toString().trim();
+      if (!line) return;
+      const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
+      if (isImportant) console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
+      const s = hlsSessions.get(streamKey);
+      if (s) s.lastSeen = Date.now() / 1000;
+    });
+    proc.on('error', (err: Error) => {
+      console.error(`[MediaServer] ffmpeg error for ${streamKey}:`, err);
+    });
+    proc.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+      const cur = hlsSessions.get(streamKey);
+      if (cur && cur.ffmpegProcesses[0] === proc && isRtmpActive() && !pendingDisconnects.has(streamKey)) {
+        setTimeout(() => {
+          const active = hlsSessions.get(streamKey);
+          if (active && !isProcessRunning(active.ffmpegProcesses[0]) && isRtmpActive()) {
+            console.log(`[MediaServer] 🔄 Tự động khởi động lại replay FFmpeg cho ${streamKey}`);
+            active.ffmpegProcesses[0] = spawnReplayProcess();
+          }
+        }, 1000);
+      }
+    });
+    return proc;
+  };
+
+  const spawnLiveProcess = (): ChildProcess => {
+    const proc = spawn(ffmpegPath, liveFfmpegArgs, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    proc.stderr?.on('data', (data: Buffer) => {
+      const line = data.toString().trim();
+      if (!line) return;
+      const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
+      if (isImportant) console.log(`[MediaServer] [live ${streamKey}] ${line}`);
+      const active = hlsSessions.get(streamKey);
+      if (active) active.lastSeen = Date.now() / 1000;
+    });
+    proc.on('error', (err: Error) => {
+      console.error(`[MediaServer] live FFmpeg error for ${streamKey}:`, err);
+    });
+    proc.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+      const cur = hlsSessions.get(streamKey);
+      if (cur && cur.ffmpegProcesses[1] === proc && isRtmpActive() && !pendingDisconnects.has(streamKey)) {
+        setTimeout(() => {
+          const active = hlsSessions.get(streamKey);
+          if (active && !isProcessRunning(active.ffmpegProcesses[1]) && isRtmpActive()) {
+            console.log(`[MediaServer] 🔄 Tự động khởi động lại live FFmpeg (WHEP) cho ${streamKey}`);
+            active.ffmpegProcesses[1] = spawnLiveProcess();
+          }
+        }, 1000);
+      }
+    });
+    return proc;
+  };
+
+  const ffmpeg = spawnReplayProcess();
+  const liveFfmpeg = spawnLiveProcess();
 
   const session: HlsSession = {
     streamKey,
@@ -331,52 +396,6 @@ function startHlsSession(streamKey: string): void {
     ffmpegProcesses: [ffmpeg, liveFfmpeg]
   };
   hlsSessions.set(streamKey, session);
-
-  ffmpeg.stdout.on('data', (data: Buffer) => {
-    const line = data.toString().trim();
-    if (line) {
-      console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
-    }
-  });
-
-  ffmpeg.stderr.on('data', (data: Buffer) => {
-    const line = data.toString().trim();
-    if (line) {
-      // CHỈ log những dòng quan trọng để tránh spam. Giữ progress frame.
-      const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
-      if (isImportant) {
-        console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
-      }
-      // Cập nhật lastSeen khi ffmpeg nhận được dữ liệu (bất kỳ output nào)
-      const s = hlsSessions.get(streamKey);
-      if (s) s.lastSeen = Date.now() / 1000;
-    }
-  });
-
-  ffmpeg.on('error', (err: Error) => {
-    console.error(`[MediaServer] ffmpeg error for ${streamKey}:`, err);
-    cleanupStreamSession(streamKey);
-  });
-
-  ffmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-    console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-  });
-
-  liveFfmpeg.stderr.on('data', (data: Buffer) => {
-    const line = data.toString().trim();
-    if (!line) return;
-    const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
-    if (isImportant) console.log(`[MediaServer] [live ${streamKey}] ${line}`);
-    const active = hlsSessions.get(streamKey);
-    if (active) active.lastSeen = Date.now() / 1000;
-  });
-  liveFfmpeg.on('error', (err: Error) => {
-    console.error(`[MediaServer] live FFmpeg error for ${streamKey}:`, err);
-    cleanupStreamSession(streamKey);
-  });
-  liveFfmpeg.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-    console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-  });
   console.log(`[MediaServer] DVR + WebRTC session started for ${streamKey}`);
 }
 
@@ -395,10 +414,18 @@ function onStreamStart(sessionId: string, streamPath: string): void {
 
   const existingSession = hlsSessions.get(streamKey);
   if (existingSession) {
-    const anyAlive = existingSession.ffmpegProcesses.some(p => !p.killed);
-    if (anyAlive) {
-      console.log(`[MediaServer] Stream ${streamKey} đã có HLS/FFmpeg session đang chạy, tái sử dụng.`);
+    const allRunning =
+      existingSession.ffmpegProcesses.length >= 2 &&
+      existingSession.ffmpegProcesses.every(p => p && p.exitCode === null && p.signalCode === null && !p.killed);
+    if (allRunning) {
+      console.log(`[MediaServer] Stream ${streamKey} đã có đầy đủ HLS + Live FFmpeg đang chạy, tái sử dụng.`);
       return;
+    }
+    // Dọn tiến trình cũ bị treo hoặc đã chết trước khi khởi tạo lại cặp tiến trình mới cho kết nối RTMP mới
+    for (const p of existingSession.ffmpegProcesses) {
+      if (p && p.exitCode === null && !p.killed) {
+        try { p.kill('SIGTERM'); } catch {}
+      }
     }
   }
 
