@@ -1343,10 +1343,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
         highBufferWatchdogPeriod: 0,
         liveSyncDuration: 1.0,
-        // Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay
-        liveMaxLatencyDuration: 86400,
-        // Không cho HLS.js tự tăng video.playbackRate để catch-up live edge
-        maxLiveSyncPlaybackRate: 1,
+        // Khi đang xem Live: Cho phép HLS tự động bám sát mép Live trong khoảng 1-2.5s
+        liveMaxLatencyDuration: 2.5,
+        maxLiveSyncPlaybackRate: 1.1,
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
@@ -1809,6 +1808,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     // 2. Đưa replayVideo về sát mép live và tiếp tục phát ngầm (muted):
     // Giúp duy trì vùng đệm 60s RAM liên tục cập nhật theo thời gian thực
     if (replayVideoRef.current) {
+      if (hlsRef.current) {
+        hlsRef.current.config.liveMaxLatencyDuration = 2.5;
+      }
       const video = replayVideoRef.current;
       video.playbackRate = 1.0;
       video.muted = true;
@@ -1920,6 +1922,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const video = replayVideoRef.current;
     if (video) {
+      if (hlsRef.current) {
+        // Tắt tính năng tự bắt kịp Live khi người dùng đang xem Slow hoặc tua lại
+        hlsRef.current.config.liveMaxLatencyDuration = 86400;
+      }
       video.playbackRate = speed;
       video.muted = true;
       const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
