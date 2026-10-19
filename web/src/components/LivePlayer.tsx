@@ -1376,15 +1376,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHlsLiveEdge(end);
 
             // Khi đang ở chế độ Live:
-            // Luôn đồng bộ video.currentTime bám sát Live Edge (end - 1.0s)
-            // để hls.js nạp và duy trì sẵn 20 giây gần nhất trong RAM!
+            // Chỉ đồng bộ khi bắt đầu hoặc khi bị tụt hậu quá xa (> 5s do mạng khựng)
+            // Tuyệt đối không seek giật lùi liên tục khi đang phát bình thường
             const curTime = video.currentTime;
             const lag = end - curTime;
-            if (curTime === 0 || lag > 2.5 || lag < 0.2) {
+            if (curTime === 0 && end > 2.0) {
               video.currentTime = Math.max(0, end - 1.0);
               if (video.paused) {
                 video.play().catch(() => {});
               }
+            } else if (lag > 5.0) {
+              video.currentTime = Math.max(0, end - 1.0);
+              if (video.paused) {
+                video.play().catch(() => {});
+              }
+            } else if (video.paused) {
+              video.play().catch(() => {});
             }
           }
 
@@ -1928,12 +1935,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else {
         // Chuyển từ Live sang Slow: tua ngay tại khoảnh khắc Live hiện tại (end - 0.25s)
         const targetTime = Math.max(start, end - 0.25);
+        isSeekingRef.current = true;
+        targetSeekTimeRef.current = targetTime;
+        if (seekingTimeoutRef.current !== null) {
+          window.clearTimeout(seekingTimeoutRef.current);
+        }
+        seekingTimeoutRef.current = window.setTimeout(() => {
+          isSeekingRef.current = false;
+          targetSeekTimeRef.current = null;
+          seekingTimeoutRef.current = null;
+        }, 1200);
+
+        setCurrentTime(targetTime);
         if (video.readyState >= 2 && Math.abs(video.currentTime - targetTime) <= 0.35) {
           // Video đang phát ngay sát mép live: giữ frame hiện tại và chỉ giảm tốc độ phát (0ms giật khựng)
+          isSeekingRef.current = false;
+          targetSeekTimeRef.current = null;
           setCurrentTime(video.currentTime);
         } else {
           video.currentTime = targetTime;
-          setCurrentTime(targetTime);
         }
         video.playbackRate = speed;
       }
@@ -2552,7 +2572,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         <video
           ref={replayVideoRef}
           className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
-            (!isLive || !hasLiveFrame) && hasFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+            (!isLive || !hasLiveFrame) && hasFrame ? 'opacity-100 z-20' : 'opacity-100 z-0 pointer-events-none'
           }`}
           style={{
             transform: !isLive
