@@ -249,41 +249,6 @@ struct ContentView: View {
                                         .foregroundColor(.cyan)
                                 }
 
-                                if !cameraManager.debugFormatInfo.isEmpty {
-                                    Text("Sensor: \(cameraManager.debugFormatInfo)")
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.yellow)
-                                }
-
-                                if !cameraManager.debugColorInfo.isEmpty {
-                                    Text("Color: \(cameraManager.debugColorInfo)")
-                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.cyan)
-                                }
-
-                                if !cameraManager.debugSensorLiveInfo.isEmpty {
-                                    Text("\(cameraManager.debugSensorLiveInfo)")
-                                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                        .foregroundColor(.orange)
-                                }
-
-                                if !cameraManager.debugEncoderInfo.isEmpty {
-                                    Text("\(cameraManager.debugEncoderInfo)")
-                                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.9))
-                                }
-
-                                HStack(spacing: 6) {
-                                    Text("FPS: \(Int(cameraManager.currentFPS)) | \(cameraManager.currentShutterText)")
-                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                        .foregroundColor(.yellow)
-                                    if cameraManager.debugPushedFrames > 0 {
-                                        Text("Pushed: \(cameraManager.debugPushedFrames)f")
-                                            .font(.system(size: 9, design: .monospaced))
-                                            .foregroundColor(.green)
-                                    }
-                                }
-
                                 HStack(spacing: 4) {
                                     Image(systemName: "hourglass")
                                         .font(.system(size: 9))

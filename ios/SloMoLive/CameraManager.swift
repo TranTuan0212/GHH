@@ -1157,68 +1157,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         autoreleasepool {
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-            // Cập nhật thông số phần cứng & hệ màu thực tế mỗi 60 frames (~0.5s ở 120fps) ngay cả khi chưa bấm Live
-            _previewFrameCounter += 1
-            if _previewFrameCounter % 60 == 1 {
-                let bufFmt = self.fourCCString(CVPixelBufferGetPixelFormatType(pixelBuffer))
-                let rawMat = (CVBufferGetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue() as? String) ?? "nil"
-                let rawPri = (CVBufferGetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey, nil)?.takeUnretainedValue() as? String) ?? "nil"
-                let rawTF = (CVBufferGetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue() as? String) ?? "nil"
-                let matStr = self.shortColorTag(rawMat)
-                let priStr = self.shortColorTag(rawPri)
-                let tfStr = self.shortColorTag(rawTF)
-
-                if let dev = self.videoDeviceInput?.device {
-                    let fmtDesc = dev.activeFormat.formatDescription
-                    let dims = CMVideoFormatDescriptionGetDimensions(fmtDesc)
-                    let fmtSub = self.fourCCString(CMFormatDescriptionGetMediaSubType(fmtDesc))
-                    let isBinned = dev.activeFormat.isVideoBinned
-                    let activeCS = self.colorSpaceName(dev.activeColorSpace)
-                    let supCS = dev.activeFormat.supportedColorSpaces.map { self.colorSpaceName($0) }.joined(separator: ",")
-
-                    let isoVal = Int(dev.iso.rounded())
-                    let expSec = CMTimeGetSeconds(dev.exposureDuration)
-                    let shutDenom = expSec > 0 ? Int((1.0 / expSec).rounded()) : 0
-                    let biasVal = dev.exposureTargetBias
-                    let offVal = dev.exposureTargetOffset
-                    let lensPos = dev.lensPosition
-                    let wb = dev.deviceWhiteBalanceGains
-                    let hdrOn = dev.isVideoHDREnabled
-
-                    let fmtLine = "\(dev.position == .front ? "Trước" : "Sau") \(dims.width)x\(dims.height)@\(Int(self.activeCaptureFPS)) | Fmt:\(fmtSub)\(isBinned ? "(Bin)" : "(Unbin)") | Lens:\(String(format: "%.2f", lensPos))"
-                    let colorLine = "CS:\(activeCS)[\(supCS)] | Buf:\(bufFmt) | M:\(matStr) P:\(priStr) T:\(tfStr)"
-                    let liveLine = String(
-                        format: "ISO:%d | 1/%ds | Bias:%.1f(Off:%+.1f) | WB:%.1f/%.1f/%.1f | HDR:%@",
-                        isoVal,
-                        shutDenom,
-                        biasVal,
-                        offVal,
-                        wb.redGain,
-                        wb.greenGain,
-                        wb.blueGain,
-                        hdrOn ? "ON" : "OFF"
-                    )
-
-                    DispatchQueue.main.async {
-                        self.debugFormatInfo = fmtLine
-                        self.debugColorInfo = colorLine
-                        self.debugSensorLiveInfo = liveLine
-                    }
-                }
-            }
-
             // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
             // from background threads" và truy cập thread-safe.
             guard isStreamingAtomic else { return }
 
-            // DEBUG: đếm frames để biết capture có chạy thật sự không. Log mỗi 240 frames (~1s ở 240fps).
+            // Log console mỗi 240 frames (~2s ở 120fps) — không cập nhật UI để tiết kiệm CPU.
             _frameCounter += 1
-            if _frameCounter % 60 == 1 {
-                let count = self._frameCounter
-                DispatchQueue.main.async {
-                    self.debugPushedFrames = count
-                }
-            }
             if _frameCounter % 240 == 1 {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")], latest PTS=\(CMTimeGetSeconds(pts))s")
