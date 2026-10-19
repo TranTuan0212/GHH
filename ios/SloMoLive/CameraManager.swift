@@ -349,11 +349,12 @@ public class CameraManager: NSObject, ObservableObject {
         }
 
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
-        // Chuẩn Full HD 1080p 120fps Master Replay (H.264 High Profile CABAC, encode bằng chip phần cứng — không tốn CPU):
+        // Chuẩn Full HD 1080p 120fps Master Replay tối ưu cho cả 4G/5G và Wi-Fi:
         // - Keyframe: mỗi 0.5 giây (targetFps / 2 = 60 frames @ 120fps) khớp chuẩn 1:1 với phân đoạn HLS 0.5s
-        // - Target Bitrate: 10 Mbps (Peak 12 Mbps, Floor 8 Mbps): mỗi segment 0.5s chỉ ~600KB giúp tải ngầm vào RAM tức thì,
-        //   không nghẽn mạng mà vẫn giữ độ nét căng cho từng frame khi tua lại.
-        let targetBitrate: UInt = 10_000_000
+        //   để bấm Replay ăn ngay tức khắc tại mép Live không bị trễ nhịp.
+        // - Target Bitrate: 8.5 Mbps (Peak 10.5 Mbps, Floor 6.0 Mbps): mỗi segment 0.5s chỉ ~500KB giúp đẩy qua 4G
+        //   nhẹ nhàng không nghẽn cổ chai mà vẫn giữ độ nét căng cho từng frame khi tua lại.
+        let targetBitrate: UInt = 8_500_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -362,14 +363,14 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 12_000_000
+        videoCfg.videoMaxBitRate = 10_500_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 8_000_000
+        videoCfg.videoMinBitRate = 6_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 12Mbps, Floor: 8Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 10.5Mbps, Floor: 6.0Mbps)")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -396,9 +397,9 @@ public class CameraManager: NSObject, ObservableObject {
         // vá cho iOS 14+) sẽ crash khi gọi sessionDidChangeState / session:didFailWithError mà
         // delegate chưa ai implement. Đây là một trong những nguyên nhân crash khi bấm Start Live.
         session.delegate = self
-        // Tự động kết nối lại khi sóng 4G/5G bị ngắt quãng (thử lại mỗi 2s, tối đa 5 lần)
+        // Tự động kết nối lại khi sóng 4G/5G bị ngắt quãng (thử lại mỗi 2s, tối đa 15 lần = 30s chịu đựng mất sóng)
         session.reconnectInterval = 2
-        session.reconnectCount = 5
+        session.reconnectCount = 15
 
         liveSession = session
     }

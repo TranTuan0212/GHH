@@ -584,6 +584,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [hlsWindowStart, setHlsWindowStart] = useState<number>(0);
   const [hlsLiveEdge, setHlsLiveEdge] = useState<number>(0);
+  const hlsLiveEdgeRef = useRef<number>(0);
+  hlsLiveEdgeRef.current = hlsLiveEdge;
+  const playbackRateRef = useRef<number>(1.0);
+  playbackRateRef.current = playbackRate;
   // Khi xem lại, cạnh phải của timeline là thời điểm người dùng rời Live. Không dùng
   // live edge đang tiếp tục tăng, nếu không nút tua sẽ "trôi" khỏi các frame cũ.
   const [frozenTimeline, setFrozenTimeline] = useState<FrozenTimeline | null>(null);
@@ -598,6 +602,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [liveElapsedSeconds, setLiveElapsedSeconds] = useState<number>(0);
 
   // Bộ đếm thời gian thực khi đang phát Live (YouTube-style timeline)
+  // Khi đang ở chế độ Replay (!isLiveRef.current), tạm ngưng re-render mỗi 500ms để dành 100% main thread vẽ mượt 120fps.
   useEffect(() => {
     if (!stream?.startedAt) {
       setLiveElapsedSeconds(0);
@@ -605,6 +610,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
     const startedMs = new Date(stream.startedAt).getTime();
     const updateElapsed = () => {
+      if (!isLiveRef.current) return;
       const now = Date.now();
       const elapsed = Math.max(0, (now - startedMs) / 1000);
       setLiveElapsedSeconds(elapsed);
@@ -1357,15 +1363,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const last = fragments[fragments.length - 1];
           const start = first.start;
           const end = last.start + last.duration;
-          setHlsWindowStart(start);
-          setHlsLiveEdge(end);
+          hlsLiveEdgeRef.current = end;
+          if (isLiveRef.current) {
+            setHlsWindowStart(start);
+            setHlsLiveEdge(end);
+          }
 
           if (isLiveRef.current) {
             if (hasLiveFrameRef.current) {
-              // Khi WebRTC Live đang hiển thị:
-              // Chỉ giữ replayVideo ở trạng thái PAUSE. TUYỆT ĐỐI KHÔNG gán video.currentTime ở đây
-              // vì gán currentTime khi segment đang tải sẽ kích hoạt sự kiện seeking làm hls.js hủy (abort)
-              // các file .ts đang tải dở và gây thủng lỗ buffer khi tua lại!
               if (!video.paused) {
                 video.pause();
               }
@@ -1384,10 +1389,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
       hls.on(Hls.Events.FRAG_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url));
       hls.on(Hls.Events.BUFFER_APPENDED, () => {
-        // Khi đang xem WebRTC Live: giữ replayVideo pause và để hls.js tải tuần tự 100% các segment vào RAM
-        // (nhờ maxBufferLength=300s). Không gán currentTime liên tục mỗi 0.5s để tránh kích hoạt seeking gây abort tải segment.
-        if (isLiveRef.current && hasLiveFrameRef.current && !video.paused) {
-          video.pause();
+        // Khi đang xem WebRTC Live: giữ replayVideo pause và đỗ sẵn đầu đọc tại segment vừa tải xong (nằm trọn trong vùng đã buffer)
+        // để phần cứng GPU giải mã sẵn GOP mới nhất -> khi bấm [Enter] chuyển sang Replay sẽ phát tức khắc (0ms delay)!
+        if (isLiveRef.current && hasLiveFrameRef.current) {
+          if (!video.paused) {
+            video.pause();
+          }
+          if (!video.seeking && video.buffered.length > 0) {
+            const bStart = video.buffered.start(0);
+            const bEnd = video.buffered.end(video.buffered.length - 1);
+            if (bEnd > bStart && bEnd - video.currentTime > 0.65) {
+              video.currentTime = Math.max(bStart, bEnd - 0.15);
+            }
+          }
         }
       });
       // Lỗi tải segment .ts (fragLoadError) không có event riêng — nó báo qua Hls.Events.ERROR chung
@@ -1548,14 +1562,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   useEffect(() => {
     const replayVid = replayVideoRef.current;
     const liveVid = liveVideoRef.current;
+    let lastTimeUiUpdateMs = 0;
 
     const onTime = () => {
       // Đang kéo tua hoặc đang chờ trình duyệt hoàn tất seek: không ghi đè currentTime để tránh mốc tua bị giật lùi
       if (isDraggingSeekRef.current || isSeekingRef.current || targetSeekTimeRef.current !== null) return;
       if (replayVid) {
+        const now = performance.now();
+        // Throttle cập nhật React state ở ~16fps khi video đang tự phát để không ép React re-render
+        // toàn bộ cây DOM 3400 dòng mỗi vài mili-giây gây rớt frame hiển thị 120fps trên GPU.
+        if (!replayVid.paused && now - lastTimeUiUpdateMs < 60) return;
+        lastTimeUiUpdateMs = now;
         setCurrentTime(replayVid.currentTime);
-        if (Number.isFinite(replayVid.duration)) {
-          setDuration(replayVid.duration);
+        if (isLiveRef.current && Number.isFinite(replayVid.duration)) {
+          setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
         }
       }
     };
@@ -1563,7 +1583,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (!isLiveRef.current) setIsPlaying(true);
     };
     const onReplayPause = () => {
-      if (!isLiveRef.current) setIsPlaying(false);
+      if (!isLiveRef.current) {
+        setIsPlaying(false);
+        if (replayVid) setCurrentTime(replayVid.currentTime);
+      }
     };
     const onLivePlay = () => {
       if (isLiveRef.current) setIsPlaying(true);
@@ -1571,15 +1594,23 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const onLivePause = () => {
       if (isLiveRef.current) setIsPlaying(false);
     };
+    const onDurationChange = () => {
+      // Khi đang ở chế độ Replay, timeline đã đóng băng theo frozenTimeline nên không cần re-render mỗi 0.5s khi segment mới nối thêm
+      if (isLiveRef.current && replayVid && Number.isFinite(replayVid.duration)) {
+        setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
+      }
+    };
     const onLoaded = () => {
-      if (replayVid && Number.isFinite(replayVid.duration)) setDuration(replayVid.duration);
-      setHasFrame(true);
-      setIsTransitioning(false); // HLS đã có frame, ẩn spinner chuyển đổi
+      if (replayVid && Number.isFinite(replayVid.duration)) {
+        setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
+      }
+      setHasFrame((prev) => (prev ? prev : true));
+      setIsTransitioning((prev) => (prev ? false : prev)); // HLS đã có frame, ẩn spinner chuyển đổi
     };
 
     if (replayVid) {
       replayVid.addEventListener('timeupdate', onTime);
-      replayVid.addEventListener('durationchange', onLoaded);
+      replayVid.addEventListener('durationchange', onDurationChange);
       replayVid.addEventListener('loadeddata', onLoaded);
       replayVid.addEventListener('canplay', onLoaded);
       replayVid.addEventListener('play', onReplayPlay);
@@ -1593,7 +1624,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     return () => {
       if (replayVid) {
         replayVid.removeEventListener('timeupdate', onTime);
-        replayVid.removeEventListener('durationchange', onLoaded);
+        replayVid.removeEventListener('durationchange', onDurationChange);
         replayVid.removeEventListener('loadeddata', onLoaded);
         replayVid.removeEventListener('canplay', onLoaded);
         replayVid.removeEventListener('play', onReplayPlay);
@@ -1616,7 +1647,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (ranges.length === 0) return;
       const end = ranges.end(ranges.length - 1);
       if (Number.isFinite(end)) {
-        setHlsLiveEdge((prev) => Math.max(prev, end));
+        hlsLiveEdgeRef.current = Math.max(hlsLiveEdgeRef.current, end);
+        if (isLiveRef.current) {
+          setHlsLiveEdge((prev) => (end > prev + 0.2 ? end : prev));
+        }
       }
     };
     video.addEventListener('progress', updateSeekableWindow);
@@ -1664,16 +1698,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       // Nếu có yêu cầu phát tiếp sau khi seek xong
       if (pendingPlayAfterSeekRef.current) {
         pendingPlayAfterSeekRef.current = false;
-        video.playbackRate = playbackRate;
+        video.playbackRate = playbackRateRef.current;
         video.play().catch(() => {});
         setIsPlaying(true);
       }
 
       if (isLiveRef.current && !hasLiveFrameRef.current) {
-        const lag = hlsLiveEdge - video.currentTime;
+        const edge = hlsLiveEdgeRef.current;
+        const lag = edge - video.currentTime;
         // Giữ video HLS đệm mượt mà ở khoảng cách 1.5s sau mép live khi chạy fallback HLS Live
         if (lag > 4 || (lag >= 0 && lag < 0.5)) {
-          video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
+          video.currentTime = Math.max(0, edge - 1.5);
         }
       }
     };
@@ -1686,7 +1721,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         seekingTimeoutRef.current = null;
       }
     };
-  }, [hlsLiveEdge]);
+  }, []);
 
   const [modeNotice, setModeNotice] = useState<'slow' | 'live' | null>(null);
   const [modeNoticeTitle, setModeNoticeTitle] = useState<string>('');
@@ -1724,6 +1759,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
+    if (hlsLiveEdgeRef.current > 0) {
+      setHlsLiveEdge(hlsLiveEdgeRef.current);
+    }
     updateFrozenTimeline(null);
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
@@ -1750,10 +1788,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const video = replayVideoRef.current;
       video.playbackRate = 1.0;
       video.muted = isMuted;
+      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
       if (video.seekable.length > 0) {
         video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
-      } else if (hlsLiveEdge > 0) {
-        video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
+      } else if (latestEdge > 0) {
+        video.currentTime = Math.max(0, latestEdge - 1.5);
       }
       video.play().catch(() => {});
     }
@@ -1793,6 +1832,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setHasFrame(false);
     setHlsWindowStart(0);
     setHlsLiveEdge(0);
+    hlsLiveEdgeRef.current = 0;
     setCurrentTime(0);
     setDuration(0);
     updateFrozenTimeline(null);
@@ -1857,9 +1897,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (video) {
       video.playbackRate = speed;
       video.muted = true;
+      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
       const start = video.seekable.length > 0 ? video.seekable.start(0) : hlsWindowStart;
-      const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
-      const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : (hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration));
+      const curLiveDuration = Math.max(liveElapsedSeconds, latestEdge > hlsWindowStart ? latestEdge - hlsWindowStart : 0);
+      const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : (latestEdge > hlsWindowStart ? latestEdge : (start + curLiveDuration));
       const bufferedEnd = video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1) : end;
       
       updateFrozenTimeline({ start, end: Math.max(end, bufferedEnd) });
@@ -1869,11 +1910,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.playbackRate = speed;
       } else {
         // Chuyển từ Live sang Slow: dính khớp ngay tại mốc đang chiếu trên Live (cách mép buffer 0.12s ~ 6 frame)
-        // Nếu BUFFER_APPENDED đã đỗ sẵn đầu đọc trong bán kính 0.25s quanh targetTime và đã giải mã xong (readyState >= 2),
+        // Nếu BUFFER_APPENDED đã đỗ sẵn đầu đọc trong bán kính 0.65s quanh targetTime và đã giải mã xong (readyState >= 2),
         // phát tiếp ngay lập tức từ frame đã giải mã sẵn trên GPU (0.0ms delay, không cần flush decoder)!
         const safeBufferedEnd = bufferedEnd > start ? Math.min(end, bufferedEnd) : end;
         const targetTime = Math.max(start, safeBufferedEnd - 0.12);
-        if (video.readyState >= 2 && video.currentTime >= start && Math.abs(video.currentTime - targetTime) <= 0.25) {
+        if (video.readyState >= 2 && video.currentTime >= start && Math.abs(video.currentTime - targetTime) <= 0.65) {
           setCurrentTime(video.currentTime);
         } else if (video.readyState >= 1) {
           video.currentTime = targetTime;

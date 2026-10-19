@@ -29,7 +29,10 @@ post_install do |installer|
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse'
         ).gsub(
           'VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel);',
-          "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
+          "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_Quality, (__bridge CFTypeRef)@(0.85));\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
+        ).gsub(
+          'NSNumber *timeNumber = @(timeStamp);',
+          "static int64_t _startTimestamp = 0;\n    int64_t expectedOffset = (int64_t)llround((double)frameCount * 1000.0 / (double)_configuration.videoFrameRate);\n    int64_t paced = _startTimestamp + expectedOffset;\n    if (frameCount <= 1 || _startTimestamp <= 0 || llabs((int64_t)timeStamp - paced) > 1000) {\n        _startTimestamp = (int64_t)timeStamp - expectedOffset;\n        paced = (int64_t)timeStamp;\n    }\n    NSNumber *timeNumber = @((uint64_t)paced);"
         )
         File.write(encoder, patched) if patched != source
       end
@@ -47,21 +50,34 @@ post_install do |installer|
         File.write(video_cfg, cfg_patched) if cfg_patched != cfg_source
       end
 
-      # Prevent LFStreamingBuffer from prematurely deleting unsent P/I frames during brief
-      # network jitter at 120fps (600 frames = only 5s at 120fps). Increase max unsent buffer
-      # to 3600 frames (30s at 120fps); once a frame is sent to the server, popFirstObject
-      # immediately removes it from RAM as usual.
-      streaming_buf = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'buffer', 'LFStreamingBuffer.m')
-      if File.exist?(streaming_buf)
-        buf_source = File.read(streaming_buf)
-        buf_patched = buf_source.gsub(
-          'defaultSendBufferMaxCount = 600;',
-          'defaultSendBufferMaxCount = 3600;'
-        ).gsub(
-          'defaultSortBufferMaxCount = 5;',
-          'defaultSortBufferMaxCount = 2;'
+      # Prevent LFStreamingBuffer (located in 'publish/LFStreamingBuffer.m' in LFLiveKit 2.6)
+      # from prematurely deleting unsent P/I frames during 4G network jitter at 120fps.
+      # Increase max unsent buffer to 4800 packets (~25s elastic RAM buffer on 4G).
+      ['publish', 'buffer'].each do |subdir|
+        streaming_buf = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', subdir, 'LFStreamingBuffer.m')
+        if File.exist?(streaming_buf)
+          buf_source = File.read(streaming_buf)
+          buf_patched = buf_source.gsub(
+            'defaultSendBufferMaxCount = 600;',
+            'defaultSendBufferMaxCount = 4800;'
+          ).gsub(
+            'defaultSortBufferMaxCount = 5;',
+            'defaultSortBufferMaxCount = 2;'
+          )
+          File.write(streaming_buf, buf_patched) if buf_patched != buf_source
+        end
+      end
+
+      # Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m
+      # so 120fps bursts after 4G micro-stalls drain immediately on rtmpSendQueue.
+      rtmp_sock = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'publish', 'LFStreamRtmpSocket.m')
+      if File.exist?(rtmp_sock)
+        sock_source = File.read(rtmp_sock)
+        sock_patched = sock_source.gsub(
+          /dispatch_async\(dispatch_get_global_queue\(DISPATCH_QUEUE_PRIORITY_DEFAULT,\s*0\),\s*\^\{\s*\/\/[^\n]*\n\s*_self\.isSending\s*=\s*NO;\s*\}\);/,
+          '_self.isSending = NO;'
         )
-        File.write(streaming_buf, buf_patched) if buf_patched != buf_source
+        File.write(rtmp_sock, sock_patched) if sock_patched != sock_source
       end
     end
   end
