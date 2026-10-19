@@ -1349,6 +1349,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
+        xhrSetup: (xhr) => {
+          try {
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
+          } catch {}
+        },
         debug: false
       });
       hlsInstance = hls;
@@ -1380,12 +1385,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             const curTime = video.currentTime;
             const lag = end - curTime;
             if (curTime === 0 && end > 2.0) {
-              video.currentTime = Math.max(0, end - 1.0);
+              video.currentTime = Math.max(0, end - 1.5);
               if (video.paused) {
                 video.play().catch(() => {});
               }
             } else if (lag > 5.0) {
-              video.currentTime = Math.max(0, end - 1.0);
+              video.currentTime = Math.max(0, end - 1.5);
               if (video.paused) {
                 video.play().catch(() => {});
               }
@@ -1816,7 +1821,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       video.muted = true;
       const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
       if (latestEdge > 0) {
-        video.currentTime = Math.max(0, latestEdge - 1.0);
+        video.currentTime = Math.max(0, latestEdge - 1.5);
       }
       video.play().catch(() => {});
     }
@@ -1939,27 +1944,36 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: tua ngay tại khoảnh khắc Live hiện tại (end - 0.25s)
-        const targetTime = Math.max(start, end - 0.25);
-        isSeekingRef.current = true;
-        targetSeekTimeRef.current = targetTime;
-        if (seekingTimeoutRef.current !== null) {
-          window.clearTimeout(seekingTimeoutRef.current);
+        // Chuyển từ Live sang Slow: tìm mốc an toàn nhất sát mép Live đã có sẵn trong RAM buffer
+        let safeLiveTime = Math.max(start, end - 0.75);
+        if (video.buffered.length > 0) {
+          const maxBuffered = video.buffered.end(video.buffered.length - 1);
+          if (maxBuffered > start) {
+            safeLiveTime = Math.min(safeLiveTime, maxBuffered - 0.1);
+          }
         }
-        seekingTimeoutRef.current = window.setTimeout(() => {
-          isSeekingRef.current = false;
-          targetSeekTimeRef.current = null;
-          seekingTimeoutRef.current = null;
-        }, 1200);
+        const targetTime = Math.max(start, safeLiveTime);
 
-        setCurrentTime(targetTime);
-        if (video.readyState >= 2 && Math.abs(video.currentTime - targetTime) <= 0.35) {
-          // Video đang phát ngay sát mép live: giữ frame hiện tại và chỉ giảm tốc độ phát (0ms giật khựng)
+        // Nếu video đang phát mượt mà trong vùng đệm gần mép Live (chênh lệch dưới 2s):
+        // Giữ nguyên frame hiện tại và chỉ giảm tốc độ phát để hình ảnh mượt 0ms, không giật khựng
+        if (video.readyState >= 2 && video.currentTime >= start && end - video.currentTime <= 2.0 && end - video.currentTime >= 0.1) {
           isSeekingRef.current = false;
           targetSeekTimeRef.current = null;
           setCurrentTime(video.currentTime);
         } else {
+          isSeekingRef.current = true;
+          targetSeekTimeRef.current = targetTime;
+          if (seekingTimeoutRef.current !== null) {
+            window.clearTimeout(seekingTimeoutRef.current);
+          }
+          seekingTimeoutRef.current = window.setTimeout(() => {
+            isSeekingRef.current = false;
+            targetSeekTimeRef.current = null;
+            seekingTimeoutRef.current = null;
+          }, 1200);
+
           video.currentTime = targetTime;
+          setCurrentTime(targetTime);
         }
         video.playbackRate = speed;
       }
