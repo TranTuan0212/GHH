@@ -332,18 +332,6 @@ struct ContentView: View {
                                                 .stroke(cameraManager.isFocusLocked ? Color.green : Color.white.opacity(0.2), lineWidth: 1)
                                         )
                                     }
-
-                                    // Flip Camera Button (Cam Trước / Cam Sau)
-                                    Button(action: {
-                                        cameraManager.switchCamera()
-                                    }) {
-                                        Image(systemName: "camera.rotate.fill")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(.white)
-                                            .padding(7)
-                                            .background(Color.indigo.opacity(0.8))
-                                            .cornerRadius(10)
-                                    }
                                 }
 
                             // GPS Indicator

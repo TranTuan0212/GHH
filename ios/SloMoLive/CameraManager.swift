@@ -59,9 +59,9 @@ public class CameraManager: NSObject, ObservableObject {
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
     @Published public var isFocusLocked: Bool = false
 
-    /// Trạng thái tốc độ màn trập 1/240s (khử nhòe lá bài khi tua chậm 0.25x)
+    /// Trạng thái tốc độ màn trập & chuẩn màu sRGB đậm cho Cam Trước
     @Published public var isActionShutterEnabled: Bool = true
-    @Published public var currentShutterText: String = "1/240s ⚡"
+    @Published public var currentShutterText: String = "Front sRGB Đậm ⚡"
 
     /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
     @Published public var debugFormatInfo: String = ""
@@ -588,9 +588,10 @@ public class CameraManager: NSObject, ObservableObject {
                 self.captureSession.sessionPreset = .inputPriority
             }
 
-            guard let videoDevice = self.preferredVideoDevice(for: .back) else {
+            // Khởi tạo trực tiếp vào Cam Trước (.front) mặc định 100%
+            guard let videoDevice = self.preferredVideoDevice(for: .front) else {
                 DispatchQueue.main.async {
-                    self.errorMessage = "Không tìm thấy camera."
+                    self.errorMessage = "Không tìm thấy camera trước."
                     completion(false)
                 }
                 return
@@ -628,7 +629,7 @@ public class CameraManager: NSObject, ObservableObject {
                         self.currentFPS = fps
                         self.errorMessage = nil
                     }
-                    print("[CameraManager] Đã set camera ở \(fps)fps")
+                    print("[CameraManager] Đã set camera trước ở \(fps)fps")
                 } else {
                     // Fallback an toàn: dùng default format với 30fps
                     let timescale: Int32 = 30
@@ -662,7 +663,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if videoDevice.isAutoFocusRangeRestrictionSupported {
                     videoDevice.autoFocusRangeRestriction = .none
                 }
-                // Cấu hình phơi sáng 1/240s + ISO mở rộng (khử bóng ma chuyển động bài bay)
+                // Cấu hình hệ màu sRGB chuẩn và phơi sáng tối ưu cho Cam Trước
                 self.applyExposureSettings(device: videoDevice)
 
                 if videoDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
@@ -684,7 +685,7 @@ public class CameraManager: NSObject, ObservableObject {
                     self.captureSession.addOutput(self.videoDataOutput)
 
                     // Cấu hình video connection chuẩn: tắt chống rung, tắt mirror ở nguồn, đặt orientation
-                    self.currentDevicePosition = .back
+                    self.currentDevicePosition = .front
                     self.configureVideoOutputConnection()
                 } else {
                     DispatchQueue.main.async {
@@ -700,6 +701,7 @@ public class CameraManager: NSObject, ObservableObject {
                 self.updateVideoOrientation()
 
                 DispatchQueue.main.async {
+                    self.cameraPosition = .front
                     completion(true)
                 }
             } catch {
@@ -712,8 +714,8 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    public private(set) var currentDevicePosition: AVCaptureDevice.Position = .back
-    @Published public var cameraPosition: AVCaptureDevice.Position = .back
+    public private(set) var currentDevicePosition: AVCaptureDevice.Position = .front
+    @Published public var cameraPosition: AVCaptureDevice.Position = .front
 
     public func startLiveStream() {
         // Đồng bộ hướng camera và tái cấu hình encoder theo đúng hướng thực tế trước khi bấm Live
