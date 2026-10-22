@@ -59,9 +59,13 @@ public class CameraManager: NSObject, ObservableObject {
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
     @Published public var isFocusLocked: Bool = false
 
-    /// Trạng thái tốc độ màn trập thông minh cho Cam Trước (mặc định Auto Sáng 1/120s để ảnh sáng rõ, ISO thấp không bị bệt mờ)
+    /// Trạng thái tốc độ màn trập thông minh (Auto Sáng tối đa 1/120s thu sáng phòng vs 1/240s bắt dính hành động)
     @Published public var isActionShutterEnabled: Bool = false
     @Published public var currentShutterText: String = "Auto Sáng"
+
+    /// Mức độ bù sáng EV cho phòng thiếu sáng (0: Chuẩn 0.0, 1: +0.7 EV Sáng, 2: +1.5 EV Rất Sáng)
+    @Published public var exposureBiasLevel: Int = 0
+    @Published public var exposureBiasText: String = "EV: Chuẩn"
 
     /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
     @Published public var debugFormatInfo: String = ""
@@ -554,20 +558,34 @@ public class CameraManager: NSObject, ObservableObject {
         return nil
     }
 
-    /// Một vài đời iPhone công khai camera selfie qua TrueDepth thay vì chỉ WideAngle.
-    /// Không dùng `AVCaptureDevice.default(.builtInWideAngleCamera, ...)` cố định vì có
-    /// thể bỏ qua chính camera/format 240fps mà thiết bị đang hỗ trợ.
+    /// Hỗ trợ đầy đủ camera trước và sau (kể cả cụm Triple/Dual Camera trên các dòng iPhone Pro/Pro Max)
     private func preferredVideoDevice(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        let deviceTypes: [AVCaptureDevice.DeviceType]
+        if position == .back {
+            deviceTypes = [
+                .builtInWideAngleCamera,
+                .builtInDualCamera,
+                .builtInTripleCamera,
+                .builtInDualWideCamera
+            ]
+        } else {
+            deviceTypes = [
+                .builtInTrueDepthCamera,
+                .builtInWideAngleCamera
+            ]
+        }
         let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .builtInTrueDepthCamera],
+            deviceTypes: deviceTypes,
             mediaType: .video,
             position: position
         )
 
         let devices = discovery.devices
-        guard !devices.isEmpty else { return nil }
+        guard !devices.isEmpty else {
+            return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+        }
 
-        // Ưu tiên camera có frame-rate tối đa cao nhất; nếu bằng nhau, lấy camera có format
+        // Ưu tiên camera có frame-rate tối đa cao nhất (120/240fps); nếu bằng nhau, lấy camera có format
         // độ phân giải cao hơn. Việc chọn format chính xác vẫn do selectBestHFRFormat làm sau đó.
         return devices.max { lhs, rhs in
             let lhsMax = lhs.formats.flatMap(\.videoSupportedFrameRateRanges).map(\.maxFrameRate).max() ?? 0
@@ -600,10 +618,11 @@ public class CameraManager: NSObject, ObservableObject {
                 self.captureSession.sessionPreset = .inputPriority
             }
 
-            // Khởi tạo trực tiếp vào Cam Trước (.front) mặc định 100%
-            guard let videoDevice = self.preferredVideoDevice(for: .front) else {
+            // Khởi tạo theo vị trí camera đã lưu (ưu tiên Cam Sau cho góc nhìn và ánh sáng tốt nhất)
+            let targetPosition = self.currentDevicePosition
+            guard let videoDevice = self.preferredVideoDevice(for: targetPosition) else {
                 DispatchQueue.main.async {
-                    self.errorMessage = "Không tìm thấy camera trước."
+                    self.errorMessage = "Không tìm thấy camera \(targetPosition == .front ? "trước" : "sau")."
                     completion(false)
                 }
                 return
@@ -641,7 +660,7 @@ public class CameraManager: NSObject, ObservableObject {
                         self.currentFPS = fps
                         self.errorMessage = nil
                     }
-                    print("[CameraManager] Đã set camera trước ở \(fps)fps")
+                    print("[CameraManager] Đã set camera [\(targetPosition == .front ? "Trước" : "Sau")] ở \(fps)fps")
                 } else {
                     // Fallback an toàn: dùng default format với 30fps
                     let timescale: Int32 = 30
@@ -679,7 +698,7 @@ public class CameraManager: NSObject, ObservableObject {
                     DispatchQueue.main.async {
                         self.isFocusLocked = false
                     }
-                    print("[CameraManager] 🎯 Cam Trước: Khởi động ở Continuous Auto Focus (tự lấy nét chuẩn theo khoảng cách thực tế)")
+                    print("[CameraManager] 🎯 [\(targetPosition == .front ? "Cam Trước" : "Cam Sau")]: Khởi động ở Continuous Auto Focus (tự lấy nét chuẩn theo khoảng cách thực tế)")
                 }
                 // Cấu hình phơi sáng tự động chuẩn mặc định của Apple (Auto Sáng 1/120s, thu sáng tối đa, ISO thấp)
                 self.applyExposureSettings(device: videoDevice)
@@ -703,7 +722,7 @@ public class CameraManager: NSObject, ObservableObject {
                     self.captureSession.addOutput(self.videoDataOutput)
 
                     // Cấu hình video connection chuẩn: tắt chống rung, tắt mirror ở nguồn, đặt orientation
-                    self.currentDevicePosition = .front
+                    self.currentDevicePosition = targetPosition
                     self.configureVideoOutputConnection()
                 } else {
                     DispatchQueue.main.async {
@@ -719,7 +738,7 @@ public class CameraManager: NSObject, ObservableObject {
                 self.updateVideoOrientation()
 
                 DispatchQueue.main.async {
-                    self.cameraPosition = .front
+                    self.cameraPosition = targetPosition
                     completion(true)
                 }
             } catch {
@@ -732,8 +751,14 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    public private(set) var currentDevicePosition: AVCaptureDevice.Position = .front
-    @Published public var cameraPosition: AVCaptureDevice.Position = .front
+    public private(set) var currentDevicePosition: AVCaptureDevice.Position = {
+        let saved = UserDefaults.standard.string(forKey: "saved_camera_position")
+        return (saved == "front") ? .front : .back
+    }()
+    @Published public var cameraPosition: AVCaptureDevice.Position = {
+        let saved = UserDefaults.standard.string(forKey: "saved_camera_position")
+        return (saved == "front") ? .front : .back
+    }()
 
     public func startLiveStream() {
         // Đồng bộ hướng camera và tái cấu hình encoder theo đúng hướng thực tế trước khi bấm Live
@@ -847,6 +872,7 @@ public class CameraManager: NSObject, ObservableObject {
 
     public func switchCamera(completion: ((Bool) -> Void)? = nil) {
         let newPosition: AVCaptureDevice.Position = (self.currentDevicePosition == .back) ? .front : .back
+        UserDefaults.standard.set(newPosition == .back ? "back" : "front", forKey: "saved_camera_position")
         sessionQueue.async {
             self.captureSession.beginConfiguration()
 
@@ -1095,6 +1121,25 @@ public class CameraManager: NSObject, ObservableObject {
 
         let isFront = (device.position == .front)
 
+        // Thiết lập bù sáng EV (Exposure Target Bias)
+        let targetBias: Float
+        let biasLabel: String
+        switch self.exposureBiasLevel {
+        case 1:
+            targetBias = min(0.7, device.maxExposureTargetBias)
+            biasLabel = "+0.7 EV ☀️"
+        case 2:
+            targetBias = min(1.5, device.maxExposureTargetBias)
+            biasLabel = "+1.5 EV 🌟"
+        default:
+            targetBias = 0.0
+            biasLabel = "EV: Chuẩn"
+        }
+        device.setExposureTargetBias(targetBias, completionHandler: nil)
+        DispatchQueue.main.async {
+            self.exposureBiasText = biasLabel
+        }
+
         if isFront {
             // Cam trước: Khi bật nút 1/240s ⚡ (mặc định bật), khóa cứng tốc độ màn trập tối đa 1/240s
             // để triệt tiêu hoàn toàn nhòe bóng (motion blur) khi chia/lật bài, giúp từng frame khi tua lại sắc nét tuyệt đối.
@@ -1102,7 +1147,6 @@ public class CameraManager: NSObject, ObservableObject {
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
             }
-            device.setExposureTargetBias(0.0, completionHandler: nil)
 
             let fastDuration = CMTimeMake(value: 1, timescale: 240)
             let useFast = self.isActionShutterEnabled
@@ -1114,30 +1158,40 @@ public class CameraManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self.currentShutterText = text
             }
-            print("[CameraManager] ⚡ [Cam Trước] Auto Exposure (Bias 0.0) | Màn trập: \(text)")
+            print("[CameraManager] ⚡ [Cam Trước] Auto Exposure (Bias \(targetBias)) | Màn trập: \(text)")
             return
         }
 
-        // Cam sau: cảm biến lớn, khóa màn trập 1/240s (hoặc 1/120s) để bắt dính chuyển động nhanh
-        let shutterDenominator: Int32 = self.isActionShutterEnabled ? 240 : 120
-        let maxDuration = CMTimeMake(value: 1, timescale: shutterDenominator)
-        device.setExposureTargetBias(0.0, completionHandler: nil)
-
+        // Cam Sau: Cảm biến lớn f/1.5-f/1.8 thu sáng mạnh.
+        // Khi bật nút ⚡: Khóa màn trập 1/240s để bắt chuyển động nhanh
+        // Khi tắt nút (Auto Sáng): Để màn trập tự do (lên tới 1/120s) và ISO tự động đẩy sáng tối ưu theo phòng
         if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
-            if device.activeFormat.minExposureDuration <= maxDuration && device.activeFormat.maxExposureDuration >= maxDuration {
-                device.activeMaxExposureDuration = maxDuration
-                DispatchQueue.main.async {
-                    self.currentShutterText = self.isActionShutterEnabled ? "1/240s ⚡" : "Auto Max 1/120s ⚡"
+            if self.isActionShutterEnabled {
+                let fastDuration = CMTimeMake(value: 1, timescale: 240)
+                if device.activeFormat.minExposureDuration <= fastDuration && device.activeFormat.maxExposureDuration >= fastDuration {
+                    device.activeMaxExposureDuration = fastDuration
+                    DispatchQueue.main.async {
+                        self.currentShutterText = "1/240s ⚡"
+                    }
+                    print("[CameraManager] ⚡ Khóa Max Exposure [Cam Sau] ở 1/240s")
+                } else {
+                    let maxDuration = CMTimeMake(value: 1, timescale: 120)
+                    device.activeMaxExposureDuration = maxDuration
+                    DispatchQueue.main.async {
+                        self.currentShutterText = "1/120s ⚡"
+                    }
                 }
-                print("[CameraManager] ⚡ Khóa Max Exposure [Cam Sau] ở 1/\(shutterDenominator)s")
             } else {
+                device.activeMaxExposureDuration = .invalid
                 DispatchQueue.main.async {
-                    self.currentShutterText = "Auto Phơi Sáng"
+                    self.currentShutterText = "Auto Sáng"
                 }
-                print("[CameraManager] 🔄 Phơi sáng tự động liên tục cho Cam Sau")
+                print("[CameraManager] 🔄 Cam Sau: Auto Sáng (thu sáng tối đa trong phòng, Bias \(targetBias))")
             }
         } else if self.isActionShutterEnabled && device.isExposureModeSupported(.custom) {
+            let shutterDenominator: Int32 = self.isActionShutterEnabled ? 240 : 120
+            let maxDuration = CMTimeMake(value: 1, timescale: shutterDenominator)
             let minDur = device.activeFormat.minExposureDuration
             let maxDur = device.activeFormat.maxExposureDuration
             let clampedDuration = max(minDur, min(maxDuration, maxDur))
@@ -1165,6 +1219,21 @@ public class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
             } catch {
                 print("[CameraManager] Lỗi toggle action shutter: \(error)")
+            }
+        }
+    }
+
+    /// Chuyển đổi mức bù sáng EV: Chuẩn -> +0.7 EV (Sáng) -> +1.5 EV (Rất Sáng)
+    public func cycleExposureBias() {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                self.exposureBiasLevel = (self.exposureBiasLevel + 1) % 3
+                self.applyExposureSettings(device: device)
+                device.unlockForConfiguration()
+            } catch {
+                print("[CameraManager] Lỗi cycle exposure bias: \(error)")
             }
         }
     }

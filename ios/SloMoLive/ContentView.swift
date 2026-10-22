@@ -244,9 +244,32 @@ struct ContentView: View {
                                     Text(cameraManager.isStreaming ? "LIVE" : "SẴN SÀNG")
                                         .font(.system(size: 11, weight: .black))
                                         .foregroundColor(cameraManager.isStreaming ? .red : .white)
-                                    Text("[\(cameraManager.currentDevicePosition == .front ? "CAM TRƯỚC" : "CAM SAU")]")
-                                        .font(.system(size: 11, weight: .bold))
+
+                                    // Nút chuyển đổi nhanh camera ở góc trái
+                                    Button(action: {
+                                        cameraManager.switchCamera()
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "camera.rotate.fill")
+                                                .font(.system(size: 10))
+                                            Text(cameraManager.currentDevicePosition == .front ? "CAM TRƯỚC" : "CAM SAU")
+                                                .font(.system(size: 11, weight: .bold))
+                                        }
                                         .foregroundColor(.cyan)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.cyan.opacity(0.2))
+                                        .cornerRadius(6)
+                                    }
+
+                                    // Hiển thị FPS
+                                    Text("\(Int(cameraManager.currentFPS)) FPS")
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.yellow)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 1)
+                                        .background(Color.yellow.opacity(0.15))
+                                        .cornerRadius(4)
                                 }
 
                                 HStack(spacing: 4) {
@@ -266,9 +289,55 @@ struct ContentView: View {
 
                             Spacer()
 
-                            VStack(alignment: .trailing, spacing: 8) {
+                            VStack(alignment: .trailing, spacing: 6) {
                                 HStack(spacing: 6) {
-                                    // Nút Bật/Tắt Shutter Thông Minh (1/240s khi đủ sáng, 1/120s khi thiếu sáng)
+                                    // 1. Nút Đổi Camera
+                                    Button(action: {
+                                        cameraManager.switchCamera()
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
+                                                .font(.system(size: 11, weight: .bold))
+                                            Text(cameraManager.currentDevicePosition == .back ? "Cam Sau" : "Cam Trước")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(.cyan)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(Color.black.opacity(0.75))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(Color.cyan.opacity(0.5), lineWidth: 1)
+                                        )
+                                    }
+
+                                    // 2. Nút Bù Sáng EV (Tăng sáng phòng)
+                                    Button(action: {
+                                        cameraManager.cycleExposureBias()
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: cameraManager.exposureBiasLevel > 0 ? "sun.max.fill" : "sun.min")
+                                                .font(.system(size: 11, weight: .bold))
+                                            Text(cameraManager.exposureBiasText)
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(cameraManager.exposureBiasLevel > 0 ? .orange : .white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(cameraManager.exposureBiasLevel > 0 ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(cameraManager.exposureBiasLevel > 0 ? Color.orange : Color.white.opacity(0.2), lineWidth: 1)
+                                        )
+                                    }
+                                }
+
+                                HStack(spacing: 6) {
+                                    // 3. Nút Bật/Tắt Shutter Thông Minh (Auto Sáng 1/120s vs 1/240s)
                                     Button(action: {
                                         cameraManager.toggleActionShutter()
                                     }) {
@@ -280,7 +349,8 @@ struct ContentView: View {
                                                 .fontWeight(.bold)
                                         }
                                         .foregroundColor(cameraManager.isActionShutterEnabled ? .yellow : .white)
-                                        .padding(7)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
                                         .background(cameraManager.isActionShutterEnabled ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
                                         .cornerRadius(10)
                                         .overlay(
@@ -289,7 +359,7 @@ struct ContentView: View {
                                         )
                                     }
 
-                                    // Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
+                                    // 4. Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
                                     Button(action: {
                                         cameraManager.toggleFocusLock()
                                     }) {
@@ -301,7 +371,8 @@ struct ContentView: View {
                                                 .fontWeight(.bold)
                                         }
                                         .foregroundColor(cameraManager.isFocusLocked ? .green : .white)
-                                        .padding(7)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
                                         .background(cameraManager.isFocusLocked ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
                                         .cornerRadius(10)
                                         .overlay(
@@ -311,22 +382,22 @@ struct ContentView: View {
                                     }
                                 }
 
-                            // GPS Indicator
-                            if let loc = locationManager.lastKnownLocation {
-                                VStack(alignment: .trailing) {
-                                    Text("GPS Active")
-                                        .font(.caption2)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.green)
-                                    Text("\(String(format: "%.4f", loc.latitude)), \(String(format: "%.4f", loc.longitude))")
-                                        .font(.system(size: 9, design: .monospaced))
-                                        .foregroundColor(.white)
+                                // GPS Indicator
+                                if let loc = locationManager.lastKnownLocation {
+                                    VStack(alignment: .trailing) {
+                                        Text("GPS Active")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.green)
+                                        Text("\(String(format: "%.4f", loc.latitude)), \(String(format: "%.4f", loc.longitude))")
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundColor(.white)
+                                    }
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(12)
                                 }
-                                .padding(8)
-                                .background(Color.black.opacity(0.7))
-                                .cornerRadius(12)
                             }
-                        }
                     }
                     .padding()
 
