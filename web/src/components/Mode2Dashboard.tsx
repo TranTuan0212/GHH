@@ -459,37 +459,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
   }, [stream?.streamKey]);
 
-  // Cuộn con lăn chuột trên Video để đổi kích thước Dài/Rộng nhanh chóng (Non-passive listener)
-  useEffect(() => {
-    const container = videoContainerRef.current;
-    if (!container) return;
-
-    const onWheelHandler = (e: WheelEvent) => {
-      e.preventDefault();
-      const delta = e.deltaY < 0 ? 12 : -12;
-
-      setReticleSize((prev) => {
-        if (e.shiftKey) {
-          const newH = Math.max(120, Math.min(500, prev.height + delta));
-          return { ...prev, height: newH };
-        } else if (e.altKey) {
-          const newW = Math.max(100, Math.min(450, prev.width + delta));
-          return { ...prev, width: newW };
-        } else {
-          const newW = Math.max(100, Math.min(450, prev.width + delta));
-          const newH = Math.max(120, Math.min(500, prev.height + delta * 1.3));
-          return { width: Math.round(newW), height: Math.round(newH) };
-        }
-      });
-    };
-
-    container.addEventListener('wheel', onWheelHandler, { passive: false });
-    return () => {
-      container.removeEventListener('wheel', onWheelHandler);
-    };
-  }, []);
-
-  // Kéo handle góc dưới-phải để resize khung ngắm
+  // Kéo handle góc dưới-phải để resize khung ngắm thủ công
   const handleReticleResizeMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation();
     const startX = e.clientX;
@@ -942,7 +912,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             onMouseMove={handleVideoMouseMove}
             onClick={handleVideoClick}
             className="relative w-full aspect-video bg-black overflow-hidden select-none cursor-crosshair group"
-            title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả, Cuộn chuột để chỉnh Dài/Rộng"
+            title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả cố định"
           >
             {/* Thẻ Video Live trực tiếp (Giải mã HLS.js, hỗ trợ Lật & Xoay) */}
             <video
