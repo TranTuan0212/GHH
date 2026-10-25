@@ -65,6 +65,7 @@ struct ContentView: View {
     @State private var usernameInput = "demouser"
     @State private var passwordInput = "user123"
     @State private var isFakeLocked = false
+    @State private var showServerSettings = false
     @State private var serverInfoChecked = false
     @State private var serverInfoHint: String? = nil
 
@@ -146,6 +147,92 @@ struct ContentView: View {
                                     .foregroundColor(.gray)
                                 SecureField("Password", text: $passwordInput)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                            }
+
+                            // Cài đặt Máy chủ (Server URL & RTMP Host để test nội bộ Wi-Fi hoặc VPS)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("Máy chủ (Server):")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.gray)
+                                    Spacer()
+                                    Button(action: {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            showServerSettings.toggle()
+                                        }
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "gearshape.fill")
+                                                .font(.system(size: 11))
+                                            Text(showServerSettings ? "Thu gọn" : "⚙️ Đổi Server")
+                                                .font(.system(size: 11, weight: .bold))
+                                        }
+                                        .foregroundColor(.cyan)
+                                    }
+                                }
+
+                                Text(networkManager.serverURL)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.85))
+                                    .lineLimit(1)
+
+                                if showServerSettings {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack(spacing: 8) {
+                                            Button(action: {
+                                                networkManager.serverURL = "https://slomoview.stream"
+                                                networkManager.customRtmpHost = "157.66.100.10"
+                                            }) {
+                                                Text("🌐 VPS Chính")
+                                                    .font(.system(size: 11, weight: .bold))
+                                                    .foregroundColor(networkManager.serverURL.contains("slomoview.stream") ? .black : .white)
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 6)
+                                                    .background(networkManager.serverURL.contains("slomoview.stream") ? Color.cyan : Color.white.opacity(0.12))
+                                                    .cornerRadius(8)
+                                            }
+
+                                            Button(action: {
+                                                networkManager.serverURL = "http://192.168.0.175:4000"
+                                                networkManager.customRtmpHost = "192.168.0.175"
+                                            }) {
+                                                Text("🏠 Wi-Fi Nội Bộ")
+                                                    .font(.system(size: 11, weight: .bold))
+                                                    .foregroundColor(networkManager.serverURL.contains("192.168.0.175") ? .black : .white)
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 6)
+                                                    .background(networkManager.serverURL.contains("192.168.0.175") ? Color.green : Color.white.opacity(0.12))
+                                                    .cornerRadius(8)
+                                            }
+                                        }
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("Server URL:")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            TextField("Server URL", text: $networkManager.serverURL)
+                                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                                .autocapitalization(.none)
+                                                .disableAutocorrection(true)
+                                                .font(.system(size: 11, design: .monospaced))
+                                        }
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("RTMP Host:")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            TextField("RTMP Host", text: $networkManager.customRtmpHost)
+                                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                                .autocapitalization(.none)
+                                                .disableAutocorrection(true)
+                                                .font(.system(size: 11, design: .monospaced))
+                                        }
+                                    }
+                                    .padding(10)
+                                    .background(Color.black.opacity(0.45))
+                                    .cornerRadius(10)
+                                }
                             }
 
                             VStack(alignment: .leading, spacing: 4) {
