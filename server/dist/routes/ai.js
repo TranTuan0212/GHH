@@ -364,7 +364,7 @@ Trả về DUY NHẤT một mảng JSON gồm đúng ${totalCount} phần tử c
 exports.aiRouter.post('/yolo-detect', async (req, res) => {
     const startTime = Date.now();
     try {
-        const { imageBase64, confidence = 0.5 } = req.body;
+        const { imageBase64, confidence = 0.4, imgsz = 192, minSharpness = 0 } = req.body;
         if (!imageBase64) {
             return res.status(400).json({ success: false, message: 'Thiếu dữ liệu ảnh (imageBase64).' });
         }
@@ -373,7 +373,7 @@ exports.aiRouter.post('/yolo-detect', async (req, res) => {
             const yoloRes = await fetch('http://127.0.0.1:5001/predict', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imageBase64, confidence }),
+                body: JSON.stringify({ imageBase64, confidence, imgsz, minSharpness }),
                 signal: AbortSignal.timeout(1500)
             });
             if (yoloRes.ok) {
