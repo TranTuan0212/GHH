@@ -4,6 +4,9 @@ import { StreamSession, User, CardEntry } from '../types';
 import { Socket } from 'socket.io-client';
 import {
   RotateCcw,
+  RotateCw,
+  ArrowLeftRight,
+  Sliders,
   Settings,
   Layers,
   Sparkles,
@@ -159,6 +162,21 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const [duration, setDuration] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(true);
 
+  // Lật & Xoay khung hình
+  const [isFlipped, setIsFlipped] = useState<boolean>(() => {
+    return localStorage.getItem('mode2_video_flipped') === 'true';
+  });
+  const [rotation, setRotation] = useState<number>(() => {
+    const s = localStorage.getItem('mode2_video_rotation');
+    return s ? parseInt(s, 10) : 0;
+  });
+
+  // Tốc độ phát lại (Playback Rate: 1x, 0.5x, 0.25x, 0.125x)
+  const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+
+  // Hiển thị thanh chỉnh kích thước khung ngắm
+  const [showSizeControls, setShowSizeControls] = useState<boolean>(false);
+
   // Modal Card Picker để chỉnh sửa thủ công nếu cần
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<CardPickerTarget>({
@@ -171,6 +189,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   useEffect(() => {
     localStorage.setItem('mode2_player_count', playerCount.toString());
   }, [playerCount]);
+
+  useEffect(() => {
+    localStorage.setItem('mode2_video_flipped', isFlipped.toString());
+  }, [isFlipped]);
+
+  useEffect(() => {
+    localStorage.setItem('mode2_video_rotation', rotation.toString());
+  }, [rotation]);
 
   useEffect(() => {
     localStorage.setItem('mode2_cards_per_player', cardsPerPlayer.toString());
@@ -774,18 +800,57 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
         {/* CỘT PHẢI (Lg: 7 cột): MÀN HÌNH LIVE VIDEO + KHUNG NGẮM AI ĐỎ (THEO ẢNH) */}
         <div className="lg:col-span-7 bg-black rounded-xl border border-slate-700/80 overflow-hidden shadow-2xl relative flex flex-col justify-between">
-          {/* Thanh công cụ trên đầu Video: Độ phân giải, FPS, ISO & Kích thước khung */}
+          {/* Thanh công cụ trên đầu Video: Độ phân giải, FPS, Lật, Xoay & Cỡ Khung */}
           <div className="bg-slate-950/85 backdrop-blur px-3 py-1.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 z-20 text-[11px]">
             {/* Resolution & FPS Tags */}
             <div className="flex items-center space-x-1.5 font-mono">
               <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-bold text-[10px]">1080p</span>
-              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px]">720p</span>
               <span className="px-1.5 py-0.5 rounded bg-emerald-600/90 text-white font-bold text-[10px]">60 fps</span>
               <span className="text-slate-400 text-[10px]">V105 ISO 1280 1x</span>
             </div>
 
-            {/* Điều khiển Khung ngắm AI: Kích thước & Ghim */}
-            <div className="flex items-center space-x-2 text-xs">
+            {/* Điều khiển: Cỡ Khung, Lật, Xoay, Sáng & Ghim */}
+            <div className="flex items-center space-x-1.5 text-xs">
+              {/* Nút mở thanh chỉnh kích thước */}
+              <button
+                type="button"
+                onClick={() => setShowSizeControls((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  showSizeControls ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Mở giao diện chỉnh kích thước Dài / Rộng khung ngắm"
+              >
+                <Sliders className="w-3 h-3" />
+                <span>Cỡ Khung</span>
+              </button>
+
+              {/* Nút Lật ngang video */}
+              <button
+                type="button"
+                onClick={() => setIsFlipped((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  isFlipped ? 'bg-cyan-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Lật gương ngang khung hình video"
+              >
+                <ArrowLeftRight className="w-3 h-3" />
+                <span>{isFlipped ? 'Đã Lật ↔' : 'Lật ↔'}</span>
+              </button>
+
+              {/* Nút Xoay 90 độ video */}
+              <button
+                type="button"
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  rotation !== 0 ? 'bg-amber-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Xoay video 90 độ mỗi lần bấm (0 -> 90 -> 180 -> 270)"
+              >
+                <RotateCw className="w-3 h-3" />
+                <span>{rotation !== 0 ? `Xoay ${rotation}°` : 'Xoay ↻'}</span>
+              </button>
+
+              {/* Nút Ghim / Bám chuột */}
               <button
                 type="button"
                 onClick={() => setIsReticleLocked((prev) => !prev)}
@@ -797,9 +862,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 title="Bấm để Ghim cố định hoặc thả cho bám theo chuột"
               >
                 {isReticleLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                <span>{isReticleLocked ? 'Đã Ghim Vị Trí' : 'Bám Chuột'}</span>
+                <span>{isReticleLocked ? 'Đã Ghim' : 'Bám Chuột'}</span>
               </button>
 
+              {/* Nút Tăng sáng & Nét */}
               <button
                 type="button"
                 onClick={() => setIsBrightBoost((prev) => !prev)}
@@ -809,10 +875,66 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 title="Tăng sáng & độ tương phản để soi bài rõ nhất"
               >
                 <Sun className="w-3 h-3" />
-                <span>{isBrightBoost ? 'Sáng & Nét (Bật)' : 'Sáng (Tắt)'}</span>
+                <span>{isBrightBoost ? 'Sáng (Bật)' : 'Sáng'}</span>
               </button>
             </div>
           </div>
+
+          {/* GIAO DIỆN CHỈNH KÍCH THƯỚC KHUNG NGẮM (THAY VÌ CHỈ LĂN CHUỘT) */}
+          {showSizeControls && (
+            <div className="bg-slate-900/95 border-b border-slate-700/80 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 z-20 text-xs shadow-md">
+              <div className="flex items-center space-x-3">
+                {/* Chỉnh Rộng */}
+                <div className="flex items-center space-x-1.5 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
+                  <span className="text-slate-400 text-[11px]">Rộng:</span>
+                  <button
+                    onClick={() => setReticleSize((s) => ({ ...s, width: Math.max(80, s.width - 20) }))}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >-</button>
+                  <span className="w-8 text-center font-bold text-amber-300 font-mono text-[11px]">{reticleSize.width}</span>
+                  <button
+                    onClick={() => setReticleSize((s) => ({ ...s, width: Math.min(450, s.width + 20) }))}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >+</button>
+                </div>
+
+                {/* Chỉnh Dài */}
+                <div className="flex items-center space-x-1.5 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
+                  <span className="text-slate-400 text-[11px]">Dài:</span>
+                  <button
+                    onClick={() => setReticleSize((s) => ({ ...s, height: Math.max(100, s.height - 20) }))}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >-</button>
+                  <span className="w-8 text-center font-bold text-amber-300 font-mono text-[11px]">{reticleSize.height}</span>
+                  <button
+                    onClick={() => setReticleSize((s) => ({ ...s, height: Math.min(500, s.height + 20) }))}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >+</button>
+                </div>
+              </div>
+
+              {/* Nút Cỡ Mẫu (Presets) */}
+              <div className="flex items-center space-x-1 text-[10px]">
+                <span className="text-slate-400 mr-1">Cỡ mẫu:</span>
+                <button
+                  onClick={() => setReticleSize({ width: 150, height: 200 })}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                >Nhỏ (150x200)</button>
+                <button
+                  onClick={() => setReticleSize({ width: 220, height: 280 })}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white font-bold transition"
+                >Chuẩn (220x280)</button>
+                <button
+                  onClick={() => setReticleSize({ width: 280, height: 360 })}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                >Lớn (280x360)</button>
+                <button
+                  onClick={() => setReticleSize({ width: 320, height: 220 })}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white transition"
+                >Ngang (320x220)</button>
+              </div>
+            </div>
+          )}
 
           {/* VÙNG CHỨA VIDEO & KHUNG NGẮM AI ĐỎ */}
           <div
@@ -822,11 +944,13 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             className="relative w-full aspect-video bg-black overflow-hidden select-none cursor-crosshair group"
             title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả, Cuộn chuột để chỉnh Dài/Rộng"
           >
-            {/* Thẻ Video Live trực tiếp (Giải mã HLS.js) */}
+            {/* Thẻ Video Live trực tiếp (Giải mã HLS.js, hỗ trợ Lật & Xoay) */}
             <video
               ref={videoRef}
               className="w-full h-full object-contain pointer-events-none"
               style={{
+                transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`,
+                transition: 'transform 0.15s ease-out',
                 imageRendering: '-webkit-optimize-contrast' as any,
                 filter: isBrightBoost ? 'brightness(1.15) contrast(1.12) saturate(1.08)' : 'none'
               }}
@@ -865,34 +989,34 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   pointerEvents: 'auto',
                   transition: isReticleLocked ? 'none' : 'width 0.05s, height 0.05s'
                 }}
-                className={`border-2 rounded-lg pointer-events-auto flex flex-col justify-between p-1.5 transition-colors ${
+                className={`border-2 rounded-lg pointer-events-auto transition-colors ${
                   isAiFlashing
-                    ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_25px_rgba(52,211,153,0.9)]'
-                    : 'border-red-500 bg-red-500/10 shadow-[0_0_15px_rgba(239,68,68,0.7)]'
+                    ? 'border-emerald-400 bg-emerald-500/15 shadow-[0_0_25px_rgba(52,211,153,0.9)]'
+                    : 'border-red-500 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.7)]'
                 }`}
               >
-                {/* Header nhãn trên khung ngắm */}
-                <div className="flex items-center justify-between text-[10px] font-bold text-white bg-black/75 px-1.5 py-0.5 rounded backdrop-blur border border-white/10 pointer-events-none">
+                {/* Header nhãn nổi BÊN NGOÀI KHUNG (KHÔNG CHE BÀI TRONG KHUNG) */}
+                <div className="absolute -top-6 left-0 right-0 flex items-center justify-between text-[10px] font-bold text-white bg-black/85 px-2 py-0.5 rounded-t backdrop-blur border-t border-x border-red-500/50 pointer-events-none whitespace-nowrap shadow">
                   <span className="flex items-center space-x-1">
                     <span className={`w-1.5 h-1.5 rounded-full ${isAiFlashing ? 'bg-emerald-400' : 'bg-red-500 animate-ping'}`} />
-                    <span>{isReticleLocked ? '🔒 VỊ TRÍ ĐÃ GHIM' : '🎯 AI BÁM CHUỘT'}</span>
+                    <span>{isReticleLocked ? '🔒 ĐÃ GHIM' : '🎯 BÁM CHUỘT'}</span>
                   </span>
-                  <span className="font-mono text-amber-300">
+                  <span className="font-mono text-amber-300 ml-1">
                     {reticleSize.width}x{reticleSize.height}
                   </span>
                 </div>
 
                 {/* Tâm ngắm chữ thập (+) */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-40">
-                  <div className="w-6 h-0.5 bg-red-400" />
-                  <div className="h-6 w-0.5 bg-red-400 absolute" />
+                  <div className="w-5 h-0.5 bg-red-400" />
+                  <div className="h-5 w-0.5 bg-red-400 absolute" />
                 </div>
 
-                {/* Footer thông báo trạng thái bên dưới khung ngắm */}
-                <div className="flex items-center justify-between text-[9px] font-bold text-slate-200 bg-black/80 px-1.5 py-0.5 rounded backdrop-blur pointer-events-none">
+                {/* Footer thông báo trạng thái nổi BÊN DƯỚI NGOÀI KHUNG (KHÔNG CHE BÀI TRONG KHUNG) */}
+                <div className="absolute -bottom-6 left-0 right-0 flex items-center justify-between text-[9px] font-bold text-slate-200 bg-black/90 px-2 py-0.5 rounded-b backdrop-blur border-b border-x border-red-500/50 pointer-events-none whitespace-nowrap shadow">
                   <span className="truncate">{aiStatus}</span>
                   {lastDetectedCard && (
-                    <span className="font-bold text-emerald-400 ml-1">{lastDetectedCard}</span>
+                    <span className="font-black text-emerald-400 ml-1">{lastDetectedCard}</span>
                   )}
                 </div>
 
@@ -900,7 +1024,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 <div
                   onMouseDown={handleReticleResizeMouseDown}
                   className="absolute bottom-0 right-0 w-5 h-5 flex items-end justify-end p-0.5 cursor-nwse-resize z-30"
-                  title="Kéo để chỉnh kích thước Dài/Rộng"
+                  title="Kéo góc để chỉnh kích thước Dài/Rộng"
                 >
                   <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-red-400 rounded-br-sm" />
                 </div>
@@ -908,8 +1032,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             )}
           </div>
 
-          {/* THANH ĐIỀU KHIỂN VIDEO DƯỚI: TUA LẠI & VỀ LIVE (KHÔNG PIP) */}
-          <div className="bg-slate-950/90 px-3 py-1.5 border-t border-slate-800 flex items-center justify-between gap-3 text-xs z-20">
+          {/* THANH ĐIỀU KHIỂN VIDEO DƯỚI: TUA LẠI, TỐC ĐỘ & VỀ LIVE (KHÔNG PIP) */}
+          <div className="bg-slate-950/90 px-3 py-1.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2.5 text-xs z-20">
             {/* Nút Nhảy về LIVE trực tiếp */}
             <button
               onClick={jumpToLive}
@@ -925,7 +1049,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             </button>
 
             {/* Thanh Timeline Tua lại (Scrubbing Seekbar) */}
-            <div className="flex-1 flex items-center space-x-2">
+            <div className="flex-1 min-w-[150px] flex items-center space-x-2">
               <span className="text-[10px] text-slate-400 font-mono">Tua:</span>
               <input
                 type="range"
@@ -939,6 +1063,31 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap">
                 {Math.floor(seekTime)}s / {Math.floor(duration)}s
               </span>
+            </div>
+
+            {/* Tốc độ phát lại (Playback Speed) */}
+            <div className="flex items-center space-x-1 bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800 font-mono text-[10px]">
+              <span className="text-slate-400 mr-0.5">Tốc độ:</span>
+              {[1.0, 0.5, 0.25, 0.125].map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  onClick={() => {
+                    setPlaybackRate(rate);
+                    if (videoRef.current) {
+                      videoRef.current.playbackRate = rate;
+                    }
+                  }}
+                  className={`px-1.5 py-0.5 rounded font-bold transition ${
+                    playbackRate === rate
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title={`Tốc độ ${rate}x`}
+                >
+                  {rate === 1.0 ? '1x' : `${rate}x`}
+                </button>
+              ))}
             </div>
 
             {/* Tắt/bật âm thanh */}
