@@ -379,11 +379,18 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
         const hls = new Hls({
           enableWorker: true,
-          lowLatencyMode: true,
-          backBufferLength: 15,
+          lowLatencyMode: false,
+          backBufferLength: 20,
           maxBufferLength: 8,
-          liveSyncDuration: 1.0,
-          liveMaxLatencyDuration: 2.5
+          maxMaxBufferLength: 16,
+          maxBufferSize: 128 * 1024 * 1024,
+          maxBufferHole: 0.05,
+          nudgeOffset: 0.01,
+          nudgeMaxRetry: 3,
+          highBufferWatchdogPeriod: 0,
+          liveSyncDuration: 2.0,
+          liveMaxLatencyDuration: 4.0,
+          maxLiveSyncPlaybackRate: 1.05
         });
 
         hlsRef.current = hls;
@@ -482,17 +489,18 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // VÒNG LẶP AI QUÉT KHUNG THỜI GIAN THỰC (REAL-TIME ROI CROP)
+  // VÒNG LẶP AI QUÉT KHUNG THỜI GIAN THỰC (BẤT ĐỒNG BỘ - GIỮ NGUYÊN 60/120FPS MƯỢT MÀ)
   useEffect(() => {
     if (!isReticleActive) return;
 
-    const interval = setInterval(async () => {
+    const interval = setInterval(() => {
       if (isScanningRef.current) return;
       const video = videoRef.current;
       const container = videoContainerRef.current;
-      if (!video || !container || video.videoWidth === 0 || video.paused) return;
+      if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) return;
 
       const containerRect = container.getBoundingClientRect();
+      if (containerRect.width === 0 || containerRect.height === 0) return;
       const scaleX = video.videoWidth / containerRect.width;
       const scaleY = video.videoHeight / containerRect.height;
 
@@ -504,58 +512,74 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
       if (cropW < 40 || cropH < 40) return;
 
-      // Vẽ crop vào canvas ngầm (tối ưu hóa kích thước 320px)
+      // Vẽ crop vào canvas ngầm (kích thước tối ưu 280px)
       if (!canvasRef.current) {
         canvasRef.current = document.createElement('canvas');
       }
       const canvas = canvasRef.current;
-      canvas.width = 320;
-      canvas.height = Math.round(320 * (cropH / cropW));
-      const ctx = canvas.getContext('2d');
+      const targetW = 280;
+      const targetH = Math.round(targetW * (cropH / cropW));
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
 
-      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
-      const b64 = canvas.toDataURL('image/jpeg', 0.85);
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
 
+      // SỬ DỤNG toBlob BẤT ĐỒNG BỘ ĐỂ KHÔNG CHẶN MAIN THREAD
       isScanningRef.current = true;
-      try {
-        const res = await fetch('/api/ai/yolo-detect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageBase64: b64,
-            confidence: confidenceThreshold
-          })
-        });
-
-        if (res.ok) {
-          const json = await res.json();
-          if (json.cards && json.cards.length > 0) {
-            const best = json.bestCard || json.cards[0];
-            const now = Date.now();
-
-            setAiStatus(`Phát hiện: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
-            setLastDetectedCard(best.display);
-
-            // Kiểm tra bộ khóa chống trùng lặp (Debounce 600ms)
-            const isSameCard = best.code === lastDetectedCodeRef.current;
-            const timeDiff = now - lastDetectionTimeRef.current;
-
-            if (!isSameCard || timeDiff > 800) {
-              lastDetectionTimeRef.current = now;
-              lastDetectedCodeRef.current = best.code;
-              addCardToActiveDoor(best.code);
-            }
-          } else {
-            setAiStatus('Đang quét trong khung đỏ...');
-          }
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          isScanningRef.current = false;
+          return;
         }
-      } catch {
-        // Fallback or network standby
-      } finally {
-        isScanningRef.current = false;
-      }
-    }, 200);
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const b64 = reader.result as string;
+          try {
+            const res = await fetch('/api/ai/yolo-detect', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: b64,
+                confidence: confidenceThreshold
+              })
+            });
+
+            if (res.ok) {
+              const json = await res.json();
+              if (json.cards && json.cards.length > 0) {
+                const best = json.bestCard || json.cards[0];
+                const now = Date.now();
+
+                setAiStatus(`Phát hiện: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+                setLastDetectedCard(best.display);
+
+                // Kiểm tra bộ khóa chống trùng lặp (Debounce 600ms)
+                const isSameCard = best.code === lastDetectedCodeRef.current;
+                const timeDiff = now - lastDetectionTimeRef.current;
+
+                if (!isSameCard || timeDiff > 800) {
+                  lastDetectionTimeRef.current = now;
+                  lastDetectedCodeRef.current = best.code;
+                  addCardToActiveDoor(best.code);
+                }
+              } else {
+                setAiStatus('Đang quét trong khung đỏ...');
+              }
+            }
+          } catch {
+            // Standby
+          } finally {
+            isScanningRef.current = false;
+          }
+        };
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.75);
+    }, 350);
 
     return () => clearInterval(interval);
   }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, addCardToActiveDoor]);
