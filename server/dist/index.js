@@ -222,6 +222,22 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'live'
         }
     }
 }));
+// Fallback: Nếu request /live mà file nằm trong replay, tự động phục vụ từ replay
+app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'replay'), {
+    setHeaders: (res, filePath) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        if (filePath.endsWith('.m3u8')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        }
+        else if (filePath.endsWith('.ts')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Content-Type', 'video/MP2T');
+        }
+    }
+}));
 /**
  * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
  * host:port + protocol với chính request đang gọi /api/... -> nhờ có proxy /live ở trên nên

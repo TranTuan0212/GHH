@@ -336,28 +336,40 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     }
 
     const streamKey = stream.streamKey;
-    const playlistUrl = `/live/${streamKey}/index.m3u8`;
+    const replayUrl = `/replay/${streamKey}/index.m3u8`;
+    const liveUrl = `/live/${streamKey}/index.m3u8`;
     let isCancelled = false;
 
-    console.log(`[Mode2] Bắt đầu kết nối luồng Live: ${playlistUrl}`);
+    console.log(`[Mode2] Bắt đầu kết nối luồng: ${replayUrl}`);
 
-    const waitForPlaylist = async () => {
-      for (let i = 0; i < 20 && !isCancelled; i++) {
+    const waitForPlaylist = async (): Promise<string | null> => {
+      for (let i = 0; i < 25 && !isCancelled; i++) {
+        // Thử replay trước (nơi FFmpeg ghi video chuẩn)
         try {
-          const res = await fetch(playlistUrl, { cache: 'no-store' });
+          const res = await fetch(replayUrl, { cache: 'no-store' });
           if (res.ok) {
-            console.log(`[Mode2] Playlist ${playlistUrl} đã sẵn sàng!`);
-            return true;
+            console.log(`[Mode2] Playlist ${replayUrl} đã sẵn sàng!`);
+            return replayUrl;
           }
         } catch {}
-        await new Promise((r) => setTimeout(r, 800));
+
+        // Thử live fallback
+        try {
+          const res2 = await fetch(liveUrl, { cache: 'no-store' });
+          if (res2.ok) {
+            console.log(`[Mode2] Playlist ${liveUrl} đã sẵn sàng!`);
+            return liveUrl;
+          }
+        } catch {}
+
+        await new Promise((r) => setTimeout(r, 600));
       }
-      return false;
+      return null;
     };
 
     (async () => {
-      const ready = await waitForPlaylist();
-      if (isCancelled || !ready) return;
+      const targetUrl = await waitForPlaylist();
+      if (isCancelled || !targetUrl) return;
 
       if (Hls.isSupported()) {
         if (hlsRef.current) {
@@ -375,7 +387,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         });
 
         hlsRef.current = hls;
-        hls.loadSource(playlistUrl);
+        hls.loadSource(targetUrl);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -399,7 +411,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = playlistUrl;
+        video.src = targetUrl;
         video.play().catch(() => {});
         setHasVideoSignal(true);
       }
