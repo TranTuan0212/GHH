@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import Hls from 'hls.js';
 import { StreamSession, User, CardEntry } from '../types';
 import { Socket } from 'socket.io-client';
 import {
@@ -320,28 +321,128 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     setIsReticleLocked((prev) => !prev);
   };
 
-  // Cuộn con lăn chuột trên Video để đổi kích thước Dài/Rộng nhanh chóng
-  const handleVideoWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const delta = e.deltaY < 0 ? 10 : -10;
-    
-    setReticleSize((prev) => {
-      if (e.shiftKey) {
-        // Shift + Cuộn: chỉnh chiều cao (Dài)
-        const newH = Math.max(120, Math.min(500, prev.height + delta));
-        return { ...prev, height: newH };
-      } else if (e.altKey) {
-        // Alt + Cuộn: chỉnh chiều rộng
-        const newW = Math.max(100, Math.min(450, prev.width + delta));
-        return { ...prev, width: newW };
-      } else {
-        // Cuộn thường: phóng to thu nhỏ đồng đều
-        const newW = Math.max(100, Math.min(450, prev.width + delta));
-        const newH = Math.max(120, Math.min(500, prev.height + delta * 1.3));
-        return { width: Math.round(newW), height: Math.round(newH) };
+  const hlsRef = useRef<Hls | null>(null);
+  const [hasVideoSignal, setHasVideoSignal] = useState<boolean>(false);
+
+  // KẾT NỐI LUỒNG VIDEO HLS (TƯƠNG THÍCH HOÀN HẢO CHROME / EDGE / COC COC)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (!stream?.streamKey) {
+      console.log('[Mode2] Đang chờ luồng stream từ camera...');
+      setHasVideoSignal(false);
+      return;
+    }
+
+    const streamKey = stream.streamKey;
+    const playlistUrl = `/live/${streamKey}/index.m3u8`;
+    let isCancelled = false;
+
+    console.log(`[Mode2] Bắt đầu kết nối luồng Live: ${playlistUrl}`);
+
+    const waitForPlaylist = async () => {
+      for (let i = 0; i < 20 && !isCancelled; i++) {
+        try {
+          const res = await fetch(playlistUrl, { cache: 'no-store' });
+          if (res.ok) {
+            console.log(`[Mode2] Playlist ${playlistUrl} đã sẵn sàng!`);
+            return true;
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 800));
       }
-    });
-  };
+      return false;
+    };
+
+    (async () => {
+      const ready = await waitForPlaylist();
+      if (isCancelled || !ready) return;
+
+      if (Hls.isSupported()) {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 15,
+          maxBufferLength: 8,
+          liveSyncDuration: 1.0,
+          liveMaxLatencyDuration: 2.5
+        });
+
+        hlsRef.current = hls;
+        hls.loadSource(playlistUrl);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setHasVideoSignal(true);
+          video.play().catch(() => {});
+        });
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                hls.destroy();
+                break;
+            }
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = playlistUrl;
+        video.play().catch(() => {});
+        setHasVideoSignal(true);
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [stream?.streamKey]);
+
+  // Cuộn con lăn chuột trên Video để đổi kích thước Dài/Rộng nhanh chóng (Non-passive listener)
+  useEffect(() => {
+    const container = videoContainerRef.current;
+    if (!container) return;
+
+    const onWheelHandler = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 12 : -12;
+
+      setReticleSize((prev) => {
+        if (e.shiftKey) {
+          const newH = Math.max(120, Math.min(500, prev.height + delta));
+          return { ...prev, height: newH };
+        } else if (e.altKey) {
+          const newW = Math.max(100, Math.min(450, prev.width + delta));
+          return { ...prev, width: newW };
+        } else {
+          const newW = Math.max(100, Math.min(450, prev.width + delta));
+          const newH = Math.max(120, Math.min(500, prev.height + delta * 1.3));
+          return { width: Math.round(newW), height: Math.round(newH) };
+        }
+      });
+    };
+
+    container.addEventListener('wheel', onWheelHandler, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', onWheelHandler);
+    };
+  }, []);
 
   // Kéo handle góc dưới-phải để resize khung ngắm
   const handleReticleResizeMouseDown = (e: React.MouseEvent) => {
@@ -682,11 +783,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             ref={videoContainerRef}
             onMouseMove={handleVideoMouseMove}
             onClick={handleVideoClick}
-            onWheel={handleVideoWheel}
             className="relative w-full aspect-video bg-black overflow-hidden select-none cursor-crosshair group"
             title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả, Cuộn chuột để chỉnh Dài/Rộng"
           >
-            {/* Thẻ Video Live trực tiếp */}
+            {/* Thẻ Video Live trực tiếp (Giải mã HLS.js) */}
             <video
               ref={videoRef}
               className="w-full h-full object-contain pointer-events-none"
@@ -694,10 +794,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 imageRendering: '-webkit-optimize-contrast' as any,
                 filter: isBrightBoost ? 'brightness(1.15) contrast(1.12) saturate(1.08)' : 'none'
               }}
-              src={stream?.vodUrl || stream?.hlsPlaylistUrl || '/media/live.m3u8'}
-              autoPlay
               playsInline
               muted={isMuted}
+              autoPlay
               onTimeUpdate={() => {
                 if (videoRef.current) {
                   setSeekTime(videoRef.current.currentTime);
@@ -705,6 +804,18 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 }
               }}
             />
+
+            {/* Màn hình chờ nếu chưa có tín hiệu video */}
+            {!hasVideoSignal && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-slate-400 space-y-2 pointer-events-none z-10">
+                <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-indigo-400 animate-pulse">
+                  <Radio className="w-5 h-5 animate-pulse text-indigo-400" />
+                </div>
+                <p className="text-xs font-mono text-slate-300">
+                  {stream ? 'Đang kết nối luồng Live 120fps...' : 'Đang chờ điện thoại phát trực tiếp...'}
+                </p>
+              </div>
+            )}
 
             {/* KHUNG NGẮM AI MÀU ĐỎ (DYNAMIC TARGET BOUNDING BOX) */}
             {isReticleActive && (
