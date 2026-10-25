@@ -8,9 +8,18 @@ interface NavbarProps {
   onLogout: () => void;
   activeTab: 'viewer' | 'admin';
   setActiveTab: (tab: 'viewer' | 'admin') => void;
+  appMode?: 'mode1' | 'mode2';
+  setAppMode?: (mode: 'mode1' | 'mode2') => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setActiveTab }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  user,
+  onLogout,
+  activeTab,
+  setActiveTab,
+  appMode = 'mode2',
+  setAppMode
+}) => {
   const [showChangePw, setShowChangePw] = useState(false);
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -63,6 +72,36 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                   SloMo Live <span className="text-indigo-400 font-mono text-[9px] sm:text-[10px] px-1 py-0.2 rounded bg-indigo-500/20">240FPS</span>
                 </h1>
               </div>
+
+              {/* Chế độ 1 / Chế độ 2 Switcher */}
+              {setAppMode && (
+                <div className="flex items-center space-x-1 bg-slate-950/90 p-0.5 rounded-lg border border-slate-700/80 ml-2 sm:ml-4 shadow-inner">
+                  <button
+                    type="button"
+                    onClick={() => setAppMode('mode1')}
+                    className={`px-2.5 py-1 rounded-md text-[10px] sm:text-xs font-bold transition flex items-center space-x-1 ${
+                      appMode === 'mode1'
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Chế độ 1: Soi Chậm DVR toàn màn hình"
+                  >
+                    <span>Chế độ 1 (DVR)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAppMode('mode2')}
+                    className={`px-2.5 py-1 rounded-md text-[10px] sm:text-xs font-bold transition flex items-center space-x-1 ${
+                      appMode === 'mode2'
+                        ? 'bg-amber-500 text-slate-950 font-black shadow shadow-amber-500/30'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Chế độ 2: Bàn cược AI tự động soi bài khi ném/chia"
+                  >
+                    <span>Chế độ 2 (Bàn cược AI)</span>
+                  </button>
+                </div>
+              )}
 
               {/* Role Navigation Tabs - Desktop */}
               {user.role === 'ADMIN' && (

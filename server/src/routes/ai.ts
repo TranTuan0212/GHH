@@ -414,3 +414,49 @@ Trả về DUY NHẤT một mảng JSON gồm đúng ${totalCount} phần tử c
   }
 });
 
+/**
+ * POST /api/ai/yolo-detect
+ * Nhận diện thẻ bài siêu tốc trong khung ROI bằng YOLOv8 nano local (~15ms)
+ */
+aiRouter.post('/yolo-detect', async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { imageBase64, confidence = 0.5 } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ success: false, message: 'Thiếu dữ liệu ảnh (imageBase64).' });
+    }
+
+    // 1. Thử gọi YOLOv8 microservice local trên port 5001
+    try {
+      const yoloRes = await fetch('http://127.0.0.1:5001/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, confidence }),
+        signal: AbortSignal.timeout(1500)
+      });
+
+      if (yoloRes.ok) {
+        const yoloJson = await yoloRes.json();
+        return res.json({
+          ...yoloJson,
+          serverElapsedMs: Date.now() - startTime,
+          engine: 'YOLOv8-Nano-Local'
+        });
+      }
+    } catch {
+      // Local YOLO chưa bật hoặc timeout -> Fallback chế độ nhẹ
+    }
+
+    return res.json({
+      success: true,
+      cards: [],
+      bestCard: null,
+      serverElapsedMs: Date.now() - startTime,
+      engine: 'Standby'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Lỗi nhận diện YOLO' });
+  }
+});
+
+

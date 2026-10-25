@@ -5,6 +5,7 @@ import { Navbar } from './components/Navbar';
 import { LoginForm } from './components/LoginForm';
 import { LivePlayer } from './components/LivePlayer';
 import { DataGroupingUI } from './components/DataGroupingUI';
+import { Mode2Dashboard } from './components/Mode2Dashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AlertTriangle, Clock, RefreshCw } from 'lucide-react';
 
@@ -26,6 +27,14 @@ export const App: React.FC = () => {
   const [finishRoundTrigger, setFinishRoundTrigger] = useState<number>(0);
   const [viewerBlocked, setViewerBlocked] = useState<boolean>(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState<boolean>(false);
+  const [appMode, setAppMode] = useState<'mode1' | 'mode2'>(() => {
+    return (localStorage.getItem('app_mode') as 'mode1' | 'mode2') || 'mode2';
+  });
+
+  const handleSetAppMode = (mode: 'mode1' | 'mode2') => {
+    setAppMode(mode);
+    localStorage.setItem('app_mode', mode);
+  };
 
   // Set initial currentRoomId when user logs in
   useEffect(() => {
@@ -343,6 +352,8 @@ export const App: React.FC = () => {
         onLogout={handleLogout}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        appMode={appMode}
+        setAppMode={handleSetAppMode}
       />
 
       <main className="flex-1 max-w-[1700px] w-full mx-auto p-2 sm:p-3.5 space-y-2.5">
@@ -403,38 +414,50 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3.5 items-start">
-              {/* Left Column: Custom Live Slow-Mo 240fps Player */}
-              <div className={`${isVideoFullscreen ? 'col-span-12' : 'lg:col-span-7'} space-y-2.5`}>
-                <LivePlayer
-                  stream={activeStream}
-                  socket={socket}
-                  roomId={currentRoomId}
-                  roomName={activeRoomName}
-                  onFinishRound={handleFinishRound}
-                  finishRoundTrigger={finishRoundTrigger}
-                  onFullscreenChange={setIsVideoFullscreen}
-                />
-              </div>
+            {/* Nội dung theo Chế độ 1 hoặc Chế độ 2 */}
+            {appMode === 'mode2' ? (
+              <Mode2Dashboard
+                stream={activeStream}
+                socket={socket}
+                roomId={currentRoomId}
+                roomName={activeRoomName}
+                user={user}
+                onFinishRound={handleFinishRound}
+              />
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3.5 items-start">
+                {/* Left Column: Custom Live Slow-Mo 240fps Player */}
+                <div className={`${isVideoFullscreen ? 'col-span-12' : 'lg:col-span-7'} space-y-2.5`}>
+                  <LivePlayer
+                    stream={activeStream}
+                    socket={socket}
+                    roomId={currentRoomId}
+                    roomName={activeRoomName}
+                    onFinishRound={handleFinishRound}
+                    finishRoundTrigger={finishRoundTrigger}
+                    onFullscreenChange={setIsVideoFullscreen}
+                  />
+                </div>
 
-              {/* Right Column: Auto Round-Robin Data Grouping System (Ẩn hoàn toàn khi Fullscreen) */}
-              <div className={`lg:col-span-5 space-y-2.5 ${isVideoFullscreen ? 'hidden pointer-events-none' : ''}`}>
-                <DataGroupingUI
-                  entries={cardEntries}
-                  roomId={currentRoomId}
-                  roomName={activeRoomName}
-                  groupNames={groupNames}
-                  isVideoFullscreen={isVideoFullscreen}
-                  onAddCard={handleAddCard}
-                  onClearCards={handleClearCards}
-                  onUndoCard={handleUndoCard}
-                  onFinishRound={handleFinishRound}
-                  onEditCard={handleEditCard}
-                  onDeleteCard={handleDeleteCard}
-                  onSetGroupNames={handleSetGroupNames}
-                />
+                {/* Right Column: Auto Round-Robin Data Grouping System (Ẩn hoàn toàn khi Fullscreen) */}
+                <div className={`lg:col-span-5 space-y-2.5 ${isVideoFullscreen ? 'hidden pointer-events-none' : ''}`}>
+                  <DataGroupingUI
+                    entries={cardEntries}
+                    roomId={currentRoomId}
+                    roomName={activeRoomName}
+                    groupNames={groupNames}
+                    isVideoFullscreen={isVideoFullscreen}
+                    onAddCard={handleAddCard}
+                    onClearCards={handleClearCards}
+                    onUndoCard={handleUndoCard}
+                    onFinishRound={handleFinishRound}
+                    onEditCard={handleEditCard}
+                    onDeleteCard={handleDeleteCard}
+                    onSetGroupNames={handleSetGroupNames}
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </main>

@@ -2602,7 +2602,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             position: 'absolute',
             inset: 0,
             imageRendering: '-webkit-optimize-contrast' as any,
-            filter: isSharpBoost ? 'contrast(1.05) brightness(1.02)' : 'none'
+            filter: isSharpBoost ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
           }}
           playsInline
           muted={true}
@@ -2610,42 +2610,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
         {/* Thẻ 1: Live WebRTC
             - Khi LIVE: Màn hình to toàn bộ.
-            - Khi TUA: Cửa sổ PiP nhỏ có thể kéo thả di chuyển tự do (sang trái/phải), chỉnh to/nhỏ linh hoạt */}
+            - Khi TUA: Ẩn hoàn toàn để dồn 100% GPU cho màn hình tua lại sắc nét, mượt mà và sáng rõ nhất (không có ô PiP che khuất) */}
         <div
-          data-pip-window={!isLive ? 'true' : undefined}
-          onMouseDown={(e) => {
-            if (!isLive) {
-              e.preventDefault();
-              handlePipMouseDown(e.clientX, e.clientY);
-            }
-          }}
-          onTouchStart={(e) => {
-            if (!isLive) {
-              handlePipTouchStart(e);
-            }
-          }}
-          style={
-            !isLive
-              ? {
-                  position: 'absolute',
-                  left: pipPos ? `${pipPos.xPercent}%` : undefined,
-                  right: pipPos ? undefined : '0.75rem',
-                  top: pipPos ? `${pipPos.yPercent}%` : '0.75rem',
-                  width: `${pipWidth}px`,
-                  zIndex: 35,
-                  cursor: isPipDragging ? 'grabbing' : 'grab',
-                  touchAction: 'none',
-                }
-              : undefined
-          }
           className={`select-none ${
             isLive
               ? hasLiveFrame
                 ? 'absolute inset-0 w-full h-full z-10 opacity-100 pointer-events-auto'
                 : 'absolute inset-0 w-full h-full z-0 opacity-0 pointer-events-none'
-              : 'aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black group ring-4 ring-black/70 shadow-black'
-          } ${isPipDragging ? '' : 'transition-[top,left] duration-150 ease-out'}`}
-          title={!isLive ? 'Kéo để di chuyển, chạm để về Live' : undefined}
+              : 'hidden pointer-events-none opacity-0'
+          }`}
         >
           <video
             ref={liveVideoRef}
@@ -2656,58 +2629,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out',
               imageRendering: '-webkit-optimize-contrast' as any,
-              filter: isSharpBoost && isLive ? 'contrast(1.05) brightness(1.02)' : 'none'
+              filter: isSharpBoost && isLive ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
             }}
             playsInline
             muted={isMuted}
             autoPlay
           />
-
-          {/* Huy hiệu và thanh công cụ điều khiển trên màn nhỏ PiP */}
-          {!isLive && (
-            <>
-              {/* Nhãn LIVE nhấp nháy ở góc trên-trái */}
-              <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider pointer-events-none">
-                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                <span>LIVE</span>
-              </div>
-
-              {/* Các nút bấm nhanh ở góc trên-phải: Đổi góc Trái/Phải & Đổi kích thước To/Nhỏ */}
-              <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 z-40">
-                {/* Nút chuyển nhanh góc Trái <-> Phải */}
-                <button
-                  type="button"
-                  onClick={togglePipCorner}
-                  onTouchEnd={togglePipCorner}
-                  className="p-1 rounded-md bg-black/70 hover:bg-black/95 text-slate-200 hover:text-white backdrop-blur border border-white/20 shadow active:scale-95 cursor-pointer"
-                  title="Chuyển góc Trái / Phải"
-                >
-                  <ArrowLeftRight className="w-3 h-3 text-amber-300" />
-                </button>
-
-                {/* Nút đổi kích thước To / Vừa / Nhỏ */}
-                <button
-                  type="button"
-                  onClick={cyclePipSize}
-                  onTouchEnd={cyclePipSize}
-                  className="p-1 rounded-md bg-black/70 hover:bg-black/95 text-slate-200 hover:text-white backdrop-blur border border-white/20 shadow active:scale-95 cursor-pointer"
-                  title="Đổi kích thước To/Nhỏ"
-                >
-                  <Maximize className="w-3 h-3 text-emerald-300" />
-                </button>
-              </div>
-
-              {/* Tay nắm kéo góc dưới-phải để kéo giãn to/nhỏ tự do */}
-              <div
-                onMouseDown={handlePipResizeStart}
-                onTouchStart={handlePipResizeStart}
-                className="absolute bottom-0 right-0 w-6 h-6 flex items-end justify-end p-1 cursor-nwse-resize z-40 hover:opacity-100 opacity-70 active:opacity-100"
-                title="Kéo góc để phóng to/thu nhỏ"
-              >
-                <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-amber-400 rounded-br-sm" />
-              </div>
-            </>
-          )}
         </div>
 
         {!hasFrame && !hasLiveFrame && (
