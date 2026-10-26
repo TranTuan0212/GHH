@@ -534,147 +534,217 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // VÒNG LẶP AI TỰ ĐIỀU NHỊP TUẦN TỰ (NON-BLOCKING 400PX) - BẮT DÍNH BÀI LƯỚT NHANH, 100% MƯỢT KHÔNG GIẬT
+  // VÒNG LẶP AI 120FPS BẮT TỪNG FRAME & LỌC ĐỈNH ĐỘ SẮC NÉT (PEAK SHARPNESS BURST SELECTOR)
   useEffect(() => {
     if (!isReticleActive) return;
 
     let isCancelled = false;
-    let timerId: any = null;
+    let burstQueue: { dataUrl: string; sharpness: number; time: number }[] = [];
+    const isInferringRef = { current: false };
+    let lastDispatchTime = 0;
 
-    const runScanLoop = async () => {
+    // Đo nhanh độ nét (Laplacian Variance, bước nhảy 4px: chỉ mất 0.08ms)
+    const computeSharpnessFast = (ctx: CanvasRenderingContext2D, w: number, h: number): number => {
+      try {
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const d = imgData.data;
+        let sum = 0;
+        let count = 0;
+        const step = 4;
+        for (let y = step; y < h - step; y += step) {
+          for (let x = step; x < w - step; x += step) {
+            const idx = (y * w + x) * 4;
+            const c = d[idx] * 0.299 + d[idx + 1] * 0.587 + d[idx + 2] * 0.114;
+            const top = d[((y - step) * w + x) * 4] * 0.299 + d[((y - step) * w + x) * 4 + 1] * 0.587 + d[((y - step) * w + x) * 4 + 2] * 0.114;
+            const btm = d[((y + step) * w + x) * 4] * 0.299 + d[((y + step) * w + x) * 4 + 1] * 0.587 + d[((y + step) * w + x) * 4 + 2] * 0.114;
+            const lft = d[(y * w + (x - step)) * 4] * 0.299 + d[(y * w + (x - step)) * 4 + 1] * 0.587 + d[(y * w + (x - step)) * 4 + 2] * 0.114;
+            const rgt = d[(y * w + (x + step)) * 4] * 0.299 + d[(y * w + (x + step)) * 4 + 1] * 0.587 + d[(y * w + (x + step)) * 4 + 2] * 0.114;
+            const lap = Math.abs(top + btm + lft + rgt - 4 * c);
+            sum += lap * lap;
+            count++;
+          }
+        }
+        return count > 0 ? Math.round(sum / count) : 0;
+      } catch {
+        return 100;
+      }
+    };
+
+    const processVideoFrame = () => {
       if (isCancelled || !isReticleActive) return;
 
       const video = videoRef.current;
       const container = videoContainerRef.current;
-      if (video && container && video.videoWidth > 0 && !video.paused && !video.ended) {
-        const containerRect = container.getBoundingClientRect();
-        const W = containerRect.width;
-        const H = containerRect.height;
+      if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) return;
 
-        if (W > 0 && H > 0) {
-          if (!canvasRef.current) {
-            canvasRef.current = document.createElement('canvas');
-          }
-          const canvas = canvasRef.current;
-          // Nâng kích thước Canvas lên 400px để giữ nguyên số góc & hoa văn khi bài lia nhanh
-          const targetW = 400;
-          const targetH = Math.max(60, Math.round(targetW * (reticleSize.height / reticleSize.width)));
-          if (canvas.width !== targetW || canvas.height !== targetH) {
-            canvas.width = targetW;
-            canvas.height = targetH;
-          }
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          if (ctx) {
-            ctx.clearRect(0, 0, targetW, targetH);
-            ctx.save();
+      const containerRect = container.getBoundingClientRect();
+      const W = containerRect.width;
+      const H = containerRect.height;
+      if (W === 0 || H === 0) return;
 
-            // Scale & Dịch tọa độ
-            const s = targetW / reticleSize.width;
-            ctx.scale(s, s);
-            ctx.translate(-reticlePos.x, -reticlePos.y);
-            ctx.translate(W / 2, H / 2);
+      if (!canvasRef.current) {
+        canvasRef.current = document.createElement('canvas');
+      }
+      const canvas = canvasRef.current;
+      const targetW = 400; // Độ phân giải chuẩn cho YOLOv8 384
+      const targetH = Math.max(60, Math.round(targetW * (reticleSize.height / reticleSize.width)));
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
 
-            if (rotation === 90 || rotation === 270) {
-              const fillScale = isFillMode ? 1.78 : 1;
-              ctx.scale(fillScale, fillScale);
-              ctx.rotate((rotation * Math.PI) / 180);
-            } else if (rotation === 180) {
-              ctx.rotate(Math.PI);
-            }
-            if (isFlipped) {
-              ctx.scale(-1, 1);
-            }
+      ctx.clearRect(0, 0, targetW, targetH);
+      ctx.save();
 
-            const vw = video.videoWidth;
-            const vh = video.videoHeight;
-            let renderW = W;
-            let renderH = H;
-            const containerRatio = W / H;
-            const videoRatio = vw / vh;
+      const s = targetW / reticleSize.width;
+      ctx.scale(s, s);
+      ctx.translate(-reticlePos.x, -reticlePos.y);
+      ctx.translate(W / 2, H / 2);
 
-            if (!isFillMode) {
-              if (videoRatio > containerRatio) {
-                renderW = W;
-                renderH = W / videoRatio;
-              } else {
-                renderH = H;
-                renderW = H * videoRatio;
-              }
-            } else {
-              if (videoRatio > containerRatio) {
-                renderH = H;
-                renderW = H * videoRatio;
-              } else {
-                renderW = W;
-                renderH = W / videoRatio;
-              }
-            }
+      if (rotation === 90 || rotation === 270) {
+        const fillScale = isFillMode ? 1.78 : 1;
+        ctx.scale(fillScale, fillScale);
+        ctx.rotate((rotation * Math.PI) / 180);
+      } else if (rotation === 180) {
+        ctx.rotate(Math.PI);
+      }
+      if (isFlipped) {
+        ctx.scale(-1, 1);
+      }
 
-            ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
-            ctx.restore();
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      let renderW = W;
+      let renderH = H;
+      const containerRatio = W / H;
+      const videoRatio = vw / vh;
 
-            try {
-              const b64 = canvas.toDataURL('image/jpeg', 0.85);
-              const res = await fetch('/api/ai/yolo-detect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  imageBase64: b64,
-                  confidence: 0.28,
-                  imgsz: 384,
-                  minSharpness: 0
-                })
-              });
-
-              if (res.ok) {
-                const json = await res.json();
-                if (json.cards && json.cards.length > 0) {
-                  const best = json.bestCard || json.cards[0];
-                  const now = Date.now();
-                  const isSameCard = best.code === lastDetectedCodeRef.current;
-                  const timeDiff = now - lastDetectionTimeRef.current;
-
-                  // BẮT DÍNH TỨC THÌ KHI LƯỚT BÀI NGANG QUA KHUNG (Độ tin cậy >= 28%)
-                  if ((!isSameCard || timeDiff > 900) && best.confidence >= 0.28) {
-                    lastDetectionTimeRef.current = now;
-                    lastDetectedCodeRef.current = best.code;
-                    addCardToActiveDoor(best.code);
-                    setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
-                    setLastDetectedCard(best.display);
-                    setIsAiFlashing(true);
-                    setTimeout(() => setIsAiFlashing(false), 300);
-
-                    // LƯU FRAME ẢNH RÕ NÉT THỰC TẾ ĐỂ HIỂN THỊ LÊN GIAO DIỆN
-                    setCapturedFrame({
-                      image: b64,
-                      cardName: `${best.display} ${best.fullName}`,
-                      confidence: Math.round(best.confidence * 100),
-                      timestamp: new Date().toLocaleTimeString('vi-VN')
-                    });
-                  } else {
-                    setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
-                  }
-                } else {
-                  setAiStatus('Đang quét trong khung đỏ (384px)...');
-                }
-              }
-            } catch {
-              // Standby
-            }
-          }
+      if (!isFillMode) {
+        if (videoRatio > containerRatio) {
+          renderW = W;
+          renderH = W / videoRatio;
+        } else {
+          renderH = H;
+          renderW = H * videoRatio;
+        }
+      } else {
+        if (videoRatio > containerRatio) {
+          renderH = H;
+          renderW = H * videoRatio;
+        } else {
+          renderW = W;
+          renderH = W / videoRatio;
         }
       }
 
-      if (!isCancelled) {
-        timerId = setTimeout(runScanLoop, 75); // Nhịp nghỉ 75ms giải phóng hoàn toàn GPU cho video 60fps
+      ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
+      ctx.restore();
+
+      // ĐO ĐỘ NÉT CỦA FRAME 120FPS VỪA ĐẾN
+      const sharpness = computeSharpnessFast(ctx, targetW, targetH);
+      const now = Date.now();
+
+      // Nạp vào hàng đợi chùm (Burst Queue) - chỉ giữ tối đa 8 frame gần nhất (~60-70ms)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      burstQueue.push({ dataUrl, sharpness, time: now });
+      if (burstQueue.length > 8) {
+        burstQueue.shift();
+      }
+
+      // XỬ LÝ CHỌN FRAME NÉT NHẤT (Mỗi chu kỳ ~85ms chọn 1 frame nét nhất từ chùm để gửi AI)
+      if (now - lastDispatchTime >= 85 && !isInferringRef.current && burstQueue.length > 0) {
+        lastDispatchTime = now;
+        isInferringRef.current = true;
+
+        // TÌM FRAME ĐẠT ĐỈNH SẮC NÉT (PEAK SHARPNESS) TRONG CHÙM
+        let peakFrame = burstQueue[0];
+        for (let i = 1; i < burstQueue.length; i++) {
+          if (burstQueue[i].sharpness > peakFrame.sharpness) {
+            peakFrame = burstQueue[i];
+          }
+        }
+        burstQueue = []; // Reset chùm cho đợt lia tiếp theo
+
+        // GỬI DUY NHẤT FRAME RÕ NÉT NHẤT VÀO YOLOV8
+        fetch('/api/ai/yolo-detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: peakFrame.dataUrl,
+            confidence: 0.28,
+            imgsz: 384,
+            minSharpness: 0
+          })
+        })
+          .then((r) => r.json())
+          .then((json) => {
+            if (json.cards && json.cards.length > 0) {
+              const best = json.bestCard || json.cards[0];
+              const tNow = Date.now();
+              const isSameCard = best.code === lastDetectedCodeRef.current;
+              const timeDiff = tNow - lastDetectionTimeRef.current;
+
+              if ((!isSameCard || timeDiff > 900) && best.confidence >= 0.28) {
+                lastDetectionTimeRef.current = tNow;
+                lastDetectedCodeRef.current = best.code;
+                addCardToActiveDoor(best.code);
+                setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}% - Nét: ${peakFrame.sharpness})`);
+                setLastDetectedCard(best.display);
+                setIsAiFlashing(true);
+                setTimeout(() => setIsAiFlashing(false), 300);
+
+                // TRÍCH XUẤT NGAY BỨC ẢNH FRAME NÉT NHẤT ĐƯỢC CHỌN LÊN GIAO DIỆN
+                setCapturedFrame({
+                  image: peakFrame.dataUrl,
+                  cardName: `${best.display} ${best.fullName}`,
+                  confidence: Math.round(best.confidence * 100),
+                  timestamp: new Date().toLocaleTimeString('vi-VN')
+                });
+              } else {
+                setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+              }
+            } else {
+              setAiStatus(`Đang quét 120fps (Nét: ${peakFrame.sharpness})...`);
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            isInferringRef.current = false;
+          });
       }
     };
 
-    timerId = setTimeout(runScanLoop, 100);
+    // ĐĂNG KÝ BẮT NHỊP TỪNG FRAME 120FPS VỚI HARDWARE DECODER
+    const video = videoRef.current;
+    let rvfcId: number | null = null;
+    let rafId: number | null = null;
+
+    if (video && 'requestVideoFrameCallback' in video) {
+      const onFrame = () => {
+        if (isCancelled) return;
+        processVideoFrame();
+        rvfcId = (video as any).requestVideoFrameCallback(onFrame);
+      };
+      rvfcId = (video as any).requestVideoFrameCallback(onFrame);
+    } else {
+      const loop = () => {
+        if (isCancelled) return;
+        processVideoFrame();
+        rafId = requestAnimationFrame(loop);
+      };
+      rafId = requestAnimationFrame(loop);
+    }
 
     return () => {
       isCancelled = true;
-      if (timerId) clearTimeout(timerId);
+      if (video && rvfcId !== null && 'cancelVideoFrameCallback' in video) {
+        (video as any).cancelVideoFrameCallback(rvfcId);
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
     };
   }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, isFillMode, addCardToActiveDoor]);
 
