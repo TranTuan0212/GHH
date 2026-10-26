@@ -757,28 +757,11 @@ export function computeAllGroupAnswers(
         }
       }
     } else {
-      const res = evaluate2Cards(items, isStoodPat);
-      label = res.label;
-      highlightClass = res.highlightClass;
-      if (items.length > 0) {
-        if (res.hasUnknown) {
-          scoreForRank = -1;
-          isComplete = false;
-        } else {
-          isComplete = items.length >= 2;
-          const roCards = items.map((c) => parseCard(c.cardValue)).filter((p) => p.isRo);
-          const maxRoPower = roCards.length > 0 ? Math.max(...roCards.map((p) => getRankPower(p.rank))) : 0;
-          const roBonus = maxRoPower > 0 ? 50 + maxRoPower : 0;
-
-          if (res.status === 'xibang') scoreForRank = 50000 + 2100 + roBonus;
-          else if (res.status === 'xilat') scoreForRank = 40000 + roBonus;
-          else if (res.status === 'ngulinh') scoreForRank = 30000 + (21 - res.total) * 100 + roBonus;
-          else if (res.status === 'points') scoreForRank = 20000 + res.total * 100 + roBonus;
-          else if (res.status === 'non') scoreForRank = 10000 + res.total * 100 + roBonus;
-          else if (res.status === 'quac') scoreForRank = Math.max(0, 35 - res.total) * 100;
-          else if (res.status === 'partial') scoreForRank = res.total * 100 + roBonus;
-        }
-      }
+      // CHẾ ĐỘ 3 LÁ XÌ: Hiển thị đầy đủ Cơ Rô Chuồn Bích, KHÔNG TÍNH ĐIỂM, KHÔNG XẾP HẠNG!
+      label = items.length > 0 ? `${items.length}/3 lá` : '';
+      highlightClass = 'bg-slate-800/80 text-slate-300 border-white/10';
+      scoreForRank = -1; // -1 để không tính điểm và không xếp hạng
+      isComplete = items.length >= 3;
     }
 
     tempAnswers.push({
@@ -1048,9 +1031,48 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         nextGroupIndex = 0;
       }
     }
+  } else if (gameMode === '2cards') {
+    // CHẾ ĐỘ 3 LÁ XÌ: 3 vòng tuần tự (Vòng 1: lá 1 -> Vòng 2: lá 2 -> Vòng 3: lá 3 cho từng tụ)
+    // VÒNG 1: Tụ nào có 0 lá
+    let round1Player: number | null = null;
+    for (let i = 1; i <= numGroups; i++) {
+      if ((groupedItems[i] || []).length === 0) {
+        round1Player = i;
+        break;
+      }
+    }
+
+    if (round1Player !== null) {
+      nextGroupIndex = round1Player;
+    } else {
+      // VÒNG 2: Tụ nào có 1 lá
+      let round2Player: number | null = null;
+      for (let i = 1; i <= numGroups; i++) {
+        if ((groupedItems[i] || []).length < 2) {
+          round2Player = i;
+          break;
+        }
+      }
+
+      if (round2Player !== null) {
+        nextGroupIndex = round2Player;
+      } else {
+        // VÒNG 3: Tụ nào có 2 lá
+        let round3Player: number | null = null;
+        for (let i = 1; i <= numGroups; i++) {
+          if ((groupedItems[i] || []).length < 3) {
+            round3Player = i;
+            break;
+          }
+        }
+        if (round3Player !== null) {
+          nextGroupIndex = round3Player;
+        }
+      }
+    }
   }
   const targetGroupAll = groupedItems[nextGroupIndex] || [];
-  const maxInitialCards = gameMode === 'poker' ? (nextGroupIndex === 0 ? 5 : 2) : (gameMode === '3cards' ? 3 : 2);
+  const maxInitialCards = gameMode === 'poker' ? (nextGroupIndex === 0 ? 5 : 2) : 3;
 
   // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM
   const comparisonResult = useMemo(() => {
@@ -1379,7 +1401,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   : 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
               }`}
             >
-              {gameMode === 'poker' ? 'Poker (4 Chất)' : (gameMode === '2cards' ? 'Chế Độ 2 Mục (M2)' : 'Chế Độ 3 Mục (M3)')}
+              {gameMode === 'poker' ? 'Poker (4 Chất)' : (gameMode === '2cards' ? '3 Lá Xì (4 Chất)' : 'Chế Độ 3 Mục (M3)')}
             </span>
           </div>
         </div>
@@ -1466,7 +1488,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
             }`}
           >
             <Flame className="w-3.5 h-3.5 text-amber-400" />
-            <span>Chế Độ 2 Mục (M2)</span>
+            <span>3 Lá Xì (4 Chất)</span>
           </button>
         </div>
 
@@ -1602,8 +1624,8 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         })}
       </div>
 
-      {/* BANNER BẢNG ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM */}
-      {completeGroupsCount > 1 && (
+      {/* BANNER BẢNG ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM (ẨN Ở 3 LÁ XÌ) */}
+      {gameMode !== '2cards' && completeGroupsCount > 1 && (
         <div className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-indigo-950/80 border border-indigo-500/40 shadow-lg shadow-indigo-950/40 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 animate-fadeIn">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center space-x-2 flex-shrink-0">
@@ -1766,10 +1788,14 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 ])
               : gameMode === '3cards'
               ? evaluate3Cards(allItemsInGroup)
-              : evaluate2Cards(allItemsInGroup, isStoodPat);
+              : {
+                  status: 'none',
+                  label: allItemsInGroup.length > 0 ? `${allItemsInGroup.length}/3 lá` : '',
+                  highlightClass: 'bg-slate-800/80 text-slate-400 border-white/10'
+                };
 
-          // Xác định số slot thẻ cần hiển thị (Ít nhất 2 lá cho Xì Lát, 3 lá cho 3 Lá)
-          const minSlots = gameMode === '3cards' ? 3 : 2;
+          // Xác định số slot thẻ cần hiển thị (2 lá cho Poker, 3 lá cho 3 Lá và 3 Lá Xì)
+          const minSlots = gameMode === 'poker' ? 2 : 3;
           const slotCount = Math.max(minSlots, allItemsInGroup.length);
           const isThisGroupSelected = selectedGroupTarget === groupNum;
 
@@ -1882,18 +1908,38 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                     if (item) {
                       const p = parseCard(item.cardValue);
                       const isUnknown = p.rank === '0' || p.isUnknown || item.cardValue === '0' || item.cardValue.includes('Không thấy') || item.cardValue.includes('Không rõ') || item.cardValue === '?';
-                      const isRo = p.isRo;
+                      const isHearts = item.cardValue.includes('♥');
+                      const isDiamonds = item.cardValue.includes('♦') || p.isRo;
+                      const isClubs = item.cardValue.includes('♣');
+                      const isSpades = item.cardValue.includes('♠');
+
+                      const cardBgBorder = isUnknown
+                        ? 'bg-red-950/60 border-red-500/60 shadow-red-500/20 shadow-md'
+                        : isHearts
+                        ? 'bg-red-950/40 border-red-500/40 hover:border-red-300'
+                        : isDiamonds
+                        ? 'bg-rose-950/40 border-rose-500/40 hover:border-rose-300'
+                        : isClubs
+                        ? 'bg-emerald-950/40 border-emerald-500/40 hover:border-emerald-300'
+                        : isSpades
+                        ? 'bg-sky-950/40 border-sky-500/40 hover:border-sky-300'
+                        : 'bg-slate-800/90 border-white/10';
+
+                      const cardTextColor = isHearts
+                        ? 'text-red-400 drop-shadow-[0_0_8px_rgba(239,68,68,0.4)]'
+                        : isDiamonds
+                        ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]'
+                        : isClubs
+                        ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]'
+                        : isSpades
+                        ? 'text-sky-300 drop-shadow-[0_0_8px_rgba(56,189,248,0.4)]'
+                        : 'text-white';
+
                       return (
                         <div
                           key={item.id || slotIdx}
                           onClick={() => handleOpenEditCardPicker(item, groupNum, slotIdx)}
-                          className={`flex items-center justify-between px-2 py-1.5 rounded-xl border hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm ${
-                            isUnknown
-                              ? 'bg-red-950/60 border-red-500/60 shadow-red-500/20 shadow-md'
-                              : isRo
-                              ? 'bg-rose-950/40 border-rose-500/40 hover:border-rose-300'
-                              : 'bg-slate-800/90 border-white/10'
-                          }`}
+                          className={`flex items-center justify-between px-2 py-1.5 rounded-xl border hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer transition-all text-xs group shadow-sm ${cardBgBorder}`}
                           title="Bấm vào mục để sửa hoặc xóa"
                         >
                           <div className="flex items-center space-x-1.5 min-w-0">
@@ -1908,9 +1954,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                               </span>
                             ) : (
                               <span
-                                className={`font-black font-mono text-sm tracking-wide truncate group-hover:text-amber-300 ${
-                                  isRo ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]' : 'text-white'
-                                }`}
+                                className={`font-black font-mono text-sm tracking-wide truncate group-hover:text-amber-300 ${cardTextColor}`}
                               >
                                 {item.cardValue}
                               </span>
@@ -1922,9 +1966,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                           </div>
 
                           <div className="flex items-center space-x-1 flex-shrink-0">
-                            {p.value > 0 && (
+                            {gameMode !== '2cards' && p.value > 0 && (
                               <span className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-900 border ${
-                                isRo ? 'text-rose-300 border-rose-500/40' : 'text-amber-300 border-white/5'
+                                isDiamonds ? 'text-rose-300 border-rose-500/40' : 'text-amber-300 border-white/5'
                               }`}>
                                 +{p.value}
                               </span>
@@ -2014,16 +2058,16 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   </button>
                 </div>
 
-                {/* Hàng 3: Kết quả nhóm + Đối chiếu thắng thua chi tiết */}
-                <div className="space-y-1.5 pt-0.5">
-                  <div
-                    className={`w-full py-1.5 px-2 rounded-xl text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
-                  >
-                    {evalResult.label}
+                {/* Hàng 3: Kết quả nhóm (Ẩn ở chế độ 3 Lá Xì) */}
+                {gameMode !== '2cards' && evalResult.label && (
+                  <div className="space-y-1.5 pt-0.5">
+                    <div
+                      className={`w-full py-1.5 px-2 rounded-xl text-xs font-mono font-bold text-center border transition-all ${evalResult.highlightClass}`}
+                    >
+                      {evalResult.label}
+                    </div>
                   </div>
-
-
-                </div>
+                )}
               </div>
             </div>
           );
