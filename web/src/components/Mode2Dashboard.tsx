@@ -130,7 +130,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   });
 
   // Tăng sáng và tương phản video
-  const [isBrightBoost, setIsBrightBoost] = useState<boolean>(true);
+  const [isBrightBoost, setIsBrightBoost] = useState<boolean>(false);
   // Chế độ phóng to lấp đầy màn hình (Fill/Cover vs Contain)
   const [isFillMode, setIsFillMode] = useState<boolean>(() => {
     return localStorage.getItem('mode2_video_fill') !== 'false';
@@ -155,6 +155,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // Trạng thái nhận diện AI
   const [aiStatus, setAiStatus] = useState<string>('Đang quét trong khung...');
   const [lastDetectedCard, setLastDetectedCard] = useState<string | null>(null);
+  const [capturedFrame, setCapturedFrame] = useState<{
+    image: string;
+    cardName: string;
+    confidence: number;
+    timestamp: string;
+  } | null>(null);
   const [isAiFlashing, setIsAiFlashing] = useState<boolean>(false);
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.35);
 
@@ -450,16 +456,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           enableWorker: true,
           lowLatencyMode: false,
           backBufferLength: 20,
-          maxBufferLength: 8,
-          maxMaxBufferLength: 16,
+          maxBufferLength: 6,
+          maxMaxBufferLength: 12,
           maxBufferSize: 128 * 1024 * 1024,
           maxBufferHole: 0.05,
           nudgeOffset: 0.01,
           nudgeMaxRetry: 3,
           highBufferWatchdogPeriod: 0,
-          liveSyncDuration: 2.0,
-          liveMaxLatencyDuration: 4.0,
-          maxLiveSyncPlaybackRate: 1.05
+          liveSyncDuration: 1.0,
+          liveMaxLatencyDuration: 2.5,
+          maxLiveSyncPlaybackRate: 1.0
         });
 
         hlsRef.current = hls;
@@ -528,149 +534,148 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // VÒNG LẶP AI QUÉT KHUNG THỜI GIAN THỰC SIÊU TỐC (80ms) - BẮT DÍNH BÀI LƯỚT NHANH
+  // VÒNG LẶP AI TỰ ĐIỀU NHỊP TUẦN TỰ (NON-BLOCKING 400PX) - BẮT DÍNH BÀI LƯỚT NHANH, 100% MƯỢT KHÔNG GIẬT
   useEffect(() => {
     if (!isReticleActive) return;
 
-    const interval = setInterval(() => {
-      if (isScanningRef.current) return;
+    let isCancelled = false;
+    let timerId: any = null;
+
+    const runScanLoop = async () => {
+      if (isCancelled || !isReticleActive) return;
+
       const video = videoRef.current;
       const container = videoContainerRef.current;
-      if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) return;
+      if (video && container && video.videoWidth > 0 && !video.paused && !video.ended) {
+        const containerRect = container.getBoundingClientRect();
+        const W = containerRect.width;
+        const H = containerRect.height;
 
-      const containerRect = container.getBoundingClientRect();
-      const W = containerRect.width;
-      const H = containerRect.height;
-      if (W === 0 || H === 0) return;
+        if (W > 0 && H > 0) {
+          if (!canvasRef.current) {
+            canvasRef.current = document.createElement('canvas');
+          }
+          const canvas = canvasRef.current;
+          // Nâng kích thước Canvas lên 400px để giữ nguyên số góc & hoa văn khi bài lia nhanh
+          const targetW = 400;
+          const targetH = Math.max(60, Math.round(targetW * (reticleSize.height / reticleSize.width)));
+          if (canvas.width !== targetW || canvas.height !== targetH) {
+            canvas.width = targetW;
+            canvas.height = targetH;
+          }
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.clearRect(0, 0, targetW, targetH);
+            ctx.save();
 
-      if (!canvasRef.current) {
-        canvasRef.current = document.createElement('canvas');
-      }
-      const canvas = canvasRef.current;
-      const targetW = 220;
-      const targetH = Math.max(40, Math.round(targetW * (reticleSize.height / reticleSize.width)));
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
-      }
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
+            // Scale & Dịch tọa độ
+            const s = targetW / reticleSize.width;
+            ctx.scale(s, s);
+            ctx.translate(-reticlePos.x, -reticlePos.y);
+            ctx.translate(W / 2, H / 2);
 
-      // Xóa canvas sạch sẽ trước khi vẽ
-      ctx.clearRect(0, 0, targetW, targetH);
-      ctx.save();
+            if (rotation === 90 || rotation === 270) {
+              const fillScale = isFillMode ? 1.78 : 1;
+              ctx.scale(fillScale, fillScale);
+              ctx.rotate((rotation * Math.PI) / 180);
+            } else if (rotation === 180) {
+              ctx.rotate(Math.PI);
+            }
+            if (isFlipped) {
+              ctx.scale(-1, 1);
+            }
 
-      // BƯỚC 1: Scale từ tọa độ khung ngắm trên màn hình sang canvas 220px
-      const s = targetW / reticleSize.width;
-      ctx.scale(s, s);
-      // Dịch gốc tọa độ về góc trên trái của khung ngắm
-      ctx.translate(-reticlePos.x, -reticlePos.y);
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            let renderW = W;
+            let renderH = H;
+            const containerRatio = W / H;
+            const videoRatio = vw / vh;
 
-      // BƯỚC 2: Di chuyển về tâm Container video để áp dụng đúng ma trận biến hình hiển thị
-      ctx.translate(W / 2, H / 2);
-
-      // Áp dụng biến hình Xoay & Lật video y hệt CSS trên màn hình
-      if (rotation === 90 || rotation === 270) {
-        const fillScale = isFillMode ? 1.78 : 1;
-        ctx.scale(fillScale, fillScale);
-        ctx.rotate((rotation * Math.PI) / 180);
-      } else if (rotation === 180) {
-        ctx.rotate(Math.PI);
-      }
-      if (isFlipped) {
-        ctx.scale(-1, 1);
-      }
-
-      // BƯỚC 3: Tính toán kích thước hiển thị video (object-fit contain vs cover)
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      let renderW = W;
-      let renderH = H;
-      const containerRatio = W / H;
-      const videoRatio = vw / vh;
-
-      if (!isFillMode) {
-        // object-contain
-        if (videoRatio > containerRatio) {
-          renderW = W;
-          renderH = W / videoRatio;
-        } else {
-          renderH = H;
-          renderW = H * videoRatio;
-        }
-      } else {
-        // object-cover
-        if (videoRatio > containerRatio) {
-          renderH = H;
-          renderW = H * videoRatio;
-        } else {
-          renderW = W;
-          renderH = W / videoRatio;
-        }
-      }
-
-      // Vẽ video chuẩn xác tại tâm (0,0)
-      ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
-      ctx.restore();
-
-      // SỬ DỤNG toBlob BẤT ĐỒNG BỘ ĐỂ KHÔNG CHẶN MAIN THREAD
-      isScanningRef.current = true;
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          isScanningRef.current = false;
-          return;
-        }
-
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const b64 = reader.result as string;
-          try {
-            const res = await fetch('/api/ai/yolo-detect', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                imageBase64: b64,
-                confidence: confidenceThreshold,
-                imgsz: 192,
-                minSharpness: 0
-              })
-            });
-
-            if (res.ok) {
-              const json = await res.json();
-              if (json.cards && json.cards.length > 0) {
-                const best = json.bestCard || json.cards[0];
-                const now = Date.now();
-                const isSameCard = best.code === lastDetectedCodeRef.current;
-                const timeDiff = now - lastDetectionTimeRef.current;
-
-                // BẮT DÍNH TỨC THÌ KHI LƯỚT BÀI NGANG QUA KHUNG (Độ tin cậy >= 38%)
-                if ((!isSameCard || timeDiff > 900) && best.confidence >= 0.38) {
-                  lastDetectionTimeRef.current = now;
-                  lastDetectedCodeRef.current = best.code;
-                  addCardToActiveDoor(best.code);
-                  setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
-                  setLastDetectedCard(best.display);
-                  setIsAiFlashing(true);
-                  setTimeout(() => setIsAiFlashing(false), 300);
-                } else {
-                  setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
-                }
+            if (!isFillMode) {
+              if (videoRatio > containerRatio) {
+                renderW = W;
+                renderH = W / videoRatio;
               } else {
-                setAiStatus('Đang quét trong khung đỏ (80ms)...');
+                renderH = H;
+                renderW = H * videoRatio;
+              }
+            } else {
+              if (videoRatio > containerRatio) {
+                renderH = H;
+                renderW = H * videoRatio;
+              } else {
+                renderW = W;
+                renderH = W / videoRatio;
               }
             }
-          } catch {
-            // Standby
-          } finally {
-            isScanningRef.current = false;
-          }
-        };
-        reader.readAsDataURL(blob);
-      }, 'image/jpeg', 0.80);
-    }, 80);
 
-    return () => clearInterval(interval);
+            ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
+            ctx.restore();
+
+            try {
+              const b64 = canvas.toDataURL('image/jpeg', 0.85);
+              const res = await fetch('/api/ai/yolo-detect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  imageBase64: b64,
+                  confidence: 0.28,
+                  imgsz: 384,
+                  minSharpness: 0
+                })
+              });
+
+              if (res.ok) {
+                const json = await res.json();
+                if (json.cards && json.cards.length > 0) {
+                  const best = json.bestCard || json.cards[0];
+                  const now = Date.now();
+                  const isSameCard = best.code === lastDetectedCodeRef.current;
+                  const timeDiff = now - lastDetectionTimeRef.current;
+
+                  // BẮT DÍNH TỨC THÌ KHI LƯỚT BÀI NGANG QUA KHUNG (Độ tin cậy >= 28%)
+                  if ((!isSameCard || timeDiff > 900) && best.confidence >= 0.28) {
+                    lastDetectionTimeRef.current = now;
+                    lastDetectedCodeRef.current = best.code;
+                    addCardToActiveDoor(best.code);
+                    setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+                    setLastDetectedCard(best.display);
+                    setIsAiFlashing(true);
+                    setTimeout(() => setIsAiFlashing(false), 300);
+
+                    // LƯU FRAME ẢNH RÕ NÉT THỰC TẾ ĐỂ HIỂN THỊ LÊN GIAO DIỆN
+                    setCapturedFrame({
+                      image: b64,
+                      cardName: `${best.display} ${best.fullName}`,
+                      confidence: Math.round(best.confidence * 100),
+                      timestamp: new Date().toLocaleTimeString('vi-VN')
+                    });
+                  } else {
+                    setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+                  }
+                } else {
+                  setAiStatus('Đang quét trong khung đỏ (384px)...');
+                }
+              }
+            } catch {
+              // Standby
+            }
+          }
+        }
+      }
+
+      if (!isCancelled) {
+        timerId = setTimeout(runScanLoop, 75); // Nhịp nghỉ 75ms giải phóng hoàn toàn GPU cho video 60fps
+      }
+    };
+
+    timerId = setTimeout(runScanLoop, 100);
+
+    return () => {
+      isCancelled = true;
+      if (timerId) clearTimeout(timerId);
+    };
   }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, isFillMode, addCardToActiveDoor]);
 
   // Xử lý tua lại video
@@ -777,6 +782,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           {/* Nút Cài đặt */}
           <button
             onClick={() => setIsReticleActive((prev) => !prev)}
+
             className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center space-x-1 transition shadow active:scale-95 ${
               isReticleActive ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/30' : 'bg-slate-800 text-slate-400'
             }`}
@@ -1049,8 +1055,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                     : `rotate(${rotation}deg)`
                 } scaleX(${isFlipped ? -1 : 1})`,
                 transformOrigin: 'center center',
-                imageRendering: '-webkit-optimize-contrast' as any,
-                filter: isBrightBoost ? 'brightness(1.15) contrast(1.12) saturate(1.08)' : 'none'
+                imageRendering: 'auto',
+                filter: isBrightBoost ? 'brightness(1.08) contrast(1.06)' : 'none'
               }}
               playsInline
               muted={isMuted}
@@ -1128,6 +1134,31 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 </div>
               </div>
             )}
+
+            {/* KHUNG HIỂN THỊ ẢNH TRÍCH XUẤT THỰC TẾ CỦA LÁ BÀI RÕ NÉT NHẤT */}
+            {capturedFrame && (
+              <div className="absolute top-2.5 right-2.5 z-30 bg-slate-950/95 border-2 border-emerald-500 rounded-xl p-1.5 shadow-[0_0_25px_rgba(16,185,129,0.5)] backdrop-blur-md flex flex-col items-center pointer-events-auto transition-all animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between w-full px-1 mb-1 text-[10px] font-bold text-emerald-400">
+                  <span className="flex items-center gap-1">📸 Frame bắt được</span>
+                  <span className="text-amber-300 font-mono font-black">{capturedFrame.confidence}%</span>
+                </div>
+                <div className="w-24 h-32 sm:w-28 sm:h-36 rounded-lg overflow-hidden bg-black border border-emerald-500/40 flex items-center justify-center relative shadow-inner">
+                  <img
+                    src={capturedFrame.image}
+                    alt={capturedFrame.cardName}
+                    className="w-full h-full object-contain"
+                  />
+                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black via-black/85 to-transparent p-1 text-center">
+                    <span className="text-[11px] font-black text-white">{capturedFrame.cardName}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between w-full px-1 mt-1 text-[9px] text-slate-400 font-mono">
+                  <span>{capturedFrame.timestamp}</span>
+                  <span className="text-emerald-400 font-bold">HD 400px</span>
+                </div>
+              </div>
+            )}
+
           </div>
 
           {/* THANH ĐIỀU KHIỂN VIDEO DƯỚI: TUA LẠI, TỐC ĐỘ & VỀ LIVE (KHÔNG PIP) */}
