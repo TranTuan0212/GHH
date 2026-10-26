@@ -939,30 +939,31 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
           {/* =========================================================================
               BÀN PHÍM POKER HÀNG NGANG: 4 CHẤT X 13 PHÍM A ➔ K TRẢI RỘNG KHÔNG CUỘN
+              (TỰ ĐỘNG CO DÃN CHIỀU CAO & BỀ RỘNG LINH HOẠT KHI KÉO BẢNG)
               ========================================================================= */}
           {gameMode === 'poker' || gameMode === '2cards' ? (
-            <div className="bg-slate-950/95 p-1 rounded-xl border border-red-500/40 shadow-inner space-y-0.5">
+            <div className="bg-slate-950/95 p-1 rounded-xl border border-red-500/40 shadow-inner flex-1 flex flex-col justify-between gap-1 min-h-[140px]">
               {POKER_SUITS.map((suit) => (
                 <div
                   key={suit.key}
-                  className="flex items-center gap-1 bg-slate-900/70 px-1 py-0.5 rounded-lg border border-white/5"
+                  className="flex items-center gap-1 bg-slate-900/70 px-1 py-0.5 rounded-lg border border-white/5 flex-1 min-h-[28px]"
                 >
                   {/* Nhãn chất bên trái */}
                   <span
-                    className={`w-12 sm:w-14 text-[10px] font-black ${suit.color} flex items-center gap-0.5 flex-shrink-0 select-none pl-0.5`}
+                    className={`w-12 sm:w-14 text-[10px] sm:text-xs font-black ${suit.color} flex items-center gap-0.5 flex-shrink-0 select-none pl-0.5`}
                   >
-                    <span className="text-xs">{suit.symbol}</span>
+                    <span className="text-xs sm:text-sm">{suit.symbol}</span>
                     <span>{suit.name}</span>
                   </span>
 
-                  {/* 13 Phím số A ➔ K trải ngang */}
+                  {/* 13 Phím số A ➔ K trải ngang tự động dãn cả ngang lẫn cao */}
                   <div
                     style={{
                       display: 'grid',
                       gridTemplateColumns: 'repeat(13, minmax(0, 1fr))',
                       gap: '2px'
                     }}
-                    className="flex-1"
+                    className="flex-1 h-full items-stretch"
                   >
                     {POKER_RANKS.map((r) => {
                       const cardVal = `${r.num}${suit.symbol}`;
@@ -972,14 +973,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                           key={cardVal}
                           type="button"
                           onClick={() => handleCardClick(cardVal)}
-                          className={`h-7 sm:h-7.5 rounded-md flex items-center justify-center font-black transition-all active:scale-95 border cursor-pointer ${
+                          className={`h-full min-h-[28px] rounded-md flex items-center justify-center font-black transition-all active:scale-95 border cursor-pointer ${
                             isCurrent
                               ? 'ring-2 ring-amber-400 border-amber-400 scale-105 z-10 bg-amber-500 text-slate-950 font-black'
                               : `${suit.bg} ${suit.border} ${suit.color} ${suit.hoverBg}`
                           }`}
                           title={`Chọn ${cardVal}`}
                         >
-                          <span className="text-xs sm:text-[13px] leading-none font-bold">
+                          <span className="text-xs sm:text-[13px] md:text-sm leading-none font-bold">
                             {r.num}
                           </span>
                         </button>
@@ -990,10 +991,10 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               ))}
             </div>
           ) : (
-            /* CHẾ ĐỘ 3 LÁ & 2 LÁ */
-            <div className="space-y-1">
+            /* CHẾ ĐỘ 3 LÁ & 2 LÁ (TỰ CO DÃN CHIỀU CAO KHI KÉO) */
+            <div className="flex-1 flex flex-col justify-between space-y-1 min-h-[140px]">
               {/* DÃY CHẤT RÔ ♦ */}
-              <div className="bg-slate-950/90 p-1 rounded-xl border border-rose-500/40 shadow-inner space-y-0.5">
+              <div className="bg-slate-950/90 p-1 rounded-xl border border-rose-500/40 shadow-inner space-y-0.5 flex-1 flex flex-col justify-between">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[10px] font-black text-rose-400 flex items-center space-x-1">
                     <span className="text-xs">♦</span>
@@ -1001,7 +1002,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                   </span>
                   <span className="text-[9px] text-rose-300 font-mono font-bold bg-rose-950/80 px-1 py-0.2 rounded border border-rose-500/30">1♦ ➔ 13♦</span>
                 </div>
-                <div className="grid grid-cols-7 gap-1">
+                <div className="grid grid-cols-7 gap-1 flex-1">
                   {RO_CARDS.map((card) => {
                     const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
                     return (
@@ -1009,7 +1010,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                         key={card.rank}
                         type="button"
                         onClick={() => handleCardClick(card.rank)}
-                        className={`h-7 sm:h-8 rounded-lg flex items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
+                        className={`h-full min-h-[28px] rounded-lg flex items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
                           card.bg
                         } ${card.border} ${
                           isCurrent
@@ -1017,14 +1018,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                             : 'hover:scale-105 hover:border-rose-400'
                         }`}
                       >
-                        <span className={`text-xs leading-none font-black ${card.color} flex items-center gap-0.5`}>
+                        <span className={`text-xs sm:text-sm leading-none font-black ${card.color} flex items-center gap-0.5`}>
                           <span>{card.num}</span>
                           <span className="text-[10px] text-rose-500">♦</span>
                         </span>
                       </button>
                     );
                   })}
-                  <div className="h-7 sm:h-8 rounded-lg border border-rose-500/30 bg-rose-950/40 flex flex-col items-center justify-center text-center p-0.5 select-none">
+                  <div className="h-full min-h-[28px] rounded-lg border border-rose-500/30 bg-rose-950/40 flex flex-col items-center justify-center text-center p-0.5 select-none">
                     <span className="text-[9px] font-black text-rose-300 leading-tight">Ưu Tiên</span>
                     <span className="text-[8px] text-rose-400 font-bold leading-tight">Chất Rô ♦</span>
                   </div>
@@ -1032,14 +1033,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               </div>
 
               {/* DÃY SỐ THƯỜNG */}
-              <div className="bg-slate-950/80 p-1 rounded-xl border border-white/10 shadow-inner space-y-0.5">
+              <div className="bg-slate-950/80 p-1 rounded-xl border border-white/10 shadow-inner space-y-0.5 flex-1 flex flex-col justify-between">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[10px] font-bold text-slate-300">
                     DÃY SỐ THƯỜNG (1 ➔ 13)
                   </span>
                   <span className="text-[9px] text-slate-400 font-mono">1 ➔ 13</span>
                 </div>
-                <div className="grid grid-cols-7 gap-1">
+                <div className="grid grid-cols-7 gap-1 flex-1">
                   {CARDS.map((card) => {
                     const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
                     return (
@@ -1047,7 +1048,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                         key={card.rank}
                         type="button"
                         onClick={() => handleCardClick(card.rank)}
-                        className={`h-7 sm:h-8 rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
+                        className={`h-full min-h-[28px] rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
                           card.bg
                         } ${card.border} ${
                           isCurrent
@@ -1055,7 +1056,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                             : 'hover:scale-105 hover:border-amber-400/60'
                         }`}
                       >
-                        <span className={`text-xs leading-none font-black ${card.color}`}>
+                        <span className={`text-xs sm:text-sm leading-none font-black ${card.color}`}>
                           {card.rank}
                         </span>
                         {card.sublabel && (
