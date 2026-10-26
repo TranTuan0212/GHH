@@ -1000,7 +1000,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const nextSequenceOrder = entries.length + 1;
   const nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
   const targetGroupAll = groupedItems[nextGroupIndex] || [];
-  const maxInitialCards = gameMode === 'poker' ? 5 : (gameMode === '3cards' ? 3 : 2);
+  const maxInitialCards = gameMode === 'poker' ? 2 : (gameMode === '3cards' ? 3 : 2);
 
   // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM
   const comparisonResult = useMemo(() => {
@@ -1593,6 +1593,90 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+            {/* KHU VỰC BÀI CHUNG (COMMUNITY CARDS 5 LÁ) - DÀNH RIÊNG CHO POKER */}
+      {gameMode === 'poker' && (
+        <div
+          onClick={() => {
+            setSelectedGroupTarget(0);
+            setCardPickerTarget({ mode: 'add', groupNum: 0 });
+          }}
+          className={`p-2.5 sm:p-3 rounded-2xl border transition-all cursor-pointer shadow-lg mb-2.5 ${
+            selectedGroupTarget === 0 || cardPickerTarget?.groupNum === 0
+              ? 'bg-amber-950/50 border-amber-400 ring-2 ring-amber-400 shadow-amber-500/20'
+              : 'bg-slate-900/90 border-amber-500/40 hover:border-amber-400'
+          }`}
+        >
+          <div className="flex items-center justify-between pb-1.5 border-b border-amber-500/20 mb-2">
+            <div className="flex items-center space-x-2">
+              <span className="text-amber-400 text-sm font-black">👑</span>
+              <span className="text-xs sm:text-sm font-black text-amber-300 uppercase tracking-wide">
+                BÀI CHUNG (COMMUNITY CARDS)
+              </span>
+              {(selectedGroupTarget === 0 || cardPickerTarget?.groupNum === 0) && (
+                <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-black text-[9px] animate-pulse">
+                  🎯 ĐANG CHỌN
+                </span>
+              )}
+            </div>
+            <span className="text-xs font-mono font-bold text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-500/30">
+              {(groupedItems[0] || []).length}/5 lá
+            </span>
+          </div>
+
+          {/* 5 Ô bài chung nằm ngang: Flop 1, Flop 2, Flop 3, Turn, River */}
+          <div className="grid grid-cols-5 gap-2 sm:gap-2.5">
+            {[0, 1, 2, 3, 4].map((slotIdx) => {
+              const commItems = groupedItems[0] || [];
+              const cardItem = commItems[slotIdx];
+              const slotLabel = slotIdx < 3 ? `Flop ${slotIdx + 1}` : slotIdx === 3 ? 'Turn' : 'River';
+              return (
+                <div
+                  key={slotIdx}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (cardItem) {
+                      setCardPickerTarget({
+                        mode: 'edit',
+                        groupNum: 0,
+                        cardId: cardItem.id,
+                        currentValue: cardItem.cardValue,
+                        slotIndex: slotIdx
+                      });
+                    } else {
+                      setSelectedGroupTarget(0);
+                      setCardPickerTarget({ mode: 'add', groupNum: 0 });
+                    }
+                  }}
+                  className={`h-12 sm:h-14 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${
+                    cardItem
+                      ? (cardItem.cardValue.includes('♥')
+                          ? 'bg-red-950/80 text-red-300 border-red-500/60'
+                          : cardItem.cardValue.includes('♦')
+                          ? 'bg-rose-950/80 text-rose-300 border-rose-500/60'
+                          : cardItem.cardValue.includes('♣')
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/60'
+                          : cardItem.cardValue.includes('♠')
+                          ? 'bg-sky-950/80 text-sky-300 border-sky-500/60'
+                          : 'bg-slate-800 text-white border-white/20') + ' scale-100 hover:scale-105 shadow-md'
+                      : 'border-dashed border-amber-500/30 bg-amber-950/20 hover:border-amber-400/60'
+                  }`}
+                >
+                  {cardItem ? (
+                    <span className="text-base sm:text-lg font-mono font-black drop-shadow">
+                      {cardItem.cardValue}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] sm:text-xs font-bold text-amber-400/50 uppercase">
+                      {slotLabel}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
