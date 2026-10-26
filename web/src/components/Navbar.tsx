@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from '../types';
-import { Radio, Shield, LogOut, Calendar, Eye, Key, X, Smartphone } from 'lucide-react';
+import { Radio, Shield, LogOut, Calendar, Eye, Key, X, Smartphone, Wifi } from 'lucide-react';
 import { IosInstallModal } from './IosInstallModal';
 
 interface NavbarProps {
@@ -18,6 +18,27 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
   const [pwMsg, setPwMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [pwLoading, setPwLoading] = useState(false);
   const [showIosModal, setShowIosModal] = useState(false);
+  const [serverLanIp, setServerLanIp] = useState<string>('');
+  const [copiedIp, setCopiedIp] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch('/api/server-info')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.primaryIp) setServerLanIp(d.primaryIp);
+      })
+      .catch(() => {
+        setServerLanIp(window.location.hostname);
+      });
+  }, []);
+
+  const handleCopyIp = () => {
+    const ip = serverLanIp || window.location.hostname;
+    navigator.clipboard.writeText(`http://${ip}:4000`);
+    setCopiedIp(true);
+    setTimeout(() => setCopiedIp(false), 2000);
+  };
+
 
   const openChangePw = () => {
     setCurrentPw(''); setNewPw(''); setConfirmPw(''); setPwMsg(null);
@@ -106,6 +127,20 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                   Hạn: {new Date(user.expiresAt).toLocaleDateString('vi-VN')}
                 </span>
               </div>
+
+                            {/* Huy hiệu Wi-Fi Server IP */}
+              <button
+                type="button"
+                onClick={handleCopyIp}
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/60 text-emerald-300 text-xs font-mono transition-all active:scale-95 shadow-sm"
+                title="Click để sao chép địa chỉ Wi-Fi Server nhập vào iPhone"
+              >
+                <Wifi className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                <span>Wi-Fi IP: <strong className="text-white underline">{serverLanIp || '192.168.1.197'}:4000</strong></span>
+                <span className="text-[10px] bg-emerald-700 hover:bg-emerald-600 text-white font-sans px-1.5 py-0.5 rounded font-bold">
+                  {copiedIp ? '✓ Đã chép' : 'Copy'}
+                </span>
+              </button>
 
               {/* Cài App iOS button */}
               <button
