@@ -156,7 +156,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const [aiStatus, setAiStatus] = useState<string>('Đang quét trong khung...');
   const [lastDetectedCard, setLastDetectedCard] = useState<string | null>(null);
   const [isAiFlashing, setIsAiFlashing] = useState<boolean>(false);
-  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.50);
+  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.35);
 
   // Refs video & canvas
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -528,37 +528,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // VÒNG LẶP AI QUÉT KHUNG THỜI GIAN THỰC & BỘ LỌC ẢNH RÕ NÉT NHẤT (PEAK CLARITY)
+  // VÒNG LẶP AI QUÉT KHUNG THỜI GIAN THỰC SIÊU TỐC (80ms) - BẮT DÍNH BÀI LƯỚT NHANH
   useEffect(() => {
     if (!isReticleActive) return;
-
-    // Hàm đo nhanh độ sắc nét (Laplacian Variance) trên canvas nhỏ (<0.8ms)
-    const computeQuickSharpness = (ctx: CanvasRenderingContext2D, w: number, h: number): number => {
-      try {
-        const imgData = ctx.getImageData(0, 0, w, h);
-        const data = imgData.data;
-        let totalVar = 0;
-        let count = 0;
-        const step = 3; // Lấy mẫu cách quãng để đảm bảo 0 giật lag
-        for (let y = 1; y < h - 1; y += step) {
-          for (let x = 1; x < w - 1; x += step) {
-            const idx = (y * w + x) * 4;
-            const gc = (data[idx] * 299 + data[idx + 1] * 587 + data[idx + 2] * 114) / 1000;
-            const gt = (data[((y - 1) * w + x) * 4] * 299 + data[((y - 1) * w + x) * 4 + 1] * 587 + data[((y - 1) * w + x) * 4 + 2] * 114) / 1000;
-            const gb = (data[((y + 1) * w + x) * 4] * 299 + data[((y + 1) * w + x) * 4 + 1] * 587 + data[((y + 1) * w + x) * 4 + 2] * 114) / 1000;
-            const gl = (data[(y * w + (x - 1)) * 4] * 299 + data[(y * w + (x - 1)) * 4 + 1] * 587 + data[(y * w + (x - 1)) * 4 + 2] * 114) / 1000;
-            const gr = (data[(y * w + (x + 1)) * 4] * 299 + data[(y * w + (x + 1)) * 4 + 1] * 587 + data[(y * w + (x + 1)) * 4 + 2] * 114) / 1000;
-
-            const lap = Math.abs(gt + gb + gl + gr - 4 * gc);
-            totalVar += lap * lap;
-            count++;
-          }
-        }
-        return count > 0 ? Math.round(totalVar / count) : 0;
-      } catch {
-        return 999;
-      }
-    };
 
     const interval = setInterval(() => {
       if (isScanningRef.current) return;
@@ -567,36 +539,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) return;
 
       const containerRect = container.getBoundingClientRect();
-      if (containerRect.width === 0 || containerRect.height === 0) return;
-      const scaleX = video.videoWidth / containerRect.width;
-      const scaleY = video.videoHeight / containerRect.height;
+      const W = containerRect.width;
+      const H = containerRect.height;
+      if (W === 0 || H === 0) return;
 
-      // Đồng bộ tọa độ khi người dùng Lật ngang hoặc Xoay video
-      let mappedX = reticlePos.x;
-      let mappedY = reticlePos.y;
-      if (isFlipped) {
-        mappedX = containerRect.width - reticlePos.x - reticleSize.width;
-      }
-      if (rotation === 180) {
-        mappedX = containerRect.width - mappedX - reticleSize.width;
-        mappedY = containerRect.height - mappedY - reticleSize.height;
-      }
-
-      // Tọa độ crop trong frame gốc của video
-      const cropX = Math.max(0, mappedX * scaleX);
-      const cropY = Math.max(0, mappedY * scaleY);
-      const cropW = Math.min(video.videoWidth - cropX, reticleSize.width * scaleX);
-      const cropH = Math.min(video.videoHeight - cropY, reticleSize.height * scaleY);
-
-      if (cropW < 40 || cropH < 40) return;
-
-      // Vẽ crop vào canvas ngầm (kích thước tối ưu 220px)
       if (!canvasRef.current) {
         canvasRef.current = document.createElement('canvas');
       }
       const canvas = canvasRef.current;
       const targetW = 220;
-      const targetH = Math.round(targetW * (cropH / cropW));
+      const targetH = Math.max(40, Math.round(targetW * (reticleSize.height / reticleSize.width)));
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
         canvas.height = targetH;
@@ -604,15 +556,62 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
 
-      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
+      // Xóa canvas sạch sẽ trước khi vẽ
+      ctx.clearRect(0, 0, targetW, targetH);
+      ctx.save();
 
-      // TẦNG 1: Lọc nhanh độ nét cạnh ngay trên client
-      const localSharpness = computeQuickSharpness(ctx, targetW, targetH);
-      if (localSharpness < 35) {
-        // Ảnh đang bị nhòe mạnh do tay dealer lia nhanh -> Bỏ qua frame này
-        setAiStatus(`Đang lia bài (Nhòe mờ: ${localSharpness})...`);
-        return;
+      // BƯỚC 1: Scale từ tọa độ khung ngắm trên màn hình sang canvas 220px
+      const s = targetW / reticleSize.width;
+      ctx.scale(s, s);
+      // Dịch gốc tọa độ về góc trên trái của khung ngắm
+      ctx.translate(-reticlePos.x, -reticlePos.y);
+
+      // BƯỚC 2: Di chuyển về tâm Container video để áp dụng đúng ma trận biến hình hiển thị
+      ctx.translate(W / 2, H / 2);
+
+      // Áp dụng biến hình Xoay & Lật video y hệt CSS trên màn hình
+      if (rotation === 90 || rotation === 270) {
+        const fillScale = isFillMode ? 1.78 : 1;
+        ctx.scale(fillScale, fillScale);
+        ctx.rotate((rotation * Math.PI) / 180);
+      } else if (rotation === 180) {
+        ctx.rotate(Math.PI);
       }
+      if (isFlipped) {
+        ctx.scale(-1, 1);
+      }
+
+      // BƯỚC 3: Tính toán kích thước hiển thị video (object-fit contain vs cover)
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      let renderW = W;
+      let renderH = H;
+      const containerRatio = W / H;
+      const videoRatio = vw / vh;
+
+      if (!isFillMode) {
+        // object-contain
+        if (videoRatio > containerRatio) {
+          renderW = W;
+          renderH = W / videoRatio;
+        } else {
+          renderH = H;
+          renderW = H * videoRatio;
+        }
+      } else {
+        // object-cover
+        if (videoRatio > containerRatio) {
+          renderH = H;
+          renderW = H * videoRatio;
+        } else {
+          renderW = W;
+          renderH = W / videoRatio;
+        }
+      }
+
+      // Vẽ video chuẩn xác tại tâm (0,0)
+      ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
+      ctx.restore();
 
       // SỬ DỤNG toBlob BẤT ĐỒNG BỘ ĐỂ KHÔNG CHẶN MAIN THREAD
       isScanningRef.current = true;
@@ -633,7 +632,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 imageBase64: b64,
                 confidence: confidenceThreshold,
                 imgsz: 192,
-                minSharpness: 50
+                minSharpness: 0
               })
             });
 
@@ -641,53 +640,24 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               const json = await res.json();
               if (json.cards && json.cards.length > 0) {
                 const best = json.bestCard || json.cards[0];
-                const sharpness = json.sharpness ?? localSharpness;
                 const now = Date.now();
+                const isSameCard = best.code === lastDetectedCodeRef.current;
+                const timeDiff = now - lastDetectionTimeRef.current;
 
-                // TẦNG 2: BỘ ĐỆM ĐỈNH ĐỘ TIN CẬY & ĐỘ NÉT (Peak Clarity Window)
-                if (!candidateRef.current || candidateRef.current.code !== best.code) {
-                  // Khởi tạo ứng viên mới
-                  candidateRef.current = {
-                    code: best.code,
-                    fullName: best.fullName,
-                    display: best.display,
-                    confidence: best.confidence,
-                    sharpness,
-                    count: 1,
-                    firstSeen: now
-                  };
-                  setAiStatus(`Bắt đầu thấy: ${best.fullName} (${Math.round(best.confidence * 100)}% - Nét: ${sharpness})`);
+                // BẮT DÍNH TỨC THÌ KHI LƯỚT BÀI NGANG QUA KHUNG (Độ tin cậy >= 38%)
+                if ((!isSameCard || timeDiff > 900) && best.confidence >= 0.38) {
+                  lastDetectionTimeRef.current = now;
+                  lastDetectedCodeRef.current = best.code;
+                  addCardToActiveDoor(best.code);
+                  setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+                  setLastDetectedCard(best.display);
+                  setIsAiFlashing(true);
+                  setTimeout(() => setIsAiFlashing(false), 300);
                 } else {
-                  // Đang theo dõi cùng một lá bài trong chuỗi frame: LỌC LẤY ĐỈNH ĐỘ NÉT & TIN CẬY CAO NHẤT
-                  candidateRef.current.count += 1;
-                  if (best.confidence > candidateRef.current.confidence) {
-                    candidateRef.current.confidence = best.confidence;
-                    candidateRef.current.sharpness = sharpness;
-                  }
-
-                  const cand = candidateRef.current;
-                  setAiStatus(`Ổn định: ${cand.fullName} (${Math.round(cand.confidence * 100)}% - Nét: ${cand.sharpness})`);
-                  setLastDetectedCard(cand.display);
-
-                  // Chốt lá bài khi: Xuất hiện ít nhất 2 frame ổn định HOẶC độ nét & độ tin cậy vượt trội (>=90%)
-                  const isSameCardAsCommitted = cand.code === lastDetectedCodeRef.current;
-                  const timeDiff = now - lastDetectionTimeRef.current;
-
-                  if ((!isSameCardAsCommitted || timeDiff > 1200) && (cand.count >= 2 || cand.confidence >= 0.90)) {
-                    lastDetectionTimeRef.current = now;
-                    lastDetectedCodeRef.current = cand.code;
-                    addCardToActiveDoor(cand.code);
-                    setAiStatus(`Đã chốt nét nhất: ${cand.fullName} (${Math.round(cand.confidence * 100)}% - Nét: ${cand.sharpness})`);
-                    // Reset candidate sau khi đã chốt
-                    candidateRef.current = null;
-                  }
+                  setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
                 }
               } else {
-                setAiStatus('Đang quét trong khung đỏ...');
-                // Nếu 2 chu kỳ không thấy bài, reset candidate
-                if (candidateRef.current && Date.now() - candidateRef.current.firstSeen > 700) {
-                  candidateRef.current = null;
-                }
+                setAiStatus('Đang quét trong khung đỏ (80ms)...');
               }
             }
           } catch {
@@ -698,10 +668,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         };
         reader.readAsDataURL(blob);
       }, 'image/jpeg', 0.80);
-    }, 300);
+    }, 80);
 
     return () => clearInterval(interval);
-  }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, addCardToActiveDoor]);
+  }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, isFillMode, addCardToActiveDoor]);
 
   // Xử lý tua lại video
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
