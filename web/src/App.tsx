@@ -160,6 +160,37 @@ export const App: React.FC = () => {
     }
   }, [socket, currentRoomId]);
 
+  // Tự động kiểm tra luồng Live mới mỗi 2.5s (tránh trường hợp socket bị rơi sự kiện hoặc phải reload trang)
+  useEffect(() => {
+    if (!token || !currentRoomId) return;
+    let isCancelled = false;
+
+    const checkActiveStream = () => {
+      fetch('/api/stream/active?roomId=' + encodeURIComponent(currentRoomId), {
+        headers: { Authorization: 'Bearer ' + token }
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (isCancelled) return;
+          if (data?.stream?.status === 'LIVE') {
+            setActiveStream((prev) => {
+              if (prev?.streamKey !== data.stream.streamKey || prev?.status !== 'LIVE') {
+                return data.stream;
+              }
+              return prev;
+            });
+          }
+        })
+        .catch(() => {});
+    };
+
+    const interval = setInterval(checkActiveStream, 2500);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [token, currentRoomId]);
+
   // Fetch Current Auth User on Token change
   useEffect(() => {
     if (!token) {

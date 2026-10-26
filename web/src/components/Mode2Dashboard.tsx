@@ -402,16 +402,52 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const [hasVideoSignal, setHasVideoSignal] = useState<boolean>(false);
   const [hasWebRtcSignal, setHasWebRtcSignal] = useState<boolean>(false);
 
+  // Quản lý phiên Stream (Đồng bộ từ props và tự động thăm dò luồng mới khi iPhone phát lại)
+  const [activeStreamSession, setActiveStreamSession] = useState<StreamSession | null>(stream);
+
+  useEffect(() => {
+    setActiveStreamSession(stream);
+  }, [stream]);
+
+  // Tự động kiểm tra luồng mới mỗi 2s nếu chưa có tín hiệu video (tránh phải F5 lại trang)
+  useEffect(() => {
+    let cancelled = false;
+    const pollInterval = setInterval(async () => {
+      if (hasVideoSignal) return;
+      try {
+        const res = await fetch(`/api/stream/active?roomId=${encodeURIComponent(roomId || '')}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && data?.stream?.status === 'LIVE') {
+            setActiveStreamSession((prev) => {
+              if (prev?.streamKey !== data.stream.streamKey) {
+                console.log('[Mode2] Tự động bắt luồng Live mới từ server:', data.stream.streamKey);
+                return data.stream;
+              }
+              return prev;
+            });
+          }
+        }
+      } catch {}
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollInterval);
+    };
+  }, [roomId, hasVideoSignal]);
+
   // KẾT NỐI CƠ CHẾ KÉP (DUAL-ENGINE): WEBRTC LIVE 0 DELAY (<0.2S) + HLS REPLAY 120FPS
   const whepUrl = useMemo(() => {
-    if (!stream?.streamKey) return '';
+    const sKey = activeStreamSession?.streamKey;
+    if (!sKey) return '';
     try {
       const hostname = window.location.hostname || '127.0.0.1';
-      return `http://${hostname}:8889/${stream.streamKey}/whep`;
+      return `http://${hostname}:8889/${sKey}/whep`;
     } catch {
       return '';
     }
-  }, [stream?.streamKey]);
+  }, [activeStreamSession?.streamKey]);
 
   // 1. Kết nối WebRTC WHEP Live trực tiếp (Zero Delay <0.2s, 60fps mượt tuyệt đối) với Auto-Retry Loop
   useEffect(() => {
@@ -551,11 +587,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // 2. Kết nối HLS Replay DVR Master (để tua chậm, tua lại chi tiết từng frame 120fps)
   useEffect(() => {
     const video = replayVideoRef.current;
-    if (!video || !stream?.streamKey) return;
+    if (!video || !activeStreamSession?.streamKey) return;
 
-    const streamKey = stream.streamKey;
+    const streamKey = activeStreamSession.streamKey;
     const replayUrl = `/replay/${streamKey}/index.m3u8`;
-    const liveHlsUrl = stream.hlsPlaylistUrl || `/live/${streamKey}/index.m3u8`;
+    const liveHlsUrl = activeStreamSession.hlsPlaylistUrl || `/live/${streamKey}/index.m3u8`;
     let isCancelled = false;
 
     (async () => {
@@ -632,7 +668,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [stream?.streamKey, stream?.hlsPlaylistUrl]);
+  }, [activeStreamSession?.streamKey, activeStreamSession?.hlsPlaylistUrl]);
 
   // Kéo handle góc dưới-phải để resize khung ngắm thủ công
   const handleReticleResizeMouseDown = (e: React.MouseEvent) => {
@@ -660,53 +696,24 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // VÒNG LẶP AI SIÊU MƯỢT (GPU BLIT PEAK SELECTOR) - BẮT DÍNH BÀI LƯỚT 120FPS, 0 KHỰNG LAG
+  // VÒNG LẶP AI QUÉT REAL-TIME LIÊN TỤC (~14 FPS) - BẮT DÍNH BÀI LƯỚT QUA KHUNG TỨC THÌ
   useEffect(() => {
     if (!isReticleActive) return;
 
     let isCancelled = false;
-    let peakCanvas: HTMLCanvasElement | null = null;
-    let peakSharpness = -1;
     const isInferringRef = { current: false };
     let lastDispatchTime = 0;
-    let lastSampleTime = 0;
+    let rafId: number | null = null;
 
-    // Đo nhanh độ nét cạnh (Laplacian Variance bước 4: chỉ mất 0.05ms)
-    const computeSharpnessFast = (ctx: CanvasRenderingContext2D, w: number, h: number): number => {
-      try {
-        const imgData = ctx.getImageData(0, 0, w, h);
-        const d = imgData.data;
-        let sum = 0;
-        let count = 0;
-        const step = 4;
-        for (let y = step; y < h - step; y += step) {
-          for (let x = step; x < w - step; x += step) {
-            const idx = (y * w + x) * 4;
-            const c = d[idx] * 0.299 + d[idx + 1] * 0.587 + d[idx + 2] * 0.114;
-            const top = d[((y - step) * w + x) * 4] * 0.299 + d[((y - step) * w + x) * 4 + 1] * 0.587 + d[((y - step) * w + x) * 4 + 2] * 0.114;
-            const btm = d[((y + step) * w + x) * 4] * 0.299 + d[((y + step) * w + x) * 4 + 1] * 0.587 + d[((y + step) * w + x) * 4 + 2] * 0.114;
-            const lft = d[(y * w + (x - step)) * 4] * 0.299 + d[(y * w + (x - step)) * 4 + 1] * 0.587 + d[(y * w + (x - step)) * 4 + 2] * 0.114;
-            const rgt = d[(y * w + (x + step)) * 4] * 0.299 + d[(y * w + (x + step)) * 4 + 1] * 0.587 + d[(y * w + (x + step)) * 4 + 2] * 0.114;
-            const lap = Math.abs(top + btm + lft + rgt - 4 * c);
-            sum += lap * lap;
-            count++;
-          }
-        }
-        return count > 0 ? Math.round(sum / count) : 0;
-      } catch {
-        return 100;
-      }
-    };
-
-    const processVideoFrame = () => {
+    const processFrameRealtime = () => {
       if (isCancelled || !isReticleActive) return;
 
       const now = Date.now();
-      // Điều tiết nhịp kiểm tra 18ms (~55fps) - bắt trọn mọi cú lia bài 0.1s mà CPU cực nhẹ
-      if (now - lastSampleTime < 18) {
+      // Nhịp quét đều đặn mỗi 70ms (~14 lần/giây) - cực nhạy khi lướt bài qua khung mà CPU chỉ ~1-2%
+      if (now - lastDispatchTime < 70 || isInferringRef.current) {
+        rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
-      lastSampleTime = now;
 
       const video = (isLive && hasWebRtcSignal && liveVideoRef.current && liveVideoRef.current.videoWidth > 0 && !liveVideoRef.current.paused)
         ? liveVideoRef.current
@@ -714,25 +721,35 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           ? replayVideoRef.current
           : (liveVideoRef.current || replayVideoRef.current));
       const container = videoContainerRef.current;
-      if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) return;
+
+      if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) {
+        rafId = requestAnimationFrame(processFrameRealtime);
+        return;
+      }
 
       const containerRect = container.getBoundingClientRect();
       const W = containerRect.width;
       const H = containerRect.height;
-      if (W === 0 || H === 0) return;
+      if (W === 0 || H === 0) {
+        rafId = requestAnimationFrame(processFrameRealtime);
+        return;
+      }
 
       if (!canvasRef.current) {
         canvasRef.current = document.createElement('canvas');
       }
       const canvas = canvasRef.current;
-      const targetW = 400; // Độ phân giải chuẩn cho YOLOv8 384
+      const targetW = 384; // Khớp chuẩn 384 của YOLOv8 nano
       const targetH = Math.max(60, Math.round(targetW * (reticleSize.height / reticleSize.width)));
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
         canvas.height = targetH;
       }
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
+      if (!ctx) {
+        rafId = requestAnimationFrame(processFrameRealtime);
+        return;
+      }
 
       ctx.clearRect(0, 0, targetW, targetH);
       ctx.save();
@@ -781,115 +798,69 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
       ctx.restore();
 
-      // ĐO ĐỘ NÉT CỦA FRAME MỚI ĐẾN (0 CPU JPEG ENCODING)
-      const sharpness = computeSharpnessFast(ctx, targetW, targetH);
+      // Gửi trực tiếp frame này tới YOLOv8 microservice
+      lastDispatchTime = now;
+      isInferringRef.current = true;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
 
-      // NẾU FRAME NÀY NÉT HƠN CÁC FRAME TRƯỚC -> SAO CHÉP NHANH VÀO PEAK CANVAS BẰNG GPU BLIT (<0.05ms)
-      if (sharpness > peakSharpness) {
-        if (!peakCanvas) {
-          peakCanvas = document.createElement('canvas');
-        }
-        if (peakCanvas.width !== targetW || peakCanvas.height !== targetH) {
-          peakCanvas.width = targetW;
-          peakCanvas.height = targetH;
-        }
-        const pCtx = peakCanvas.getContext('2d');
-        if (pCtx) {
-          pCtx.clearRect(0, 0, targetW, targetH);
-          pCtx.drawImage(canvas, 0, 0); // GPU Blit trực tiếp, KHÔNG nén JPEG, KHÔNG giật video!
-          peakSharpness = sharpness;
-        }
-      }
-
-      // XỬ LÝ CHỌN VÀ GỬI DUY NHẤT FRAME NÉT NHẤT SAU MỖI CHU KỲ 85MS
-      if (now - lastDispatchTime >= 85 && !isInferringRef.current && peakSharpness > 15 && peakCanvas) {
-        lastDispatchTime = now;
-        isInferringRef.current = true;
-        const currentPeakSharpness = peakSharpness;
-        peakSharpness = -1; // Reset cho đợt lia tiếp theo
-
-        // CHỈ NÉN ẢNH ĐÚNG 1 LẦN DUY NHẤT TRÊN FRAME NÉT NHẤT ĐÃ ĐƯỢC CHỌN LỌC!
-        const dataUrl = peakCanvas.toDataURL('image/jpeg', 0.82);
-
-        fetch('/api/ai/yolo-detect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageBase64: dataUrl,
-            confidence: 0.28,
-            imgsz: 384,
-            minSharpness: 0
-          })
+      fetch('/api/ai/yolo-detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: dataUrl,
+          confidence: 0.25,
+          imgsz: 384,
+          minSharpness: 0
         })
-          .then((r) => r.json())
-          .then((json) => {
-            if (json.cards && json.cards.length > 0) {
-              const best = json.bestCard || json.cards[0];
-              const tNow = Date.now();
-              const isSameCard = best.code === lastDetectedCodeRef.current;
-              const timeDiff = tNow - lastDetectionTimeRef.current;
+      })
+        .then((r) => r.json())
+        .then((json) => {
+          if (json.cards && json.cards.length > 0) {
+            const best = json.bestCard || json.cards[0];
+            const tNow = Date.now();
+            const isSameCard = best.code === lastDetectedCodeRef.current;
+            const timeDiff = tNow - lastDetectionTimeRef.current;
 
-              if ((!isSameCard || timeDiff > 900) && best.confidence >= 0.28) {
-                lastDetectionTimeRef.current = tNow;
-                lastDetectedCodeRef.current = best.code;
-                addCardToActiveDoor(best.code);
-                setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}% - Nét: ${currentPeakSharpness})`);
-                setLastDetectedCard(best.display);
-                setIsAiFlashing(true);
-                setTimeout(() => setIsAiFlashing(false), 300);
+            if ((!isSameCard || timeDiff > 800) && best.confidence >= 0.25) {
+              lastDetectionTimeRef.current = tNow;
+              lastDetectedCodeRef.current = best.code;
+              addCardToActiveDoor(best.code);
+              setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+              setLastDetectedCard(best.display);
+              setIsAiFlashing(true);
+              setTimeout(() => setIsAiFlashing(false), 300);
 
-                // TRÍCH XUẤT NGAY BỨC ẢNH FRAME NÉT NHẤT ĐÃ CHỌN LÊN GIAO DIỆN
-                setCapturedFrame({
-                  image: dataUrl,
-                  cardName: `${best.display} ${best.fullName}`,
-                  confidence: Math.round(best.confidence * 100),
-                  timestamp: new Date().toLocaleTimeString('vi-VN')
-                });
-              } else {
-                setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
-              }
+              // Hiển thị frame ảnh bắt được lên góc phải HUD
+              setCapturedFrame({
+                image: dataUrl,
+                cardName: `${best.display} ${best.fullName}`,
+                confidence: Math.round(best.confidence * 100),
+                timestamp: new Date().toLocaleTimeString('vi-VN')
+              });
             } else {
-              setAiStatus(`Live 120fps mượt (Nét: ${currentPeakSharpness})...`);
+              setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
             }
-          })
-          .catch(() => {})
-          .finally(() => {
-            isInferringRef.current = false;
-          });
-      }
+          } else {
+            setAiStatus('Đang quét realtime trong khung...');
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          isInferringRef.current = false;
+        });
+
+      rafId = requestAnimationFrame(processFrameRealtime);
     };
 
-    // ĐĂNG KÝ BẮT NHỊP TỪNG FRAME VỚI HARDWARE DECODER
-    const video = isLive ? (liveVideoRef.current || replayVideoRef.current) : (replayVideoRef.current || liveVideoRef.current);
-    let rvfcId: number | null = null;
-    let rafId: number | null = null;
-
-    if (video && 'requestVideoFrameCallback' in video) {
-      const onFrame = () => {
-        if (isCancelled) return;
-        processVideoFrame();
-        rvfcId = (video as any).requestVideoFrameCallback(onFrame);
-      };
-      rvfcId = (video as any).requestVideoFrameCallback(onFrame);
-    } else {
-      const loop = () => {
-        if (isCancelled) return;
-        processVideoFrame();
-        rafId = requestAnimationFrame(loop);
-      };
-      rafId = requestAnimationFrame(loop);
-    }
+    rafId = requestAnimationFrame(processFrameRealtime);
 
     return () => {
       isCancelled = true;
-      if (video && rvfcId !== null && 'cancelVideoFrameCallback' in video) {
-        (video as any).cancelVideoFrameCallback(rvfcId);
-      }
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
       }
     };
-  }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, isFillMode, addCardToActiveDoor]);
+  }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, isFillMode, addCardToActiveDoor, isLive, hasWebRtcSignal]);
 
   // Xử lý tua lại video
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1317,12 +1288,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   <Radio className="w-5 h-5 animate-pulse text-indigo-400" />
                 </div>
                 <p className="text-xs font-mono text-slate-300">
-                  {stream ? 'Đang kết nối luồng Live 120fps...' : 'Đang chờ điện thoại phát trực tiếp...'}
+                  {activeStreamSession ? 'Đang kết nối luồng Live 120fps...' : 'Đang chờ điện thoại phát trực tiếp...'}
                 </p>
               </div>
             )}
 
-            {/* KHUNG NGẮM AI MÀU ĐỎ (DYNAMIC TARGET BOUNDING BOX) */}
+            {/* KHUNG NGẮM AI MÀU ĐỎ (DYNAMIC TARGET BOUNDING BOX - LUÔN NẰM TRÊN MẶT VIDEO VỚI Z-30) */}
             {isReticleActive && (
               <div
                 style={{
@@ -1334,7 +1305,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   pointerEvents: 'auto',
                   transition: isReticleLocked ? 'none' : 'width 0.05s, height 0.05s'
                 }}
-                className={`border-2 rounded-lg pointer-events-auto transition-colors ${
+                className={`z-30 border-2 rounded-lg pointer-events-auto transition-colors ${
                   isAiFlashing
                     ? 'border-emerald-400 bg-emerald-500/15 shadow-[0_0_25px_rgba(52,211,153,0.9)]'
                     : 'border-red-500 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.7)]'
