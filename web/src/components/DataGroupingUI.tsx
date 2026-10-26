@@ -22,8 +22,9 @@ import {
   Swords
 } from 'lucide-react';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
+import { evaluatePokerHand } from '../utils/pokerRules';
 
-export type GameMode = '3cards' | '2cards';
+export type GameMode = '3cards' | '2cards' | 'poker';
 
 interface DataGroupingUIProps {
   entries: DataEntry[];
@@ -999,7 +1000,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
   const nextSequenceOrder = entries.length + 1;
   const nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
   const targetGroupAll = groupedItems[nextGroupIndex] || [];
-  const maxInitialCards = gameMode === '3cards' ? 3 : 2;
+  const maxInitialCards = gameMode === 'poker' ? 5 : (gameMode === '3cards' ? 3 : 2);
 
   // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM
   const comparisonResult = useMemo(() => {
@@ -1329,7 +1330,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                   : 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
               }`}
             >
-              {gameMode === '2cards' ? 'Chế Độ 2 Mục (M2)' : 'Chế Độ 3 Mục (M3)'}
+              {gameMode === 'poker' ? 'Poker (4 Chất)' : (gameMode === '2cards' ? 'Chế Độ 2 Mục (M2)' : 'Chế Độ 3 Mục (M3)')}
             </span>
           </div>
         </div>
@@ -1562,7 +1563,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
               </div>
               <div>
                 <div className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center space-x-1.5">
-                  <span>KẾT QUẢ SAU CÙNG ({gameMode === '3cards' ? '3 Lá' : '2 Lá'})</span>
+                  <span>KẾT QUẢ SAU CÙNG ({gameMode === 'poker' ? 'Poker' : (gameMode === '3cards' ? '3 Lá' : '2 Lá')})</span>
                 </div>
                 <p className="text-[10px] text-slate-400">Xếp hạng thực lực {completeGroupsCount}/{numGroups} nhóm</p>
               </div>

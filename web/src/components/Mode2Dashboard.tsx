@@ -29,7 +29,8 @@ import {
   Minus,
   Undo2,
   Trash2,
-  Clock
+  Clock,
+  Wifi
 } from 'lucide-react';
 import { evaluate3Cards, parseCardRank, getRankLabel } from '../utils/cardRules';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
@@ -184,6 +185,28 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Tốc độ phát lại (Playback Rate: 1x, 0.5x, 0.25x, 0.125x)
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  // Địa chỉ IP Wi-Fi Server
+  const [serverLanIp, setServerLanIp] = useState<string>('');
+  const [copiedIp, setCopiedIp] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch('/api/server-info')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.primaryIp) setServerLanIp(d.primaryIp);
+      })
+      .catch(() => {
+        setServerLanIp(window.location.hostname);
+      });
+  }, []);
+
+  const handleCopyIp = () => {
+    const ip = serverLanIp || window.location.hostname;
+    navigator.clipboard.writeText(`http://${ip}:4000`);
+    setCopiedIp(true);
+    setTimeout(() => setCopiedIp(false), 2000);
+  };
+
 
   // Hiển thị thanh chỉnh kích thước khung ngắm
   const [showSizeControls, setShowSizeControls] = useState<boolean>(false);
@@ -744,6 +767,21 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             SERVER NET: <strong className="text-white">{stream ? 'đang nhận video' : 'sẵn sàng'}</strong>
           </span>
         </div>
+
+        {/* Huy hiệu Wi-Fi Server IP cho iPhone */}
+        <button
+          type="button"
+          onClick={handleCopyIp}
+          className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/60 text-emerald-300 text-xs font-mono transition-all active:scale-95 shadow-sm"
+          title="Click để sao chép địa chỉ Wi-Fi Server này nhập vào iPhone"
+        >
+          <Wifi className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+          <span>Wi-Fi IP: <strong className="text-white underline">{serverLanIp || '192.168.1.197'}:4000</strong></span>
+          <span className="text-[10px] bg-emerald-700 hover:bg-emerald-600 text-white font-sans px-1.5 py-0.5 rounded font-bold">
+            {copiedIp ? '✓ Đã chép' : 'Copy'}
+          </span>
+        </button>
+
 
         {/* Nút Ván mới, Hoàn tác & Cài đặt */}
         <div className="flex items-center space-x-2">
