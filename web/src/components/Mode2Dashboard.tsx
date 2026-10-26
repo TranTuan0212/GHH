@@ -131,6 +131,15 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Tăng sáng và tương phản video
   const [isBrightBoost, setIsBrightBoost] = useState<boolean>(true);
+  // Chế độ phóng to lấp đầy màn hình (Fill/Cover vs Contain)
+  const [isFillMode, setIsFillMode] = useState<boolean>(() => {
+    return localStorage.getItem('mode2_video_fill') !== 'false';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('mode2_video_fill', isFillMode.toString());
+  }, [isFillMode]);
+
 
   // Kích thước khung ngắm AI (Dài x Rộng)
   const [reticleSize, setReticleSize] = useState<{ width: number; height: number }>(() => {
@@ -949,6 +958,20 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 <span>{rotation !== 0 ? `Xoay ${rotation}°` : 'Xoay ↻'}</span>
               </button>
 
+              {/* Nút Phóng to tràn khung / Vừa vặn */}
+              <button
+                type="button"
+                onClick={() => setIsFillMode((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  isFillMode ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Bấm để Phóng to lấp đầy màn hình (loại bỏ viền đen) hoặc xem vừa vặn"
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>{isFillMode ? 'Phóng to ⛶' : 'Vừa vặn'}</span>
+              </button>
+
+
               {/* Nút Ghim / Bám chuột */}
               <button
                 type="button"
@@ -1035,21 +1058,27 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             </div>
           )}
 
-          {/* VÙNG CHỨA VIDEO & KHUNG NGẮM AI ĐỎ */}
+          {/* VÙNG CHỨA VIDEO & KHUNG NGẮM AI ĐỎ (TỰ ĐỘNG PHÓNG TO & THÍCH ỨNG TỶ LỆ) */}
           <div
             ref={videoContainerRef}
             onMouseMove={handleVideoMouseMove}
             onClick={handleVideoClick}
-            className="relative w-full aspect-video bg-black overflow-hidden select-none cursor-crosshair group"
+            className="relative w-full h-[460px] sm:h-[520px] md:h-[580px] bg-black overflow-hidden select-none cursor-crosshair group flex items-center justify-center"
             title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả cố định"
           >
-            {/* Thẻ Video Live trực tiếp (Giải mã HLS.js, hỗ trợ Lật & Xoay) */}
+            {/* Thẻ Video Live trực tiếp (Giải mã HLS.js, phóng to cực đại không bị co nhỏ) */}
             <video
               ref={videoRef}
-              className="w-full h-full object-contain pointer-events-none"
+              className={`pointer-events-none transition-transform duration-150 ease-out ${
+                isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'
+              }`}
               style={{
-                transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`,
-                transition: 'transform 0.15s ease-out',
+                transform: `${
+                  (rotation === 90 || rotation === 270)
+                    ? `scale(${isFillMode ? 1.78 : 1}) rotate(${rotation}deg)`
+                    : `rotate(${rotation}deg)`
+                } scaleX(${isFlipped ? -1 : 1})`,
+                transformOrigin: 'center center',
                 imageRendering: '-webkit-optimize-contrast' as any,
                 filter: isBrightBoost ? 'brightness(1.15) contrast(1.12) saturate(1.08)' : 'none'
               }}
