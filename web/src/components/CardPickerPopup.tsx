@@ -363,8 +363,8 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     onSelectCard('0', target.groupNum, target.cardId);
   };
 
-  // Kéo dãn kích thước popup (Cả chiều ngang và chiều cao tự do)
-  const handleResizeMouseDown = (e: React.MouseEvent) => {
+  // Kéo dãn kích thước popup (Cạnh đáy = chiều cao, Cạnh phải = chiều rộng, Góc = cả hai)
+  const handleResizeMouseDown = (direction: 'both' | 'height' | 'width' = 'both') => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     isResizingRef.current = true;
@@ -384,11 +384,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
       const maxW = Math.max(420, window.innerWidth - position.x - 10);
       const maxH = Math.max(250, window.innerHeight - position.y - 10);
 
-      const newW = Math.max(420, Math.min(maxW, resizeStartRef.current.startW + deltaX));
-      const newH = Math.max(250, Math.min(maxH, resizeStartRef.current.startH + deltaY));
-
-      setPopupWidth(newW);
-      setPopupHeight(newH);
+      if (direction === 'both' || direction === 'width') {
+        const newW = Math.max(420, Math.min(maxW, resizeStartRef.current.startW + deltaX));
+        setPopupWidth(newW);
+      }
+      if (direction === 'both' || direction === 'height') {
+        const newH = Math.max(250, Math.min(maxH, resizeStartRef.current.startH + deltaY));
+        setPopupHeight(newH);
+      }
     };
     const onMouseUp = () => {
       isResizingRef.current = false;
@@ -399,7 +402,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const handleResizeTouchStart = (e: React.TouchEvent) => {
+  const handleResizeTouchStart = (direction: 'both' | 'height' | 'width' = 'both') => (e: React.TouchEvent) => {
     if (!e.touches[0]) return;
     e.stopPropagation();
     isResizingRef.current = true;
@@ -419,11 +422,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
       const maxW = Math.max(420, window.innerWidth - position.x - 10);
       const maxH = Math.max(250, window.innerHeight - position.y - 10);
 
-      const newW = Math.max(420, Math.min(maxW, resizeStartRef.current.startW + deltaX));
-      const newH = Math.max(250, Math.min(maxH, resizeStartRef.current.startH + deltaY));
-
-      setPopupWidth(newW);
-      setPopupHeight(newH);
+      if (direction === 'both' || direction === 'width') {
+        const newW = Math.max(420, Math.min(maxW, resizeStartRef.current.startW + deltaX));
+        setPopupWidth(newW);
+      }
+      if (direction === 'both' || direction === 'height') {
+        const newH = Math.max(250, Math.min(maxH, resizeStartRef.current.startH + deltaY));
+        setPopupHeight(newH);
+      }
     };
     const onTouchEnd = () => {
       isResizingRef.current = false;
@@ -477,7 +483,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
         maxWidth: `calc(100vw - ${Math.max(8, position.x + 8)}px)`,
         maxHeight: `calc(100vh - ${Math.max(8, position.y + 8)}px)`
       }}
-      className="bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
+      className="relative bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
     >
       {/* 1. Header Bar: Kéo thả vị trí */}
       <div
@@ -541,7 +547,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
       {/* 2. Body: Toàn bộ dàn hàng ngang, tuyệt đối không cuộn */}
       {!isMinimized && (
-        <div className="p-2 sm:p-2.5 space-y-1.5 flex flex-col overflow-y-auto no-scrollbar">
+        <div className="p-2 sm:p-2.5 space-y-1.5 flex flex-col flex-1 overflow-y-auto no-scrollbar">
           {/* Thanh chuyển chế độ & số tụ */}
           <div className="flex flex-wrap items-center justify-between gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-white/10 shadow-inner">
             <div className="flex items-center space-x-1">
@@ -1065,26 +1071,51 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             </div>
           )}
 
-          {/* Footer + Resize Handle */}
-          <div className="relative flex items-center justify-between text-[9px] text-slate-500 px-1 pt-0.5 pb-1 border-t border-white/5">
-            <span>Kéo header để di chuyển · Kéo góc ↘ đổi kích thước</span>
+          {/* Footer */}
+          <div className="relative flex items-center justify-between text-[9px] text-slate-500 px-2 pt-0.5 pb-1.5 border-t border-white/5">
+            <span>Kéo viền đáy/phải để đổi kích thước · Kéo header để di chuyển</span>
             <span className="text-amber-400/90 font-medium">Bố Cục Hàng Ngang Không Cuộn</span>
-            <div
-              onMouseDown={handleResizeMouseDown}
-              onTouchStart={handleResizeTouchStart}
-              className="absolute bottom-0 right-0 w-6 h-6 flex items-center justify-center cursor-se-resize text-amber-400/70 hover:text-amber-300 hover:scale-125 transition-all p-0.5 z-20"
-              title="Kéo góc này để kéo dài và mở rộng kích thước bảng nhập"
-            >
-              <svg width="12" height="12" viewBox="0 0 10 10" fill="currentColor">
-                <path d="M10 0L10 10L0 10Z" opacity="0.7" />
-                <circle cx="8.5" cy="8.5" r="1.2" />
-                <circle cx="5" cy="8.5" r="1.0" />
-                <circle cx="8.5" cy="5" r="1.0" />
-              </svg>
-            </div>
           </div>
         </div>
       )}
+
+      {/* =========================================================================
+          CÁC VIỀN KÉO THẢ KÍCH THƯỚC CHUẨN WINDOWS (BORDER RESIZERS)
+          ========================================================================= */}
+      {/* 1. Viền kéo cạnh đáy: Rộng suốt mép dưới, cao 10px, con trỏ ↕ cursor-ns-resize */}
+      <div
+        onMouseDown={handleResizeMouseDown('height')}
+        onTouchStart={handleResizeTouchStart('height')}
+        className="absolute bottom-0 left-0 right-5 h-2.5 cursor-ns-resize z-50 group flex items-end justify-center pb-0.5 hover:bg-amber-400/20 transition-colors"
+        title="Kéo viền này để tăng/giảm chiều cao bảng"
+      >
+        <div className="w-16 h-1 rounded-full bg-amber-400/40 group-hover:bg-amber-400 group-hover:h-1.5 transition-all shadow-sm" />
+      </div>
+
+      {/* 2. Viền kéo cạnh phải: Cao suốt mép phải, rộng 10px, con trỏ ↔ cursor-ew-resize */}
+      <div
+        onMouseDown={handleResizeMouseDown('width')}
+        onTouchStart={handleResizeTouchStart('width')}
+        className="absolute top-8 right-0 bottom-5 w-2.5 cursor-ew-resize z-50 group flex items-center justify-end pr-0.5 hover:bg-amber-400/20 transition-colors"
+        title="Kéo viền này để tăng/giảm chiều rộng bảng"
+      >
+        <div className="h-16 w-1 rounded-full bg-amber-400/40 group-hover:bg-amber-400 group-hover:w-1.5 transition-all shadow-sm" />
+      </div>
+
+      {/* 3. Góc kéo dưới phải: Kéo cả 2 chiều, con trỏ ↘ cursor-se-resize */}
+      <div
+        onMouseDown={handleResizeMouseDown('both')}
+        onTouchStart={handleResizeTouchStart('both')}
+        className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize z-50 flex items-center justify-center text-amber-400/70 hover:text-amber-300 hover:scale-125 transition-all p-0.5 hover:bg-amber-400/30 rounded-br-2xl"
+        title="Kéo góc này để kéo dãn cả chiều ngang và chiều cao"
+      >
+        <svg width="12" height="12" viewBox="0 0 10 10" fill="currentColor">
+          <path d="M10 0L10 10L0 10Z" opacity="0.8" />
+          <circle cx="8.5" cy="8.5" r="1.2" />
+          <circle cx="5" cy="8.5" r="1.0" />
+          <circle cx="8.5" cy="5" r="1.0" />
+        </svg>
+      </div>
     </div>
   );
 
