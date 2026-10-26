@@ -7,13 +7,13 @@ rtmp: false
 hls: false
 
 webrtc: true
-webrtcAddress: 127.0.0.1:8888
+webrtcAddress: :8889
 webrtcEncryption: false
 
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: true
-webrtcAdditionalHosts: ["161.248.146.201", "streamslo.date"]
+webrtcAdditionalHosts: ["192.168.1.197", "127.0.0.1", "161.248.146.201", "streamslo.date"]
 
 paths:
   all_others:

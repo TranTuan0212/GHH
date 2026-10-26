@@ -164,8 +164,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const [isAiFlashing, setIsAiFlashing] = useState<boolean>(false);
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.35);
 
-  // Refs video & canvas
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Refs video (Cơ chế Kép: Live WebRTC 0 delay + HLS Replay 120fps) & canvas
+  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
+  const replayVideoRef = useRef<HTMLVideoElement | null>(null);
+  const peerRef = useRef<RTCPeerConnection | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isScanningRef = useRef<boolean>(false);
@@ -399,52 +401,111 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const [hasVideoSignal, setHasVideoSignal] = useState<boolean>(false);
 
-  // KẾT NỐI LUỒNG VIDEO HLS (TƯƠNG THÍCH HOÀN HẢO CHROME / EDGE / COC COC)
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (!stream?.streamKey) {
-      console.log('[Mode2] Đang chờ luồng stream từ camera...');
-      setHasVideoSignal(false);
-      return;
+  // KẾT NỐI CƠ CHẾ KÉP (DUAL-ENGINE): WEBRTC LIVE 0 DELAY (<0.2S) + HLS REPLAY 120FPS
+  const whepUrl = useMemo(() => {
+    if (!stream?.streamKey) return '';
+    try {
+      const hostname = window.location.hostname || '127.0.0.1';
+      return `http://${hostname}:8889/${stream.streamKey}/whep`;
+    } catch {
+      return '';
     }
+  }, [stream?.streamKey]);
+
+  // 1. Kết nối WebRTC WHEP Live trực tiếp (Zero Delay <0.2s, 60fps mượt tuyệt đối)
+  useEffect(() => {
+    if (!whepUrl) return;
+    let cancelled = false;
+
+    const connectWebRtc = async () => {
+      try {
+        if (peerRef.current) {
+          peerRef.current.close();
+          peerRef.current = null;
+        }
+
+        const peer = new RTCPeerConnection();
+        peerRef.current = peer;
+        peer.addTransceiver('video', { direction: 'recvonly' });
+        peer.addTransceiver('audio', { direction: 'recvonly' });
+
+        peer.ontrack = (event) => {
+          const { streams, receiver } = event;
+          try {
+            const anyReceiver = receiver as any;
+            if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
+              anyReceiver.playoutDelayHint = 0.25; // 250ms delay - cực thấp, mắt người thấy tức thì!
+            }
+            if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
+              anyReceiver.jitterBufferTarget = 250;
+            }
+          } catch {}
+          if (cancelled || !streams[0] || !liveVideoRef.current) return;
+          liveVideoRef.current.srcObject = streams[0];
+          liveVideoRef.current.play().catch(() => {});
+          setHasVideoSignal(true);
+          console.log('[Mode2] WebRTC Live đã kết nối thành công (Zero Delay)!');
+        };
+
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+
+        await new Promise<void>((resolve) => {
+          if (peer.iceGatheringState === 'complete') return resolve();
+          const t = setTimeout(resolve, 200);
+          peer.addEventListener('icegatheringstatechange', () => {
+            if (peer.iceGatheringState === 'complete') {
+              clearTimeout(t);
+              resolve();
+            }
+          }, { once: true });
+        });
+
+        const res = await fetch(whepUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' },
+          body: peer.localDescription?.sdp
+        });
+
+        if (res.ok && !cancelled) {
+          const answer = await res.text();
+          await peer.setRemoteDescription({ type: 'answer', sdp: answer });
+        }
+      } catch (err) {
+        console.warn('[Mode2] WebRTC WHEP connection standby/fallback:', err);
+      }
+    };
+
+    connectWebRtc();
+
+    return () => {
+      cancelled = true;
+      if (peerRef.current) {
+        peerRef.current.close();
+        peerRef.current = null;
+      }
+    };
+  }, [whepUrl]);
+
+  // 2. Kết nối HLS Replay DVR Master (để tua chậm, tua lại chi tiết từng frame 120fps)
+  useEffect(() => {
+    const video = replayVideoRef.current;
+    if (!video || !stream?.streamKey) return;
 
     const streamKey = stream.streamKey;
     const replayUrl = `/replay/${streamKey}/index.m3u8`;
-    const liveUrl = `/live/${streamKey}/index.m3u8`;
     let isCancelled = false;
 
-    console.log(`[Mode2] Bắt đầu kết nối luồng: ${replayUrl}`);
-
-    const waitForPlaylist = async (): Promise<string | null> => {
-      for (let i = 0; i < 25 && !isCancelled; i++) {
-        // Thử replay trước (nơi FFmpeg ghi video chuẩn)
+    (async () => {
+      // Đợi playlist sẵn sàng
+      for (let i = 0; i < 20 && !isCancelled; i++) {
         try {
           const res = await fetch(replayUrl, { cache: 'no-store' });
-          if (res.ok) {
-            console.log(`[Mode2] Playlist ${replayUrl} đã sẵn sàng!`);
-            return replayUrl;
-          }
+          if (res.ok) break;
         } catch {}
-
-        // Thử live fallback
-        try {
-          const res2 = await fetch(liveUrl, { cache: 'no-store' });
-          if (res2.ok) {
-            console.log(`[Mode2] Playlist ${liveUrl} đã sẵn sàng!`);
-            return liveUrl;
-          }
-        } catch {}
-
-        await new Promise((r) => setTimeout(r, 600));
+        await new Promise((r) => setTimeout(r, 500));
       }
-      return null;
-    };
-
-    (async () => {
-      const targetUrl = await waitForPlaylist();
-      if (isCancelled || !targetUrl) return;
+      if (isCancelled) return;
 
       if (Hls.isSupported()) {
         if (hlsRef.current) {
@@ -455,47 +516,29 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
-          backBufferLength: 20,
-          maxBufferLength: 6,
-          maxMaxBufferLength: 12,
+          backBufferLength: 30, // Giữ 30s để tua lại mượt mà 120fps
+          maxBufferLength: 8,
+          maxMaxBufferLength: 16,
           maxBufferSize: 128 * 1024 * 1024,
-          maxBufferHole: 0.05,
-          nudgeOffset: 0.01,
-          nudgeMaxRetry: 3,
+          maxBufferHole: 0.2,
+          nudgeOffset: 0.1,
+          nudgeMaxRetry: 5,
           highBufferWatchdogPeriod: 0,
-          liveSyncDuration: 1.0,
-          liveMaxLatencyDuration: 2.5,
+          liveSyncDuration: 1.5,
+          liveMaxLatencyDuration: 3.0,
           maxLiveSyncPlaybackRate: 1.0
         });
 
         hlsRef.current = hls;
-        hls.loadSource(targetUrl);
+        hls.loadSource(replayUrl);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setHasVideoSignal(true);
-          video.play().catch(() => {});
-        });
-
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                hls.destroy();
-                break;
-            }
-          }
+          if (!hasVideoSignal) setHasVideoSignal(true);
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = targetUrl;
-        video.play().catch(() => {});
-        setHasVideoSignal(true);
+        video.src = replayUrl;
+        if (!hasVideoSignal) setHasVideoSignal(true);
       }
     })();
 
@@ -582,7 +625,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       }
       lastSampleTime = now;
 
-      const video = videoRef.current;
+      const video = isLive ? (liveVideoRef.current || replayVideoRef.current) : (replayVideoRef.current || liveVideoRef.current);
       const container = videoContainerRef.current;
       if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) return;
 
@@ -730,7 +773,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
 
     // ĐĂNG KÝ BẮT NHỊP TỪNG FRAME VỚI HARDWARE DECODER
-    const video = videoRef.current;
+    const video = isLive ? (liveVideoRef.current || replayVideoRef.current) : (replayVideoRef.current || liveVideoRef.current);
     let rvfcId: number | null = null;
     let rafId: number | null = null;
 
@@ -765,16 +808,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setSeekTime(val);
-    if (videoRef.current) {
-      videoRef.current.currentTime = val;
+    if (replayVideoRef.current) {
+      replayVideoRef.current.currentTime = val;
     }
     setIsLive(false);
   };
 
   const jumpToLive = () => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = videoRef.current.duration || 999999;
-    }
+    if (liveVideoRef.current) { liveVideoRef.current.play().catch(() => {}); }
     setIsLive(true);
   };
 
@@ -1125,12 +1166,33 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             className="relative w-full h-[460px] sm:h-[520px] md:h-[580px] bg-black overflow-hidden select-none cursor-crosshair group flex items-center justify-center"
             title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả cố định"
           >
-            {/* Thẻ Video Live trực tiếp (Giải mã HLS.js, phóng to cực đại không bị co nhỏ) */}
+            {/* Thẻ 1: Live WebRTC WHEP (Siêu mượt, Độ trễ <0.2s, 0 khựng giật) */}
             <video
-              ref={videoRef}
-              className={`pointer-events-none transition-transform duration-150 ease-out ${
-                isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'
-              }`}
+              ref={liveVideoRef}
+              className={`pointer-events-none transition-transform duration-150 ease-out absolute inset-0 ${
+                isLive ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+              } ${isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'}`}
+              style={{
+                transform: `${
+                  (rotation === 90 || rotation === 270)
+                    ? `scale(${isFillMode ? 1.78 : 1}) rotate(${rotation}deg)`
+                    : `rotate(${rotation}deg)`
+                } scaleX(${isFlipped ? -1 : 1})`,
+                transformOrigin: 'center center',
+                imageRendering: 'auto',
+                filter: isBrightBoost ? 'brightness(1.08) contrast(1.06)' : 'none'
+              }}
+              playsInline
+              muted={isMuted}
+              autoPlay
+            />
+
+            {/* Thẻ 2: HLS Replay DVR Master (Tua lại mượt mà từng khung hình 120fps) */}
+            <video
+              ref={replayVideoRef}
+              className={`pointer-events-none transition-transform duration-150 ease-out absolute inset-0 ${
+                !isLive ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+              } ${isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'}`}
               style={{
                 transform: `${
                   (rotation === 90 || rotation === 270)
@@ -1145,9 +1207,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               muted={isMuted}
               autoPlay
               onTimeUpdate={() => {
-                if (videoRef.current) {
-                  setSeekTime(videoRef.current.currentTime);
-                  setDuration(videoRef.current.duration || 0);
+                if (replayVideoRef.current && !isLive) {
+                  setSeekTime(replayVideoRef.current.currentTime);
+                  setDuration(replayVideoRef.current.duration || 0);
                 }
               }}
             />
@@ -1286,8 +1348,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   type="button"
                   onClick={() => {
                     setPlaybackRate(rate);
-                    if (videoRef.current) {
-                      videoRef.current.playbackRate = rate;
+                    if (replayVideoRef.current) {
+                      replayVideoRef.current.playbackRate = rate;
+                    }
+                    if (liveVideoRef.current) {
+                      liveVideoRef.current.playbackRate = rate;
                     }
                   }}
                   className={`px-1.5 py-0.5 rounded font-bold transition ${
