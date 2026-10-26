@@ -1002,7 +1002,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   // Gom toàn bộ entries theo groupIndex
   const groupedItems: { [key: number]: DataEntry[] } = {};
-  for (let i = 1; i <= numGroups; i++) {
+  for (let i = 0; i <= numGroups; i++) {
     groupedItems[i] = [];
   }
 
@@ -1016,9 +1016,26 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
 
   // Dự đoán lượt chia vòng kế tiếp theo thứ tự tuần tự chuẩn như cũ (Round-Robin: 1 -> 2 -> 3 -> ... -> N -> 1 -> 2 -> 3...)
   const nextSequenceOrder = entries.length + 1;
-  const nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
+  let nextGroupIndex = ((nextSequenceOrder - 1) % numGroups) + 1;
+  if (gameMode === 'poker') {
+    const commCards = groupedItems[0] || [];
+    const allPlayersHave2Cards = Array.from({ length: numGroups }).every(
+      (_, i) => (groupedItems[i + 1] || []).length >= 2
+    );
+
+    if (allPlayersHave2Cards && commCards.length < 5) {
+      nextGroupIndex = 0; // Tự động vào Bài Chung!
+    } else if (!allPlayersHave2Cards) {
+      for (let i = 1; i <= numGroups; i++) {
+        if ((groupedItems[i] || []).length < 2) {
+          nextGroupIndex = i;
+          break;
+        }
+      }
+    }
+  }
   const targetGroupAll = groupedItems[nextGroupIndex] || [];
-  const maxInitialCards = gameMode === 'poker' ? 2 : (gameMode === '3cards' ? 3 : 2);
+  const maxInitialCards = gameMode === 'poker' ? (nextGroupIndex === 0 ? 5 : 2) : (gameMode === '3cards' ? 3 : 2);
 
   // Tính toán đáp án và ĐỐI CHIẾU XẾP HẠNG TẤT CẢ CÁC NHÓM
   const comparisonResult = useMemo(() => {
@@ -1115,7 +1132,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
       const gName = groupNames[targetGroup] || `Nhóm ${targetGroup}`;
       showToast(`✨ Đã gán "${cardValue}" vào ${gName}`);
 
-      // Nếu người dùng đang CHỌN ĐÍCH DANH nhóm này để điền tiếp vào:
+      // Nếu người dùng đang CHỌN ĐÍCH DANH nhóm này để điền tiếp vào (kể cả nhóm 0 - Bài Chung):
       // GIỮ NGUYÊN nhóm này để tiếp tục điền các lá tiếp theo!
       if (selectedGroupTarget !== null) {
         setCardPickerTarget({
@@ -1123,11 +1140,10 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           groupNum: selectedGroupTarget
         });
       } else {
-        // Tự động chuyển nhóm mục tiêu sang nhóm tiếp theo theo vòng tuần tự
-        const nextG = (targetGroup % numGroups) + 1;
+        // Tự động chuyển nhóm mục tiêu sang nhóm tiếp theo (Poker tự động nhảy sang Bài Chung khi đủ 2 lá/tụ)
         setCardPickerTarget({
           mode: 'add',
-          groupNum: nextG
+          groupNum: nextGroupIndex
         });
       }
     }
@@ -1170,9 +1186,9 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
         return;
       }
       // Nếu người dùng đã chọn đích danh nhóm (cả trong popup và ngoài) -> ghi nhận vào nhóm đó
-      const targetG = selectedGroupTarget || undefined;
+      const targetG = selectedGroupTarget !== null ? selectedGroupTarget : undefined;
       onAddCard(check.normalizedRank, numGroups, targetG);
-      const gName = targetG ? (groupNames[targetG] || `Nhóm ${targetG}`) : `vòng tuần tự`;
+      const gName = targetG === 0 ? '👑 Bài Chung' : targetG ? (groupNames[targetG] || `Nhóm ${targetG}`) : `vòng tuần tự`;
       showToast(`✨ Đã ghi nhận mã "${check.normalizedRank}" (${gName})`);
       setManualInput('');
       return;
@@ -1508,7 +1524,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           {selectedGroupTarget !== null ? (
             <div className="flex items-center space-x-1">
               <span className="px-2 py-0.5 rounded-lg font-black border text-xs flex items-center space-x-1 bg-amber-500 text-slate-950 border-amber-300 shadow-sm animate-pulse">
-                <span>🎯 Điền N{selectedGroupTarget}</span>
+                <span>{selectedGroupTarget === 0 ? '👑 Bài Chung' : `🎯 Điền N${selectedGroupTarget}`}</span>
               </span>
               <button
                 type="button"
@@ -1526,7 +1542,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
           ) : (
             <span className="px-1.5 py-0.5 rounded font-bold border text-[10px] sm:text-[11px] flex items-center space-x-1 bg-indigo-600/40 text-indigo-200 border-indigo-500/40">
               <span className="text-slate-400 text-[10px] hidden sm:inline">Vòng kế:</span>
-              <span>N{nextGroupIndex}</span>
+              <span>{nextGroupIndex === 0 ? '👑 Bài Chung' : `N${nextGroupIndex}`}</span>
               <span className="text-[9px] font-normal opacity-90">
                 (Mục {targetGroupAll.length + 1}/{maxInitialCards})
               </span>
