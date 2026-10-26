@@ -457,7 +457,7 @@ io.on('connection', (socket) => {
                 const existingEntries = db_1.db.getCardEntries(targetRoomId);
                 const normalized = normalizeDataItem(itemStr);
                 const sequenceOrder = existingEntries.length + 1;
-                const groupIndex = targetGroup ? parseInt(targetGroup) : (((sequenceOrder - 1) % numGroups) + 1);
+                const groupIndex = (targetGroup !== undefined && targetGroup !== null && targetGroup !== '') ? parseInt(targetGroup) : (((sequenceOrder - 1) % numGroups) + 1);
                 const newEntry = {
                     id: 'item-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
                     streamId: targetRoomId,

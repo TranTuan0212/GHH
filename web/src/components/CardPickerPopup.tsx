@@ -855,7 +855,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                   </span>
 
                   {/* 13 Phím số A ➔ K trải ngang */}
-                  <div className="grid grid-cols-13 gap-0.5 flex-1">
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(13, minmax(0, 1fr))',
+                      gap: '2px'
+                    }}
+                    className="flex-1"
+                  >
                     {POKER_RANKS.map((r) => {
                       const cardVal = `${r.num}${suit.symbol}`;
                       const isCurrent = target.mode === 'edit' && target.currentValue === cardVal;
