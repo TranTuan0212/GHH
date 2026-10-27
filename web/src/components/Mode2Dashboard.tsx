@@ -483,10 +483,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             try {
               const anyReceiver = receiver as any;
               if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
-                anyReceiver.playoutDelayHint = 0.25;
+                anyReceiver.playoutDelayHint = 0;
               }
               if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
-                anyReceiver.jitterBufferTarget = 250;
+                anyReceiver.jitterBufferTarget = 0;
               }
             } catch {}
             if (cancelled || !streams[0] || !liveVideoRef.current) return;

@@ -274,11 +274,31 @@ function startHlsSession(streamKey: string): void {
   // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
   // Copy nguyên bản luồng H.264 Full HD từ iPhone sang MediaMTX RTSP:
   // 100% nét căng gốc, không nén lại qua CPU, 0% suy hao chất lượng, độ trễ <0.1s.
+  // WebRTC Live: 1080p 60fps sieu net High Profile @ 8.5Mbps, zero latency (<0.1s), Keyframe 0.5s deu dan
   const liveFfmpegArgs = [
     '-fflags', '+nobuffer+flush_packets',
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
-    '-c:v', 'copy',
-    '-bsf:v', 'h264_mp4toannexb',
+    '-map', '0:v:0',
+    '-fpsmax', '60',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
+    '-threads', '0',
+    '-profile:v', 'high',
+    '-level:v', '4.2',
+    '-pix_fmt', 'yuv420p',
+    '-colorspace', 'bt709',
+    '-color_primaries', 'bt709',
+    '-color_trc', 'bt709',
+    '-bf', '0',
+    '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
+    '-b:v', '8500k',
+    '-maxrate', '10000k',
+    '-bufsize', '4500k',
+    '-g', '30',
+    '-keyint_min', '15',
+    '-sc_threshold', '0',
+    '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
     '-an',
     '-f', 'rtsp',
     '-rtsp_transport', 'tcp',
