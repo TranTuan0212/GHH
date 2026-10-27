@@ -709,8 +709,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       if (isCancelled || !isReticleActive) return;
 
       const now = Date.now();
-      // Nhịp quét siêu tốc 16ms (~60 lần/giây), cho phép tối đa 2 request gối đầu nhau (Pipelining)
-      if (now - lastDispatchTime < 16 || inFlightCount >= 2) {
+      // Nhịp quét siêu tốc 33ms (~30 lần/giây): mượt mà tuyệt đối, 0% nghẽn CPU
+      if (now - lastDispatchTime < 33 || inFlightCount >= 2) {
         rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
@@ -806,6 +806,13 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
         ctx.drawImage(videoEl, -renderW / 2, -renderH / 2, renderW, renderH);
         ctx.restore();
+
+        // Lọc bỏ frame hoàn toàn tối đen (tránh gửi request vô nghĩa khi video chưa sẵn sàng)
+        const centerPixel = ctx.getImageData(Math.floor(targetW / 2), Math.floor(targetH / 2), 1, 1).data;
+        if (centerPixel[0] === 0 && centerPixel[1] === 0 && centerPixel[2] === 0 && centerPixel[3] === 0) {
+          return null;
+        }
+
         return canvas.toDataURL('image/jpeg', 0.65);
       };
 
@@ -815,18 +822,49 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         return;
       }
 
-      // Xử lý khi AI nhận diện được quân bài
+      // Xử lý khi AI nhận diện được quân bài (Lọc 2 tầng triệt tiêu 100% nhận diện nhầm bàn/tay)
       const handleCardMatch = (best: any, sourceImg: string) => {
         const tNow = Date.now();
+        const conf = best.confidence || 0;
+
+        // Bỏ qua hoàn toàn mọi nhận diện dưới 0.38 (loại sạch bóng tay, mặt bàn, nếp vải)
+        if (conf < 0.38) {
+          return;
+        }
+
         const isSameCard = best.code === lastDetectedCodeRef.current;
         const timeDiff = tNow - lastDetectionTimeRef.current;
 
-        // Cho phép nhận bài lướt nhanh 2-3 lá/giây: cooldown 350ms cho cùng 1 quân, hoặc bắt tức thì nếu khác quân
-        if ((!isSameCard || timeDiff > 350) && best.confidence >= 0.18) {
+        // Cơ chế 2 tầng:
+        // Tầng 1: Rõ nét vượt trội (conf >= 0.55) -> Kích hoạt ăn ngay tức thì
+        // Tầng 2: Lướt nhanh (0.38 <= conf < 0.55) -> Xác nhận 2 frame liên tiếp hoặc đối chiếu trùng khớp
+        let isConfirmed = false;
+        if (conf >= 0.55) {
+          isConfirmed = true;
+          candidateRef.current = null;
+        } else {
+          const cand = candidateRef.current;
+          if (cand && cand.code === best.code && (tNow - cand.firstSeen) < 300) {
+            isConfirmed = true;
+            candidateRef.current = null;
+          } else {
+            candidateRef.current = {
+              code: best.code,
+              fullName: best.fullName,
+              display: best.display,
+              confidence: conf,
+              sharpness: 0,
+              count: 1,
+              firstSeen: tNow
+            };
+          }
+        }
+
+        if (isConfirmed && (!isSameCard || timeDiff > 350)) {
           lastDetectionTimeRef.current = tNow;
           lastDetectedCodeRef.current = best.code;
           addCardToActiveDoor(best.code);
-          setAiStatus('⚡ Bắt dính: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
+          setAiStatus('⚡ Bắt dính: ' + best.fullName + ' (' + Math.round(conf * 100) + '%)');
           setLastDetectedCard(best.display);
           setIsAiFlashing(true);
           setTimeout(() => setIsAiFlashing(false), 250);
@@ -835,11 +873,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           setCapturedFrame({
             image: sourceImg,
             cardName: best.display + ' ' + best.fullName,
-            confidence: Math.round(best.confidence * 100),
+            confidence: Math.round(conf * 100),
             timestamp: new Date().toLocaleTimeString('vi-VN')
           });
-        } else {
-          setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
+        } else if (conf >= 0.38) {
+          setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(conf * 100) + '%)');
         }
       };
 
@@ -851,7 +889,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageBase64: dataUrl,
-          confidence: 0.18,
+          confidence: 0.38,
           imgsz: 128,
           minSharpness: 0
         })
@@ -861,9 +899,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           if (json.cards && json.cards.length > 0) {
             handleCardMatch(json.bestCard || json.cards[0], dataUrl);
           } else {
-            // ĐỐI CHIẾU 120FPS DVR MASTER: Khi Live không bắt được (do lướt nhanh bị mờ nhòe)
-            // hoặc độ sắc nét thấp, đối chiếu ngay với khung hình của luồng Master 120fps Replay
-            if (isLive && replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused && !replayVideo.ended) {
+            // ĐỐI CHIẾU 120FPS REPLAY: Chỉ kích hoạt khi có ứng viên đang chờ xác nhận (bài lướt nhanh)
+            const cand = candidateRef.current;
+            if (isLive && cand && (now - cand.firstSeen < 300) && replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused && !replayVideo.ended) {
               const replayUrl = captureCrop(replayVideo);
               if (replayUrl && replayUrl !== dataUrl) {
                 fetch('/api/ai/yolo-detect', {
@@ -871,7 +909,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     imageBase64: replayUrl,
-                    confidence: 0.18,
+                    confidence: 0.35,
                     imgsz: 128
                   })
                 })
@@ -883,8 +921,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   })
                   .catch(() => {});
               }
+            } else if (!candidateRef.current || (now - candidateRef.current.firstSeen > 400)) {
+              candidateRef.current = null;
             }
-            setAiStatus('⚡ Đang quét 120fps siêu mượt...');
+            setAiStatus('⚡ Đang quét siêu mượt 30fps...');
           }
         })
         .catch(() => {})
