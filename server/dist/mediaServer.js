@@ -50,7 +50,7 @@ const HLS_SEGMENT_SECONDS = 0.5;
 // Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
 // avoids the visibly choppy 30fps motion in the operator's live monitor. The master
 // still keeps every source frame for slow motion.
-const LIVE_PREVIEW_FPS = parseInt(process.env.LIVE_PREVIEW_FPS || '', 10) || 60;
+const LIVE_PREVIEW_FPS = parseInt(process.env.LIVE_PREVIEW_FPS || '', 10) || 120;
 // Track active HLS sessions: streamKey -> HlsSession
 exports.hlsSessions = new Map();
 let streamEndedHandler;
@@ -297,11 +297,11 @@ function startHlsSession(streamKey) {
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
         // Live 2.5 Mbps (Max 3.0 Mbps, bufsize 1500k): nhẹ băng thông để trình duyệt tải ngầm các segment .ts Replay 120fps tức thì không bị nghẽn
-        '-b:v', '2500k',
-        '-maxrate', '3000k',
-        '-bufsize', '1500k',
-        '-g', '30',
-        '-keyint_min', '15',
+        '-b:v', '3500k',
+        '-maxrate', '4500k',
+        '-bufsize', '2000k',
+        '-g', String(Math.round(LIVE_PREVIEW_FPS * 0.5)),
+        '-keyint_min', String(Math.round(LIVE_PREVIEW_FPS * 0.25)),
         '-sc_threshold', '0',
         // Keyframe 0.5s: cân bằng hoàn hảo giữa độ nét và khả năng tự hồi phục tức thì trên UDP WebRTC
         '-force_key_frames', 'expr:gte(t,n_forced*0.5)',

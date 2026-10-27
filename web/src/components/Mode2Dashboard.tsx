@@ -709,20 +709,23 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       if (isCancelled || !isReticleActive) return;
 
       const now = Date.now();
-      // Nhịp quét siêu tốc 28ms (~35 lần/giây), cho phép tối đa 2 request gối đầu nhau (Pipelining)
-      if (now - lastDispatchTime < 28 || inFlightCount >= 2) {
+      // Nhịp quét siêu tốc 16ms (~60 lần/giây), cho phép tối đa 2 request gối đầu nhau (Pipelining)
+      if (now - lastDispatchTime < 16 || inFlightCount >= 2) {
         rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
 
-      const video = (isLive && hasWebRtcSignal && liveVideoRef.current && liveVideoRef.current.videoWidth > 0 && !liveVideoRef.current.paused)
-        ? liveVideoRef.current
-        : ((replayVideoRef.current && replayVideoRef.current.videoWidth > 0 && !replayVideoRef.current.paused)
-          ? replayVideoRef.current
-          : (liveVideoRef.current || replayVideoRef.current));
+      const liveVideo = liveVideoRef.current;
+      const replayVideo = replayVideoRef.current;
       const container = videoContainerRef.current;
 
-      if (!video || !container || video.videoWidth === 0 || video.paused || video.ended) {
+      const activeVideo = (isLive && hasWebRtcSignal && liveVideo && liveVideo.videoWidth > 0 && !liveVideo.paused)
+        ? liveVideo
+        : ((replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused)
+          ? replayVideo
+          : (liveVideo || replayVideo));
+
+      if (!activeVideo || !container || activeVideo.videoWidth === 0 || activeVideo.paused || activeVideo.ended) {
         rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
@@ -735,79 +738,113 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         return;
       }
 
-      if (!canvasRef.current) {
-        canvasRef.current = document.createElement('canvas');
-      }
-      const canvas = canvasRef.current;
-      // Auto-Padding: Mở rộng vùng quét thêm +25% quanh khung ngắm để bắt trọn bài lướt nhanh hoặc bài xoay nghiêng
-      const padW = reticleSize.width * 0.25;
-      const padH = reticleSize.height * 0.25;
-      const captureW = reticleSize.width + padW * 2;
-      const captureH = reticleSize.height + padH * 2;
+      // Hàm chụp cắt ảnh chuẩn xác từ bất kỳ nguồn video nào (Live hoặc Replay 120fps)
+      const captureCrop = (videoEl: HTMLVideoElement): string | null => {
+        if (!videoEl || videoEl.videoWidth === 0 || videoEl.paused || videoEl.ended) return null;
+        if (!canvasRef.current) {
+          canvasRef.current = document.createElement('canvas');
+        }
+        const canvas = canvasRef.current;
+        // Auto-Padding: Mở rộng vùng quét thêm +25% quanh khung ngắm để bắt trọn bài lướt nhanh hoặc bài xoay nghiêng
+        const padW = reticleSize.width * 0.25;
+        const padH = reticleSize.height * 0.25;
+        const captureW = reticleSize.width + padW * 2;
+        const captureH = reticleSize.height + padH * 2;
 
-      const targetW = 200; // Chuẩn phân giải tối ưu cho YOLOv8 CPU
-      const targetH = Math.max(60, Math.round(targetW * (captureH / captureW)));
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
-      }
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) {
+        const targetW = 200; // Chuẩn phân giải tối ưu cho YOLOv8 CPU
+        const targetH = Math.max(60, Math.round(targetW * (captureH / captureW)));
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return null;
+
+        ctx.clearRect(0, 0, targetW, targetH);
+        ctx.save();
+
+        const s = targetW / captureW;
+        ctx.scale(s, s);
+        ctx.translate(-(reticlePos.x - padW), -(reticlePos.y - padH));
+        ctx.translate(W / 2, H / 2);
+
+        if (rotation === 90 || rotation === 270) {
+          const fillScale = isFillMode ? 1.78 : 1;
+          ctx.scale(fillScale, fillScale);
+          ctx.rotate((rotation * Math.PI) / 180);
+        } else if (rotation === 180) {
+          ctx.rotate(Math.PI);
+        }
+        if (isFlipped) {
+          ctx.scale(-1, 1);
+        }
+
+        const vw = videoEl.videoWidth;
+        const vh = videoEl.videoHeight;
+        let renderW = W;
+        let renderH = H;
+        const containerRatio = W / H;
+        const videoRatio = vw / vh;
+
+        if (!isFillMode) {
+          if (videoRatio > containerRatio) {
+            renderW = W;
+            renderH = W / videoRatio;
+          } else {
+            renderH = H;
+            renderW = H * videoRatio;
+          }
+        } else {
+          if (videoRatio > containerRatio) {
+            renderH = H;
+            renderW = H * videoRatio;
+          } else {
+            renderW = W;
+            renderH = W / videoRatio;
+          }
+        }
+
+        ctx.drawImage(videoEl, -renderW / 2, -renderH / 2, renderW, renderH);
+        ctx.restore();
+        return canvas.toDataURL('image/jpeg', 0.65);
+      };
+
+      const dataUrl = captureCrop(activeVideo);
+      if (!dataUrl) {
         rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
 
-      ctx.clearRect(0, 0, targetW, targetH);
-      ctx.save();
+      // Xử lý khi AI nhận diện được quân bài
+      const handleCardMatch = (best: any, sourceImg: string) => {
+        const tNow = Date.now();
+        const isSameCard = best.code === lastDetectedCodeRef.current;
+        const timeDiff = tNow - lastDetectionTimeRef.current;
 
-      const s = targetW / captureW;
-      ctx.scale(s, s);
-      ctx.translate(-(reticlePos.x - padW), -(reticlePos.y - padH));
-      ctx.translate(W / 2, H / 2);
+        // Cho phép nhận bài lướt nhanh 2-3 lá/giây: cooldown 350ms cho cùng 1 quân, hoặc bắt tức thì nếu khác quân
+        if ((!isSameCard || timeDiff > 350) && best.confidence >= 0.18) {
+          lastDetectionTimeRef.current = tNow;
+          lastDetectedCodeRef.current = best.code;
+          addCardToActiveDoor(best.code);
+          setAiStatus('⚡ Bắt dính: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
+          setLastDetectedCard(best.display);
+          setIsAiFlashing(true);
+          setTimeout(() => setIsAiFlashing(false), 250);
 
-      if (rotation === 90 || rotation === 270) {
-        const fillScale = isFillMode ? 1.78 : 1;
-        ctx.scale(fillScale, fillScale);
-        ctx.rotate((rotation * Math.PI) / 180);
-      } else if (rotation === 180) {
-        ctx.rotate(Math.PI);
-      }
-      if (isFlipped) {
-        ctx.scale(-1, 1);
-      }
-
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      let renderW = W;
-      let renderH = H;
-      const containerRatio = W / H;
-      const videoRatio = vw / vh;
-
-      if (!isFillMode) {
-        if (videoRatio > containerRatio) {
-          renderW = W;
-          renderH = W / videoRatio;
+          // Hiển thị frame ảnh bắt được lên góc phải HUD
+          setCapturedFrame({
+            image: sourceImg,
+            cardName: best.display + ' ' + best.fullName,
+            confidence: Math.round(best.confidence * 100),
+            timestamp: new Date().toLocaleTimeString('vi-VN')
+          });
         } else {
-          renderH = H;
-          renderW = H * videoRatio;
+          setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
         }
-      } else {
-        if (videoRatio > containerRatio) {
-          renderH = H;
-          renderW = H * videoRatio;
-        } else {
-          renderW = W;
-          renderH = W / videoRatio;
-        }
-      }
+      };
 
-      ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
-      ctx.restore();
-
-      // Nén ảnh siêu nhẹ ~4KB (chất lượng 0.65) để gửi tức thì trong 2ms
       lastDispatchTime = now;
       inFlightCount++;
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
 
       fetch('/api/ai/yolo-detect', {
         method: 'POST',
@@ -822,32 +859,32 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         .then((r) => r.json())
         .then((json) => {
           if (json.cards && json.cards.length > 0) {
-            const best = json.bestCard || json.cards[0];
-            const tNow = Date.now();
-            const isSameCard = best.code === lastDetectedCodeRef.current;
-            const timeDiff = tNow - lastDetectionTimeRef.current;
-
-            if ((!isSameCard || timeDiff > 700) && best.confidence >= 0.18) {
-              lastDetectionTimeRef.current = tNow;
-              lastDetectedCodeRef.current = best.code;
-              addCardToActiveDoor(best.code);
-              setAiStatus('⚡ Bắt dính: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
-              setLastDetectedCard(best.display);
-              setIsAiFlashing(true);
-              setTimeout(() => setIsAiFlashing(false), 300);
-
-              // Hiển thị frame ảnh bắt được lên góc phải HUD
-              setCapturedFrame({
-                image: dataUrl,
-                cardName: best.display + ' ' + best.fullName,
-                confidence: Math.round(best.confidence * 100),
-                timestamp: new Date().toLocaleTimeString('vi-VN')
-              });
-            } else {
-              setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
-            }
+            handleCardMatch(json.bestCard || json.cards[0], dataUrl);
           } else {
-            setAiStatus('⚡ Đang quét siêu tốc 35fps...');
+            // ĐỐI CHIẾU 120FPS DVR MASTER: Khi Live không bắt được (do lướt nhanh bị mờ nhòe)
+            // hoặc độ sắc nét thấp, đối chiếu ngay với khung hình của luồng Master 120fps Replay
+            if (isLive && replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused && !replayVideo.ended) {
+              const replayUrl = captureCrop(replayVideo);
+              if (replayUrl && replayUrl !== dataUrl) {
+                fetch('/api/ai/yolo-detect', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    imageBase64: replayUrl,
+                    confidence: 0.18,
+                    imgsz: 128
+                  })
+                })
+                  .then((r2) => r2.json())
+                  .then((jsonReplay) => {
+                    if (jsonReplay.cards && jsonReplay.cards.length > 0) {
+                      handleCardMatch(jsonReplay.bestCard || jsonReplay.cards[0], replayUrl);
+                    }
+                  })
+                  .catch(() => {});
+              }
+            }
+            setAiStatus('⚡ Đang quét 120fps siêu mượt...');
           }
         })
         .catch(() => {})
