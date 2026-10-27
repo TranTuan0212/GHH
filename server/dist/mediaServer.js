@@ -8,60 +8,37 @@ exports.setStreamEndedHandler = setStreamEndedHandler;
 exports.cleanupStreamSession = cleanupStreamSession;
 exports.stopFfmpegOnly = stopFfmpegOnly;
 exports.resetReplaySession = resetReplaySession;
+exports.startHlsSession = startHlsSession;
 exports.timeoutCheckOnce = timeoutCheckOnce;
 exports.runCronCleanupOnce = runCronCleanupOnce;
 exports.getCleanupStatus = getCleanupStatus;
+exports.getMediaStorageStats = getMediaStorageStats;
 exports.startNativeMediaServer = startNativeMediaServer;
-// @ts-ignore
-const node_media_server_1 = __importDefault(require("node-media-server"));
 const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const db_1 = require("./db");
 /**
- * Custom HLS Segmenter — bỏ qua NMS trans pipeline (có bug trên Windows).
+ * MediaMTX-Powered Industrial Media Engine
  *
- * Cách hoạt động:
- * 1. NMS nhận RTMP từ iOS trên port 1935 (chỉ dùng chức năng RTMP ingest, KHÔNG transcode).
- * 2. Mỗi khi stream bắt đầu, ta ghi nhận streamKey.
- * 3. Session DVR riêng: copy source vào HLS replay (không re-encode).
- * 4. Session live riêng: decode high-FPS, drop frame khi cần và encode 60 FPS
- *    vào MediaMTX qua RTSP. Browser đọc rendition này qua WHEP/WebRTC.
- *
- * Bug NMS đã phát hiện trong quá trình test:
- * - NMS trans dùng tee muxer: `-f tee -map 0:a? -map 0:v? [hls_flags]url` → FFmpeg 9.x
- *   không xử lý được HLS output trong tee context trên Windows → "All tee outputs failed".
- * - NMS không hỗ trợ {streamKey} template trong hls_segment_filename.
- * - NMS tự xóa HLS file khi stream kết thúc (deleteHlsFiles trong node_trans_session.js).
- *
- * Giải pháp: custom wrapper không dùng tee, gọi ffmpeg trực tiếp:
- *   ffmpeg -i rtmp://localhost:1935/live/<streamKey> \
- *          -c:v copy -c:a aac -f hls \
- *          -hls_time 1 -hls_list_size <N> \
- *          -hls_segment_filename '%05d.ts' \
- *          <output_dir>/index.m3u8
+ * Kiến trúc:
+ * 1. MediaMTX nhận RTMP trực tiếp từ iOS trên port 1935 (chuẩn C/Golang siêu tốc, zero parse error).
+ * 2. WebRTC Live (WHEP): MediaMTX phát thẳng H.264 Full HD từ iPhone tới Trình duyệt qua :8889/live/{streamKey}/whep
+ *    (Zero transcoding, Zero CPU, Zero delay <100ms, mượt 60fps/120fps).
+ * 3. AI Worker: Python worker kết nối RTSP rtsp://127.0.0.1:8554/live/{streamKey} để xử lý 120fps.
+ * 4. Replay DVR Master: Node.js chỉ chạy duy nhất 1 tiến trình FFmpeg cực nhẹ copy luồng RTSP sang HLS
+ *    (-c:v copy, không nén lại CPU) xuất segment 0.5s để tua chậm 120fps.
  */
 const MEDIA_ROOT = path_1.default.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
-// Phân đoạn 0.5s khớp 1:1 với Keyframe 0.5s từ iOS: giúp xuất segment .ts mới mỗi nửa giây, bấm Slow từ Live dính khớp ngay khoảnh khắc đang xem
 const HLS_SEGMENT_SECONDS = 0.5;
-// Live preview is intentionally lower-FPS than the 120/240fps DVR master, but 60fps
-// avoids the visibly choppy 30fps motion in the operator's live monitor. The master
-// still keeps every source frame for slow motion.
-const LIVE_PREVIEW_FPS = parseInt(process.env.LIVE_PREVIEW_FPS || '', 10) || 60;
-// Track active HLS sessions: streamKey -> HlsSession
 exports.hlsSessions = new Map();
 let streamEndedHandler;
-/** Allows the API layer to keep persisted stream status in sync with RTMP disconnects. */
 function setStreamEndedHandler(handler) {
     streamEndedHandler = handler;
 }
-// Track NMS RTMP sessions so we know when a stream starts/ends
-const nmsSessions = new Map();
-// Map NMS session id -> streamKey
-const sessionToStreamKey = new Map();
 // Map streamKey -> pending disconnect timer (Grace Period 20s cho mạng 4G/5G)
 const pendingDisconnects = new Map();
 const GRACE_PERIOD_MS = 20_000;
@@ -76,8 +53,12 @@ function cleanupStreamSession(streamKey) {
     const session = exports.hlsSessions.get(streamKey);
     if (session) {
         for (const process of session.ffmpegProcesses) {
-            if (!process.killed)
-                process.kill('SIGTERM');
+            if (!process.killed) {
+                try {
+                    process.kill('SIGTERM');
+                }
+                catch { }
+            }
         }
         exports.hlsSessions.delete(streamKey);
     }
@@ -96,7 +77,7 @@ function cleanupStreamSession(streamKey) {
                 try {
                     fs_1.default.rmdirSync(dir);
                 }
-                catch { /* ignore if not empty */ }
+                catch { }
             }
         }
         catch (err) {
@@ -106,9 +87,7 @@ function cleanupStreamSession(streamKey) {
     console.log(`[MediaServer] Cleanup session ${streamKey}: deleted ${deleted} files`);
 }
 /**
- * Chỉ dừng FFmpeg process, KHÔNG xóa file .ts/.m3u8.
- * Dùng khi người dùng bấm "Dừng Live" — giữ lại file replay để người xem tua lại.
- * File sẽ được cron xóa sau CRON_MAX_AGE_SECONDS (mặc định 24h).
+ * Dừng FFmpeg Replay, giữ lại file .ts/.m3u8 để người xem tua lại.
  */
 function stopFfmpegOnly(streamKey) {
     if (pendingDisconnects.has(streamKey)) {
@@ -118,19 +97,19 @@ function stopFfmpegOnly(streamKey) {
     const session = exports.hlsSessions.get(streamKey);
     if (session) {
         for (const process of session.ffmpegProcesses) {
-            if (!process.killed)
-                process.kill('SIGTERM');
+            if (!process.killed) {
+                try {
+                    process.kill('SIGTERM');
+                }
+                catch { }
+            }
         }
         exports.hlsSessions.delete(streamKey);
         console.log(`[MediaServer] FFmpeg stopped for ${streamKey} (files preserved for replay)`);
     }
 }
 /**
- * Làm mới toàn bộ bộ đệm Replay cho streamKey khi bấm "Xong Phiên":
- * 1. Dừng tiến trình FFmpeg replay cũ.
- * 2. Xóa sạch các file .ts và playlist .m3u8 cũ của phiên trước.
- * 3. Khởi động tiến trình FFmpeg replay mới để thu thập dữ liệu từ mốc 0s của phiên mới.
- * Lưu ý: Luồng WebRTC Live (Live preview) vẫn tiếp tục chạy không bị ảnh hưởng.
+ * Làm mới toàn bộ bộ đệm Replay cho streamKey khi bấm "Xong Phiên"
  */
 function resetReplaySession(streamKey) {
     const session = exports.hlsSessions.get(streamKey);
@@ -144,7 +123,7 @@ function resetReplaySession(streamKey) {
             catch { }
         }
     }
-    // 2. Xóa sạch file .ts, .m3u8 và toàn bộ tệp trong thư mục replay
+    // 2. Xóa sạch file .ts, .m3u8 của phiên trước
     const outputDir = getStreamDir('replay', streamKey);
     try {
         if (fs_1.default.existsSync(outputDir)) {
@@ -166,35 +145,18 @@ function resetReplaySession(streamKey) {
     catch (err) {
         console.error(`[MediaServer] Lỗi dọn dẹp file replay cũ cho ${streamKey}:`, err);
     }
-    // Nếu stream đã kết thúc (không còn trong hlsSessions), dọn dẹp cả thư mục live và replay
     if (!session) {
-        const liveDir = getStreamDir('live', streamKey);
-        try {
-            if (fs_1.default.existsSync(liveDir)) {
-                const files = fs_1.default.readdirSync(liveDir);
-                for (const file of files) {
-                    try {
-                        fs_1.default.unlinkSync(path_1.default.join(liveDir, file));
-                    }
-                    catch { }
-                }
-                try {
-                    fs_1.default.rmdirSync(liveDir);
-                }
-                catch { }
-            }
-        }
-        catch { }
-        console.log(`[MediaServer] Đã xóa sạch toàn bộ video replay và live cũ của stream ${streamKey} (phiên stream đã dừng)`);
+        console.log(`[MediaServer] Đã xóa sạch toàn bộ video replay cũ của stream ${streamKey} (phiên stream đã dừng)`);
         return true;
     }
-    // 3. Nếu stream vẫn đang LIVE: Khởi động lại ffmpeg replay mới để bắt đầu từ mốc 0s của phiên mới
+    // 3. Khởi động lại ffmpeg replay mới từ MediaMTX RTSP
     const bundledFfmpeg = path_1.default.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
         '-fflags', '+nobuffer+flush_packets',
-        '-i', `rtmp://localhost:1935/live/${streamKey}`,
+        '-rtsp_transport', 'tcp',
+        '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb',
         '-an',
@@ -220,15 +182,12 @@ function resetReplaySession(streamKey) {
     console.log(`[MediaServer] Đã làm mới hoàn toàn bộ đệm Replay cho ${streamKey} (Reset video timeline 0s)`);
     return true;
 }
-/** Start HLS segmentation for a streamKey using ffmpeg directly */
-/*
- * Two independent FFmpeg consumers deliberately read the same RTMP source. This keeps the
- * replay master immutable while allowing the disposable WebRTC rendition to be transcoded.
+/**
+ * Khởi động tiến trình FFmpeg Replay DVR đọc từ MediaMTX RTSP:
+ * Copy stream H.264 nguyên bản (0% CPU, giữ nguyên 120fps) sang file .ts 0.5s.
  */
 function startHlsSession(streamKey) {
-    // `/replay` is the master DVR: source H.264 frames and their PTS are copied unchanged.
     const outputDir = getStreamDir('replay', streamKey);
-    // Create output directory
     try {
         fs_1.default.mkdirSync(outputDir, { recursive: true });
     }
@@ -236,249 +195,155 @@ function startHlsSession(streamKey) {
         console.error(`[MediaServer] Cannot create output dir ${outputDir}:`, err);
         return;
     }
-    // ffmpeg command: receive RTMP, output HLS (video-only, no audio).
-    // Do not create a synthetic playlist here: a playlist pointing to a non-existent
-    // segment makes hls.js stop/retry the wrong resource before the first real frame.
-    // Keep the runtime self-contained on Windows when the project-local binary is present.
-    // FFMPEG_PATH remains an escape hatch for a system-managed FFmpeg installation.
     const bundledFfmpeg = path_1.default.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
-    // hls_list_size của ffmpeg tính theo SỐ SEGMENT trong playlist, không phải số giây.
-    // Với mỗi segment dài HLS_SEGMENT_SECONDS giây, số segment cần giữ để đạt đúng
-    // DVR_WINDOW_SECONDS giây = DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS.
-    // BUG CŨ: truyền thẳng DVR_WINDOW_SECONDS (giây) làm hls_list_size -> cửa sổ DVR thực tế
-    // bị nhân đôi (12h thay vì 6h mặc định) vì mỗi segment dài 2s.
-    // One-second segments keep the live path close to the current camera timeline.
-    // The encoded source is copied, so the DVR retains its original frame rate.
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
-        // Xả gói tin tức thì, không giữ demux buffer để segment .ts 0.5s xuất ra ngay lập tức khi gặp Keyframe
         '-fflags', '+nobuffer+flush_packets',
-        // Input: RTMP từ NMS (NMS listen trên 1935, ta connect với tư cách viewer).
-        '-i', `rtmp://localhost:1935/live/${streamKey}`,
-        // Codec: giữ nguyên video H.264 từ LFLiveKit (không re-encode)
+        '-rtsp_transport', 'tcp',
+        '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-c:v', 'copy',
-        // Bắt buộc chèn SPS/PPS vào đầu MỌI segment .ts để trình duyệt tua đến bất kỳ đâu cũng giải mã nét 100%
         '-bsf:v', 'h264_mp4toannexb',
-        // KHÔNG có audio - iOS LFLiveKit không push audio track
         '-an',
         '-flush_packets', '1',
-        // HLS output
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
         '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
-        // delete_segments tự động dọn dẹp các segment cũ vượt ngoài cửa sổ DVR, append_list nối tiếp playlist khi iPhone kết nối lại
         '-hls_flags', 'append_list+delete_segments+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
-    // This browser-only rendition is never used for replay. The fps filter emits no more than
-    // LIVE_PREVIEW_FPS; frames that cannot be encoded in time are intentionally disposable. The
-    // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
-    // Copy nguyên bản luồng H.264 Full HD từ iPhone sang MediaMTX RTSP:
-    // 100% nét căng gốc, không nén lại qua CPU, 0% suy hao chất lượng, độ trễ <0.1s.
-    // WebRTC Live: 1080p 60fps sieu net High Profile @ 8.5Mbps, zero latency (<0.1s), Keyframe 0.5s deu dan
-    // WebRTC Live: 1080p 60fps sieu net High Profile @ 8.5Mbps, zero latency (<0.1s), Keyframe 0.5s deu dan
-    const liveFfmpegArgs = [
-        '-fflags', '+genpts+discardcorrupt',
-        '-err_detect', 'ignore_err',
-        '-i', `rtmp://localhost:1935/live/${streamKey}`,
-        '-map', '0:v:0',
-        '-fpsmax', '60',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-threads', '0',
-        '-profile:v', 'high',
-        '-level:v', '4.2',
-        '-pix_fmt', 'yuv420p',
-        '-colorspace', 'bt709',
-        '-color_primaries', 'bt709',
-        '-color_trc', 'bt709',
-        '-bf', '0',
-        '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
-        '-b:v', '8500k',
-        '-maxrate', '10000k',
-        '-bufsize', '4500k',
-        '-g', '30',
-        '-keyint_min', '15',
-        '-sc_threshold', '0',
-        '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
-        '-an',
-        '-f', 'rtsp',
-        '-rtsp_transport', 'tcp',
-        `rtsp://127.0.0.1:8554/${streamKey}`
-    ];
-    console.log(`[MediaServer] Starting DVR + WebRTC session for ${streamKey}:`);
-    console.log(`[MediaServer]   DVR_WINDOW_SECONDS=${DVR_WINDOW_SECONDS} | HLS_SEGMENT_SECONDS=${HLS_SEGMENT_SECONDS} | hls_list_size=${hlsListSize} (segments)`);
-    console.log(`[MediaServer]   master replay: /replay/${streamKey} (copy source FPS + PTS, Full HD Master, video-only)`);
-    console.log(`[MediaServer]   web live:      WHEP /${streamKey}/whep (up to ${LIVE_PREVIEW_FPS}fps, 2.5Mbps ultrafast)`);
-    const isProcessRunning = (p) => !!p && p.exitCode === null && p.signalCode === null && !p.killed;
-    const isRtmpActive = () => Array.from(nmsSessions.values()).some(s => s.streamKey === streamKey);
-    const spawnReplayProcess = () => {
-        const proc = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-        proc.stdout?.on('data', (data) => {
-            const line = data.toString().trim();
-            if (line)
-                console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
-        });
-        proc.stderr?.on('data', (data) => {
-            const line = data.toString().trim();
-            if (!line)
-                return;
-            const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
-            if (isImportant)
-                console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
-            const s = exports.hlsSessions.get(streamKey);
-            if (s)
-                s.lastSeen = Date.now() / 1000;
-        });
-        proc.on('error', (err) => {
-            console.error(`[MediaServer] ffmpeg error for ${streamKey}:`, err);
-        });
-        proc.on('close', (code, signal) => {
-            console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-            const cur = exports.hlsSessions.get(streamKey);
-            if (cur && cur.ffmpegProcesses[0] === proc && isRtmpActive() && !pendingDisconnects.has(streamKey)) {
-                setTimeout(() => {
-                    const active = exports.hlsSessions.get(streamKey);
-                    if (active && !isProcessRunning(active.ffmpegProcesses[0]) && isRtmpActive()) {
-                        console.log(`[MediaServer] 🔄 Tự động khởi động lại replay FFmpeg cho ${streamKey}`);
-                        active.ffmpegProcesses[0] = spawnReplayProcess();
-                    }
-                }, 1000);
-            }
-        });
-        return proc;
-    };
-    const spawnLiveProcess = () => {
-        const proc = (0, child_process_1.spawn)(ffmpegPath, liveFfmpegArgs, {
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-        proc.stderr?.on('data', (data) => {
-            const line = data.toString().trim();
-            if (!line)
-                return;
-            const isImportant = /error|warning|fatal|cannot|failed|input|output|hls|segment|stream mapping/i.test(line);
-            if (isImportant)
-                console.log(`[MediaServer] [live ${streamKey}] ${line}`);
-            const active = exports.hlsSessions.get(streamKey);
-            if (active)
-                active.lastSeen = Date.now() / 1000;
-        });
-        proc.on('error', (err) => {
-            console.error(`[MediaServer] live FFmpeg error for ${streamKey}:`, err);
-        });
-        proc.on('close', (code, signal) => {
-            console.log(`[MediaServer] live FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
-            const cur = exports.hlsSessions.get(streamKey);
-            if (cur && cur.ffmpegProcesses[1] === proc && isRtmpActive() && !pendingDisconnects.has(streamKey)) {
-                setTimeout(() => {
-                    const active = exports.hlsSessions.get(streamKey);
-                    if (active && !isProcessRunning(active.ffmpegProcesses[1]) && isRtmpActive()) {
-                        console.log(`[MediaServer] 🔄 Tự động khởi động lại live FFmpeg (WHEP) cho ${streamKey}`);
-                        active.ffmpegProcesses[1] = spawnLiveProcess();
-                    }
-                }, 1000);
-            }
-        });
-        return proc;
-    };
-    const ffmpeg = spawnReplayProcess();
-    const liveFfmpeg = spawnLiveProcess();
+    console.log(`[MediaServer] 🎬 Khởi động FFmpeg DVR Replay từ MediaMTX RTSP cho ${streamKey}:`);
+    console.log(`   Source: rtsp://127.0.0.1:8554/live/${streamKey}`);
+    console.log(`   Output: ${outputDir}/index.m3u8 (Segment ${HLS_SEGMENT_SECONDS}s, DVR ${DVR_WINDOW_SECONDS / 3600}h)`);
+    const replayProc = (0, child_process_1.spawn)(ffmpegPath, ffmpegArgs, {
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    replayProc.stdout?.on('data', (data) => {
+        const line = data.toString().trim();
+        if (line)
+            console.log(`[MediaServer] [ffmpeg ${streamKey}] STDOUT: ${line}`);
+    });
+    replayProc.stderr?.on('data', (data) => {
+        const line = data.toString().trim();
+        if (!line)
+            return;
+        const isImportant = /error|fatal|cannot|failed|hls|segment/i.test(line);
+        if (isImportant)
+            console.log(`[MediaServer] [ffmpeg ${streamKey}] ${line}`);
+        const s = exports.hlsSessions.get(streamKey);
+        if (s)
+            s.lastSeen = Date.now() / 1000;
+    });
+    replayProc.on('error', (err) => {
+        console.error(`[MediaServer] ffmpeg error for ${streamKey}:`, err);
+    });
+    replayProc.on('close', (code, signal) => {
+        console.log(`[MediaServer] replay FFmpeg exited for ${streamKey} with code=${code} signal=${signal}`);
+    });
     const session = {
         streamKey,
         startTime: Date.now() / 1000,
         lastSeen: Date.now() / 1000,
-        ffmpegProcesses: [ffmpeg, liveFfmpeg]
+        ffmpegProcesses: [replayProc]
     };
     exports.hlsSessions.set(streamKey, session);
-    console.log(`[MediaServer] DVR + WebRTC session started for ${streamKey}`);
 }
-/** Called when NMS detects a new RTMP publish */
-function onStreamStart(sessionId, streamPath) {
-    const streamKey = streamPath.split('/').pop() || streamPath;
-    sessionToStreamKey.set(sessionId, streamKey);
-    nmsSessions.set(sessionId, { streamKey, connectedAt: Date.now() / 1000 });
-    // Nếu có timer chờ ngắt kết nối đang chạy (Grace Period), hủy ngay vì iPhone đã kết nối lại!
-    if (pendingDisconnects.has(streamKey)) {
-        clearTimeout(pendingDisconnects.get(streamKey));
-        pendingDisconnects.delete(streamKey);
-        console.log(`[MediaServer] ✅ iPhone kết nối lại thành công trong thời gian ân hạn cho stream ${streamKey}! Tiếp tục giữ luồng.`);
-    }
-    const existingSession = exports.hlsSessions.get(streamKey);
-    if (existingSession) {
-        const allRunning = existingSession.ffmpegProcesses.length >= 2 &&
-            existingSession.ffmpegProcesses.every(p => p && p.exitCode === null && p.signalCode === null && !p.killed);
-        if (allRunning) {
-            console.log(`[MediaServer] Stream ${streamKey} đã có đầy đủ HLS + Live FFmpeg đang chạy, tái sử dụng.`);
-            return;
-        }
-        // Dọn tiến trình cũ bị treo hoặc đã chết trước khi khởi tạo lại cặp tiến trình mới cho kết nối RTMP mới
-        for (const p of existingSession.ffmpegProcesses) {
-            if (p && p.exitCode === null && !p.killed) {
-                try {
-                    p.kill('SIGTERM');
+/**
+ * MediaMTX Path Watcher:
+ * Tự động kiểm tra trạng thái luồng trên MediaMTX API v3 mỗi 1000ms.
+ * Bắt dính ngay khi iPhone phát hoặc dừng, quản lý ân hạn 20s.
+ */
+let watcherInterval = null;
+function startMediaMtxWatcher() {
+    if (watcherInterval)
+        clearInterval(watcherInterval);
+    watcherInterval = setInterval(async () => {
+        try {
+            const res = await fetch('http://127.0.0.1:9997/v3/paths/list');
+            if (!res.ok)
+                return;
+            const data = await res.json();
+            const items = data.items || [];
+            const activeStreamKeys = new Set();
+            for (const item of items) {
+                if (!item.ready)
+                    continue;
+                const streamKey = item.name.split('/').pop() || item.name;
+                activeStreamKeys.add(streamKey);
+                // Hủy timer ân hạn ngắt kết nối nếu có
+                if (pendingDisconnects.has(streamKey)) {
+                    clearTimeout(pendingDisconnects.get(streamKey));
+                    pendingDisconnects.delete(streamKey);
+                    console.log(`[MediaServer] ✅ iPhone kết nối lại thành công qua MediaMTX cho stream ${streamKey}!`);
                 }
-                catch { }
+                // Tự động kích hoạt trạng thái LIVE trong DB
+                let activeStream = db_1.db.getStreams().find(s => s.streamKey === streamKey && s.status === 'LIVE');
+                if (!activeStream) {
+                    const anyStream = db_1.db.getStreams().find(s => s.streamKey === streamKey);
+                    if (anyStream) {
+                        anyStream.status = 'LIVE';
+                        anyStream.endedAt = undefined;
+                        activeStream = anyStream;
+                        console.log(`[MediaServer] 🔄 MediaMTX tái kích hoạt phiên LIVE cho streamKey: ${streamKey}`);
+                    }
+                    else if (streamKey.startsWith('live_usr-')) {
+                        const match = streamKey.match(/^live_(usr-[^_]+)/);
+                        const userId = match ? match[1] : 'usr-default';
+                        const user = db_1.db.getUsers().find(u => u.id === userId);
+                        const newStream = {
+                            id: `stream-${Date.now()}`,
+                            userId,
+                            username: user ? user.username : 'iPhone User',
+                            streamKey,
+                            status: 'LIVE',
+                            hlsPlaylistUrl: `http://192.145.3.102:4000/live/${streamKey}/index.m3u8`,
+                            vodUrl: '',
+                            startedAt: new Date().toISOString()
+                        };
+                        db_1.db.getStreams().unshift(newStream);
+                        activeStream = newStream;
+                        console.log(`[MediaServer] ⚡ Tự động cấp phép phiên LIVE mới qua MediaMTX: ${streamKey}`);
+                    }
+                }
+                // Khởi động FFmpeg Replay DVR nếu chưa chạy
+                const existingSession = exports.hlsSessions.get(streamKey);
+                const isProcAlive = existingSession && existingSession.ffmpegProcesses[0] &&
+                    existingSession.ffmpegProcesses[0].exitCode === null && !existingSession.ffmpegProcesses[0].killed;
+                if (!isProcAlive) {
+                    startHlsSession(streamKey);
+                }
+            }
+            // Xử lý các stream bị ngắt kết nối
+            for (const [streamKey] of exports.hlsSessions) {
+                if (!activeStreamKeys.has(streamKey) && !pendingDisconnects.has(streamKey)) {
+                    console.log(`[MediaServer] ⏳ MediaMTX báo stream ${streamKey} ngắt kết nối. Bắt đầu ân hạn ${GRACE_PERIOD_MS / 1000}s...`);
+                    const timer = setTimeout(() => {
+                        pendingDisconnects.delete(streamKey);
+                        console.log(`[MediaServer] 🛑 Hết thời gian ân hạn ${GRACE_PERIOD_MS / 1000}s cho stream ${streamKey}. Chính thức đóng phiên.`);
+                        stopFfmpegOnly(streamKey);
+                        streamEndedHandler?.(streamKey);
+                    }, GRACE_PERIOD_MS);
+                    pendingDisconnects.set(streamKey, timer);
+                }
             }
         }
-    }
-    // Cho NMS 150ms on-air on RTMP truoc khi spawn FFmpeg tranh EOF
-    setTimeout(() => {
-        startHlsSession(streamKey);
-    }, 150);
+        catch { }
+    }, 1000);
 }
-/** Called when NMS detects RTMP disconnect */
-function onStreamEnd(sessionId) {
-    const streamKey = sessionToStreamKey.get(sessionId);
-    if (!streamKey)
-        return;
-    sessionToStreamKey.delete(sessionId);
-    nmsSessions.delete(sessionId);
-    console.log(`[MediaServer] ⏳ RTMP ngắt kết nối cho stream ${streamKey}. Bắt đầu ân hạn ${GRACE_PERIOD_MS / 1000}s chờ iPhone kết nối lại...`);
-    // Xóa timer cũ nếu có
-    if (pendingDisconnects.has(streamKey)) {
-        clearTimeout(pendingDisconnects.get(streamKey));
-    }
-    const timer = setTimeout(() => {
-        pendingDisconnects.delete(streamKey);
-        console.log(`[MediaServer] 🛑 Hết thời gian ân hạn ${GRACE_PERIOD_MS / 1000}s cho stream ${streamKey}. Chính thức đóng phiên.`);
-        // Stop ffmpeg HLS session
-        const session = exports.hlsSessions.get(streamKey);
-        if (session) {
-            for (const process of session.ffmpegProcesses) {
-                if (!process.killed)
-                    process.kill('SIGTERM');
-            }
-            exports.hlsSessions.delete(streamKey);
-            console.log(`[MediaServer] Stream ${streamKey} ended, HLS ffmpeg stopped`);
-        }
-        // QUAN TRỌNG: KHÔNG xóa file replay ngay khi RTMP ngắt!
-        // Mục đích của DVR là để người xem tua lại, xem slow motion các pha vừa qua kể cả khi
-        // iPhone dừng phát hoặc mạng gián đoạn tạm thời. Các file cũ sẽ do Cron tự động dọn dẹp sau.
-        streamEndedHandler?.(streamKey);
-    }, GRACE_PERIOD_MS);
-    pendingDisconnects.set(streamKey, timer);
-}
-/** Background cleanup: timeout check */
+/** Background cleanup */
 function startCleanupScheduler() {
     const TIMEOUT_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS || '', 10) || 60_000;
-    // Dọn dẹp định kỳ mỗi 1 tiếng (thay vì 24 tiếng) để ổ cứng không bị đầy segment video test cũ
     const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_MS || '', 10) || 60 * 60_000;
     setInterval(() => {
         timeoutCheckOnce();
     }, TIMEOUT_INTERVAL_MS);
-    // Chạy ngay 1 lần sau khi khởi động 5s để giải phóng ổ cứng nếu có session cũ
     setTimeout(() => {
         const res = runCronCleanupOnce();
         if (res.deletedFiles > 0) {
             console.log(`[MediaServer] Dọn dẹp khởi động: đã giải phóng ${res.deletedFiles} file .ts cũ hết hạn`);
         }
     }, 5000);
-    // Cron: delete .ts files older than CRON_MAX_AGE_SECONDS
     setInterval(() => {
         const result = runCronCleanupOnce();
         if (result.deletedFiles > 0) {
@@ -486,22 +351,12 @@ function startCleanupScheduler() {
         }
     }, CRON_INTERVAL_MS);
 }
-/**
- * Run a single timeout check pass. Exported for testing.
- * Returns the list of cleaned up streamKeys.
- */
 function timeoutCheckOnce() {
     const now = Date.now() / 1000;
     const cleaned = [];
-    const activeStreamKeys = new Set(sessionToStreamKey.values());
-    // Chỉ dọn dẹp các session FFmpeg mồ côi (orphaned) khi:
-    // 1. iPhone/RTMP publisher KHÔNG còn kết nối trong NMS (không có trong sessionToStreamKey)
-    // 2. Và không có hoạt động ffmpeg trong suốt SESSION_TIMEOUT_SECONDS
-    // Tuyệt đối KHÔNG ngắt các luồng đang phát RTMP trực tiếp từ iPhone!
     for (const [streamKey, session] of exports.hlsSessions) {
-        const hasActivePublisher = activeStreamKeys.has(streamKey);
-        if (!hasActivePublisher && (now - session.lastSeen > SESSION_TIMEOUT_SECONDS)) {
-            console.warn(`[MediaServer] Orphaned stream ${streamKey} timeout (không có RTMP publisher trong ${Math.round(now - session.lastSeen)}s) — dừng ffmpeg`);
+        if (now - session.lastSeen > SESSION_TIMEOUT_SECONDS) {
+            console.warn(`[MediaServer] Orphaned stream ${streamKey} timeout — dừng ffmpeg`);
             stopFfmpegOnly(streamKey);
             cleaned.push(streamKey);
         }
@@ -531,33 +386,31 @@ function runCronCleanupOnce() {
                         try {
                             const stats = fs_1.default.statSync(filePath);
                             const ageSeconds = now - stats.mtime.getTime() / 1000;
-                            if (file.endsWith('.ts')) {
-                                if (ageSeconds > CRON_MAX_AGE_SECONDS) {
-                                    fs_1.default.unlinkSync(filePath);
-                                    deletedFiles++;
-                                }
-                                else {
-                                    remainingTsCount++;
-                                }
+                            if (ageSeconds >= CRON_MAX_AGE_SECONDS) {
+                                fs_1.default.unlinkSync(filePath);
+                                deletedFiles++;
+                            }
+                            else if (file.endsWith('.ts')) {
+                                remainingTsCount++;
                             }
                         }
                         catch {
                             errors++;
                         }
                     }
-                    // Nếu thư mục không còn segment .ts nào và không phải là phiên đang live, dọn dẹp toàn bộ thư mục
-                    const isCurrentlyActive = exports.hlsSessions.has(entry.name);
-                    if (remainingTsCount === 0 && !isCurrentlyActive) {
+                    if (remainingTsCount === 0 && !exports.hlsSessions.has(entry.name)) {
                         try {
-                            const remaining = fs_1.default.readdirSync(streamDir);
-                            for (const rf of remaining) {
-                                fs_1.default.unlinkSync(path_1.default.join(streamDir, rf));
+                            const leftFiles = fs_1.default.readdirSync(streamDir);
+                            for (const f of leftFiles) {
+                                fs_1.default.unlinkSync(path_1.default.join(streamDir, f));
                                 deletedFiles++;
                             }
                             fs_1.default.rmdirSync(streamDir);
                             deletedDirs++;
                         }
-                        catch { }
+                        catch {
+                            errors++;
+                        }
                     }
                 }
                 catch {
@@ -570,17 +423,24 @@ function runCronCleanupOnce() {
         }
     }
     // Tự động dọn dẹp các session và bài cũ trong database quá 24h
-    const dbCleanup = db_1.db.cleanupOldData(CRON_MAX_AGE_SECONDS);
-    return {
-        deletedFiles,
-        deletedDirs,
-        cleanedSessions: dbCleanup.cleanedSessions,
-        cleanedCards: dbCleanup.cleanedCards,
-        errors
-    };
+    let cleanedSessions = 0;
+    let cleanedCards = 0;
+    try {
+        const dbCleanup = db_1.db.cleanupOldData(CRON_MAX_AGE_SECONDS);
+        cleanedSessions = dbCleanup.cleanedSessions;
+        cleanedCards = dbCleanup.cleanedCards;
+    }
+    catch (err) {
+        console.error('[MediaServer] Lỗi dọn dẹp Database cron:', err);
+        errors++;
+    }
+    return { deletedFiles, deletedDirs, cleanedSessions, cleanedCards, errors };
 }
 /** Lấy thông tin thống kê trạng thái dọn dẹp tự động 24h */
 function getCleanupStatus() {
+    return getMediaStorageStats();
+}
+function getMediaStorageStats() {
     const now = Date.now() / 1000;
     let totalMediaFiles = 0;
     let totalMediaSizeBytes = 0;
@@ -644,89 +504,11 @@ function getCleanupStatus() {
     };
 }
 function startNativeMediaServer() {
-    // === NMS: chỉ dùng cho RTMP ingest + HTTP serving ===
-    // Bỏ trans.tasks — custom HLS wrapper thay thế hoàn toàn
-    const mediaConfig = {
-        rtmp: {
-            port: 1935,
-            chunk_size: 60000,
-            gop_cache: true,
-            ping: 30,
-            ping_timeout: 60
-        },
-        http: {
-            port: 8000,
-            mediaroot: MEDIA_ROOT.replace(/\\/g, '/'),
-            allow_origin: '*'
-        }
-        // KHÔNG có trans.tasks — dùng custom HLS wrapper thay vì NMS trans pipeline
-    };
-    try {
-        const nms = new node_media_server_1.default(mediaConfig);
-        // Khi iOS bắt đầu push RTMP — xác thực streamKey trong Database trước khi cho phép
-        nms.on('prePublish', (id, StreamPath, _args) => {
-            const streamKey = StreamPath.split('/').pop() || '';
-            let activeStream = db_1.db.getStreams().find(s => s.streamKey === streamKey && (s.status === 'LIVE' || pendingDisconnects.has(streamKey)));
-            if (!activeStream) {
-                // Tự động tái kích hoạt nếu streamKey đã tồn tại trong DB (kể cả vừa bị ENDED)
-                const anyStream = db_1.db.getStreams().find(s => s.streamKey === streamKey);
-                if (anyStream) {
-                    anyStream.status = 'LIVE';
-                    anyStream.endedAt = undefined;
-                    activeStream = anyStream;
-                    console.log(`[MediaServer] 🔄 Tự động tái kích hoạt phiên LIVE cho streamKey: ${streamKey}`);
-                }
-                else if (streamKey.startsWith('live_usr-')) {
-                    // Tự động cấp quyền phiên mới cho iPhone nếu đúng định dạng live_usr-
-                    const match = streamKey.match(/^live_(usr-[^_]+)/);
-                    const userId = match ? match[1] : 'usr-default';
-                    const user = db_1.db.getUsers().find(u => u.id === userId);
-                    const newStream = {
-                        id: `stream-${Date.now()}`,
-                        userId,
-                        username: user ? user.username : 'iPhone User',
-                        streamKey,
-                        status: 'LIVE',
-                        hlsPlaylistUrl: `http://192.145.3.102:4000/live/${streamKey}/index.m3u8`,
-                        vodUrl: '',
-                        startedAt: new Date().toISOString()
-                    };
-                    db_1.db.getStreams().unshift(newStream);
-                    activeStream = newStream;
-                    console.log(`[MediaServer] ⚡ Tự động cấp phép và mở phiên LIVE mới cho iPhone: ${streamKey}`);
-                }
-            }
-            if (!activeStream) {
-                console.warn(`[MediaServer] [BẢO MẬT] Từ chối kết nối RTMP không hợp lệ hoặc chưa được cấp phép: ${StreamPath} (Session: ${id})`);
-                try {
-                    const session = nms.getSession(id);
-                    if (session) {
-                        session.reject();
-                    }
-                }
-                catch (e) {
-                    console.error(`[MediaServer] Lỗi khi reject session RTMP:`, e);
-                }
-                return;
-            }
-            console.log(`[MediaServer] iPhone bắt đầu phát RTMP hợp lệ (${activeStream.username}): ${StreamPath}`);
-            onStreamStart(id, StreamPath);
-        });
-        // Khi iOS ngắt kết nối (stop hoặc crash)
-        nms.on('donePublish', (id, StreamPath, _args) => {
-            console.log(`[MediaServer] iPhone dừng phát RTMP: ${StreamPath}`);
-            onStreamEnd(id);
-        });
-        nms.run();
-        startCleanupScheduler();
-        console.log(`Native RTMP/DVR + WebRTC Media Server đang chạy:`);
-        console.log(`   -> RTMP Ingest (iPhone):  rtmp://localhost:1935/live`);
-        console.log(`   -> WebRTC Live (WHEP):   http://localhost:8889/<streamKey>/whep (60fps)`);
-        console.log(`   -> HLS Replay (Master):  http://localhost:8000/replay/<streamKey>/index.m3u8 (source FPS)`);
-        console.log(`   -> DVR window:            ${DVR_WINDOW_SECONDS / 3600}h (segment ${HLS_SEGMENT_SECONDS}s, hls_list_size=${Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS)} segments)`);
-        console.log(`   -> Media root:           ${MEDIA_ROOT}`);
-    }
-    catch (err) {
-        console.error(`[MediaServer] Lỗi khởi tạo:`, err);
-    }
+    startCleanupScheduler();
+    startMediaMtxWatcher();
+    console.log(`MediaMTX High-Performance Native Server active:`);
+    console.log(`   -> RTMP Ingest (iPhone):  rtmp://<ip>:1935/live/<streamKey>`);
+    console.log(`   -> WebRTC Live (WHEP):    http://<ip>:8889/live/<streamKey>/whep`);
+    console.log(`   -> RTSP Source (AI):      rtsp://127.0.0.1:8554/live/<streamKey>`);
+    console.log(`   -> Replay DVR (HLS):      http://<ip>:4000/replay/<streamKey>/index.m3u8`);
 }

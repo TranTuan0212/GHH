@@ -683,7 +683,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // 2. Kết nối HLS Replay DVR Master (để tua chậm, tua lại chi tiết từng frame 120fps)
   useEffect(() => {
     const video = replayVideoRef.current;
-    if (!video || !activeStreamSession?.streamKey) return;
+    if (!video || !activeStreamSession?.streamKey || activeStreamSession?.status === 'ENDED') return;
 
     const streamKey = activeStreamSession.streamKey;
     const replayUrl = `/replay/${streamKey}/index.m3u8`;
