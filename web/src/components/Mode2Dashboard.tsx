@@ -739,7 +739,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         canvasRef.current = document.createElement('canvas');
       }
       const canvas = canvasRef.current;
-      const targetW = 384; // Khớp chuẩn 384 của YOLOv8 nano
+      const targetW = 200; // Chuẩn 192/200px tối ưu tỉ lệ nhận diện của YOLOv8
       const targetH = Math.max(60, Math.round(targetW * (reticleSize.height / reticleSize.width)));
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
@@ -809,7 +809,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         body: JSON.stringify({
           imageBase64: dataUrl,
           confidence: 0.25,
-          imgsz: 384,
+          imgsz: 192,
           minSharpness: 0
         })
       })
