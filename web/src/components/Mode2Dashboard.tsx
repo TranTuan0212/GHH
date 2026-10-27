@@ -739,8 +739,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         canvasRef.current = document.createElement('canvas');
       }
       const canvas = canvasRef.current;
-      const targetW = 200; // Chuẩn 192/200px tối ưu tỉ lệ nhận diện của YOLOv8
-      const targetH = Math.max(60, Math.round(targetW * (reticleSize.height / reticleSize.width)));
+      // Auto-Padding: Mở rộng vùng quét thêm +25% quanh khung ngắm để bắt trọn bài lướt nhanh hoặc bài xoay nghiêng
+      const padW = reticleSize.width * 0.25;
+      const padH = reticleSize.height * 0.25;
+      const captureW = reticleSize.width + padW * 2;
+      const captureH = reticleSize.height + padH * 2;
+
+      const targetW = 200; // Chuẩn phân giải tối ưu cho YOLOv8 CPU
+      const targetH = Math.max(60, Math.round(targetW * (captureH / captureW)));
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
         canvas.height = targetH;
@@ -754,9 +760,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       ctx.clearRect(0, 0, targetW, targetH);
       ctx.save();
 
-      const s = targetW / reticleSize.width;
+      const s = targetW / captureW;
       ctx.scale(s, s);
-      ctx.translate(-reticlePos.x, -reticlePos.y);
+      ctx.translate(-(reticlePos.x - padW), -(reticlePos.y - padH));
       ctx.translate(W / 2, H / 2);
 
       if (rotation === 90 || rotation === 270) {
@@ -808,8 +814,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageBase64: dataUrl,
-          confidence: 0.22,
-          imgsz: 192,
+          confidence: 0.18,
+          imgsz: 128,
           minSharpness: 0
         })
       })
@@ -821,7 +827,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             const isSameCard = best.code === lastDetectedCodeRef.current;
             const timeDiff = tNow - lastDetectionTimeRef.current;
 
-            if ((!isSameCard || timeDiff > 700) && best.confidence >= 0.22) {
+            if ((!isSameCard || timeDiff > 700) && best.confidence >= 0.18) {
               lastDetectionTimeRef.current = tNow;
               lastDetectedCodeRef.current = best.code;
               addCardToActiveDoor(best.code);
