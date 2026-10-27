@@ -155,6 +155,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // Trạng thái nhận diện AI
   const [aiStatus, setAiStatus] = useState<string>('Đang quét trong khung...');
   const [lastDetectedCard, setLastDetectedCard] = useState<string | null>(null);
+  const [capturedHistory, setCapturedHistory] = useState<Array<{
+    image: string;
+    cardName: string;
+    confidence: number;
+    timestamp: string;
+  }>>([]);
   const [capturedFrame, setCapturedFrame] = useState<{
     image: string;
     cardName: string;
@@ -745,12 +751,28 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           canvasRef.current = document.createElement('canvas');
         }
         const canvas = canvasRef.current;
-        // Cắt đúng 100% kích thước khung đỏ do người dùng canh (Zero Padding thừa)
-        const captureW = reticleSize.width;
-        const captureH = reticleSize.height;
+        // Cắt đúng 100% NATIVE 1080p Resolution từ video gốc (KHÔNG NÉN CO NHỎ)
+        const vw = videoEl.videoWidth;
+        const vh = videoEl.videoHeight;
+        if (vw === 0 || vh === 0) return null;
 
-        const targetW = 224; // Chuẩn độ nét cao tối ưu cho YOLOv8 CPU (24ms)
-        const targetH = Math.max(64, Math.round(targetW * (captureH / captureW)));
+        let renderW = W;
+        let renderH = H;
+        const containerRatio = W / H;
+        const videoRatio = vw / vh;
+        if (videoRatio > containerRatio) {
+          renderW = W;
+          renderH = W / videoRatio;
+        } else {
+          renderH = H;
+          renderW = H * videoRatio;
+        }
+
+        // Tỷ lệ pixel thực tế từ video 1080p gốc (Native 1080p)
+        const nativeScale = vw / renderW;
+        const targetW = Math.max(160, Math.round(reticleSize.width * nativeScale));
+        const targetH = Math.max(160, Math.round(reticleSize.height * nativeScale));
+
         if (canvas.width !== targetW || canvas.height !== targetH) {
           canvas.width = targetW;
           canvas.height = targetH;
@@ -761,7 +783,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         ctx.clearRect(0, 0, targetW, targetH);
         ctx.save();
 
-        const s = targetW / captureW;
+        // Scale 1:1 theo đúng điểm ảnh thực tế của video 1080p
+        const s = nativeScale;
         ctx.scale(s, s);
         ctx.translate(-reticlePos.x, -reticlePos.y);
         ctx.translate(W / 2, H / 2);
@@ -773,31 +796,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         }
         if (isFlipped) {
           ctx.scale(-1, 1);
-        }
-
-        const vw = videoEl.videoWidth;
-        const vh = videoEl.videoHeight;
-        let renderW = W;
-        let renderH = H;
-        const containerRatio = W / H;
-        const videoRatio = vw / vh;
-
-        if (!isFillMode) {
-          if (videoRatio > containerRatio) {
-            renderW = W;
-            renderH = W / videoRatio;
-          } else {
-            renderH = H;
-            renderW = H * videoRatio;
-          }
-        } else {
-          if (videoRatio > containerRatio) {
-            renderH = H;
-            renderW = H * videoRatio;
-          } else {
-            renderW = W;
-            renderH = W / videoRatio;
-          }
         }
 
         ctx.drawImage(videoEl, -renderW / 2, -renderH / 2, renderW, renderH);
@@ -833,12 +831,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           setTimeout(() => setIsAiFlashing(false), 250);
 
           // Hiển thị frame ảnh bắt được lên góc phải HUD
-          setCapturedFrame({
+          const newCap = {
             image: sourceImg,
             cardName: best.display + ' ' + best.fullName,
             confidence: Math.round(conf * 100),
             timestamp: new Date().toLocaleTimeString('vi-VN')
-          });
+          };
+          setCapturedFrame(newCap);
+          setCapturedHistory((prev) => [newCap, ...prev.slice(0, 4)]);
         } else {
           setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(conf * 100) + '%)');
         }
@@ -1488,6 +1488,61 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             </button>
           </div>
         </div>
+      </div>
+
+      {/* KHAY SOI FRAME BÀI NÉT NHẤT (1080p @ 120fps Frame Inspector) */}
+      <div className="bg-slate-900/90 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur">
+        <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs">
+          <span className="font-bold text-slate-200 flex items-center space-x-1.5">
+            <Crosshair className="w-4 h-4 text-emerald-400" />
+            <span>Khay Soi Frame Quân Bài Nét Nhất (1080p @ 120fps Native Frame)</span>
+          </span>
+          <span className="text-[10px] text-slate-400 font-mono">
+            {capturedHistory.length > 0 ? `Đã lưu ${capturedHistory.length} frame gần nhất` : 'Đang chờ phát hiện bài...'}
+          </span>
+        </div>
+
+        {capturedFrame ? (
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Ảnh frame hiện tại to rõ nét nhất */}
+            <div className="flex items-center space-x-3 bg-slate-950 p-2 rounded-xl border border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+              <div className="w-20 h-28 sm:w-24 sm:h-32 bg-black rounded-lg overflow-hidden border border-emerald-500/40 relative flex items-center justify-center">
+                <img src={capturedFrame.image} alt={capturedFrame.cardName} className="w-full h-full object-contain" />
+              </div>
+              <div className="flex flex-col justify-center space-y-1">
+                <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Vừa Bắt Dính</span>
+                <span className="text-xl sm:text-2xl font-black text-white tracking-wide">{capturedFrame.cardName}</span>
+                <div className="flex items-center space-x-2 text-[11px] font-mono">
+                  <span className="bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded font-bold border border-emerald-800">
+                    {capturedFrame.confidence}% Độ tin cậy
+                  </span>
+                  <span className="text-slate-400">{capturedFrame.timestamp}</span>
+                </div>
+                <span className="text-[10px] text-slate-500 font-mono">Chuẩn 1080p Native Pixel</span>
+              </div>
+            </div>
+
+            {/* Dải lịch sử 4 lá gần nhất */}
+            {capturedHistory.length > 1 && (
+              <div className="flex-1 min-w-[200px] flex items-center space-x-2 overflow-x-auto py-1">
+                <span className="text-[11px] text-slate-400 font-bold whitespace-nowrap mr-1">Lịch sử:</span>
+                {capturedHistory.slice(1).map((item, idx) => (
+                  <div key={idx} className="flex flex-col items-center bg-slate-950/80 p-1.5 rounded-lg border border-slate-800 flex-shrink-0">
+                    <div className="w-12 h-16 rounded overflow-hidden bg-black border border-slate-700">
+                      <img src={item.image} alt={item.cardName} className="w-full h-full object-contain" />
+                    </div>
+                    <span className="text-[10px] font-bold text-white mt-0.5">{item.cardName}</span>
+                    <span className="text-[9px] text-slate-400 font-mono">{item.confidence}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="py-4 text-center text-slate-500 text-xs italic">
+            Chưa có quân bài nào trong khung đỏ. Hãy đưa lá bài vào khung đỏ trên màn hình Live để AI bắt dính frame 1080p sắc nét!
+          </div>
+        )}
       </div>
 
       {/* 3. HÀNG DƯỚI: 7 CỬA CHƠI VỚI CÁC Ô CHỨA BÀI VIỀN VÀNG (THEO ẢNH) */}
