@@ -288,7 +288,7 @@ function startHlsSession(streamKey) {
         '-tune', 'zerolatency',
         '-threads', '0',
         // Baseline + no B-frames: siêu nhẹ CPU và nhường tối đa băng thông đường truyền cho luồng Replay 120fps.
-        '-profile:v', 'baseline',
+        '-profile:v', 'high',
         '-level:v', '4.1',
         '-pix_fmt', 'yuv420p',
         '-colorspace', 'bt709',
@@ -297,9 +297,9 @@ function startHlsSession(streamKey) {
         '-bf', '0',
         '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
         // Live 2.5 Mbps (Max 3.0 Mbps, bufsize 1500k): nhẹ băng thông để trình duyệt tải ngầm các segment .ts Replay 120fps tức thì không bị nghẽn
-        '-b:v', '2500k',
-        '-maxrate', '3000k',
-        '-bufsize', '1500k',
+        '-b:v', '6000k',
+        '-maxrate', '7500k',
+        '-bufsize', '4000k',
         '-g', '30',
         '-keyint_min', '15',
         '-sc_threshold', '0',

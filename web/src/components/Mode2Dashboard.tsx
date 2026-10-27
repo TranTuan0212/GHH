@@ -632,7 +632,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           nudgeMaxRetry: 5,
           highBufferWatchdogPeriod: 0,
           liveSyncDuration: 1.5,
-          liveMaxLatencyDuration: 3.0,
+          liveMaxLatencyDuration: Infinity,
           maxLiveSyncPlaybackRate: 1.0
         });
 
@@ -738,21 +738,19 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         return;
       }
 
-      // Hàm chụp cắt ảnh chuẩn xác từ bất kỳ nguồn video nào (Live hoặc Replay 120fps)
+      // Hàm chụp cắt ảnh CHÍNH XÁC 100% theo khung đỏ người dùng đã đặt (không padding thừa)
       const captureCrop = (videoEl: HTMLVideoElement): string | null => {
         if (!videoEl || videoEl.videoWidth === 0 || videoEl.paused || videoEl.ended) return null;
         if (!canvasRef.current) {
           canvasRef.current = document.createElement('canvas');
         }
         const canvas = canvasRef.current;
-        // Auto-Padding: Mở rộng vùng quét thêm +25% quanh khung ngắm để bắt trọn bài lướt nhanh hoặc bài xoay nghiêng
-        const padW = reticleSize.width * 0.25;
-        const padH = reticleSize.height * 0.25;
-        const captureW = reticleSize.width + padW * 2;
-        const captureH = reticleSize.height + padH * 2;
+        // Cắt đúng 100% kích thước khung đỏ do người dùng canh (Zero Padding thừa)
+        const captureW = reticleSize.width;
+        const captureH = reticleSize.height;
 
-        const targetW = 200; // Chuẩn phân giải tối ưu cho YOLOv8 CPU
-        const targetH = Math.max(60, Math.round(targetW * (captureH / captureW)));
+        const targetW = 224; // Chuẩn độ nét cao tối ưu cho YOLOv8 CPU (24ms)
+        const targetH = Math.max(64, Math.round(targetW * (captureH / captureW)));
         if (canvas.width !== targetW || canvas.height !== targetH) {
           canvas.width = targetW;
           canvas.height = targetH;
@@ -765,7 +763,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
         const s = targetW / captureW;
         ctx.scale(s, s);
-        ctx.translate(-(reticlePos.x - padW), -(reticlePos.y - padH));
+        ctx.translate(-reticlePos.x, -reticlePos.y);
         ctx.translate(W / 2, H / 2);
 
         if (rotation === 90 || rotation === 270) {
@@ -807,13 +805,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         ctx.drawImage(videoEl, -renderW / 2, -renderH / 2, renderW, renderH);
         ctx.restore();
 
-        // Lọc bỏ frame hoàn toàn tối đen (tránh gửi request vô nghĩa khi video chưa sẵn sàng)
-        const centerPixel = ctx.getImageData(Math.floor(targetW / 2), Math.floor(targetH / 2), 1, 1).data;
-        if (centerPixel[0] === 0 && centerPixel[1] === 0 && centerPixel[2] === 0 && centerPixel[3] === 0) {
-          return null;
-        }
-
-        return canvas.toDataURL('image/jpeg', 0.65);
+        return canvas.toDataURL('image/jpeg', 0.80);
       };
 
       const dataUrl = captureCrop(activeVideo);
@@ -822,45 +814,18 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         return;
       }
 
-      // Xử lý khi AI nhận diện được quân bài (Lọc 2 tầng triệt tiêu 100% nhận diện nhầm bàn/tay)
+      // Xử lý khi AI nhận diện được quân bài (Ngưỡng nhạy chuẩn 0.25 - Ăn ngay tức thì)
       const handleCardMatch = (best: any, sourceImg: string) => {
         const tNow = Date.now();
         const conf = best.confidence || 0;
 
-        // Bỏ qua hoàn toàn mọi nhận diện dưới 0.38 (loại sạch bóng tay, mặt bàn, nếp vải)
-        if (conf < 0.38) {
-          return;
-        }
+        if (conf < 0.25) return;
 
         const isSameCard = best.code === lastDetectedCodeRef.current;
         const timeDiff = tNow - lastDetectionTimeRef.current;
 
-        // Cơ chế 2 tầng:
-        // Tầng 1: Rõ nét vượt trội (conf >= 0.55) -> Kích hoạt ăn ngay tức thì
-        // Tầng 2: Lướt nhanh (0.38 <= conf < 0.55) -> Xác nhận 2 frame liên tiếp hoặc đối chiếu trùng khớp
-        let isConfirmed = false;
-        if (conf >= 0.55) {
-          isConfirmed = true;
-          candidateRef.current = null;
-        } else {
-          const cand = candidateRef.current;
-          if (cand && cand.code === best.code && (tNow - cand.firstSeen) < 300) {
-            isConfirmed = true;
-            candidateRef.current = null;
-          } else {
-            candidateRef.current = {
-              code: best.code,
-              fullName: best.fullName,
-              display: best.display,
-              confidence: conf,
-              sharpness: 0,
-              count: 1,
-              firstSeen: tNow
-            };
-          }
-        }
-
-        if (isConfirmed && (!isSameCard || timeDiff > 350)) {
+        // Bắt dính tức thì: Cooldown 350ms cho cùng 1 lá, hoặc ăn ngay lập tức nếu khác lá
+        if ((!isSameCard || timeDiff > 350) && conf >= 0.25) {
           lastDetectionTimeRef.current = tNow;
           lastDetectedCodeRef.current = best.code;
           addCardToActiveDoor(best.code);
@@ -876,7 +841,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             confidence: Math.round(conf * 100),
             timestamp: new Date().toLocaleTimeString('vi-VN')
           });
-        } else if (conf >= 0.38) {
+        } else {
           setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(conf * 100) + '%)');
         }
       };
@@ -889,8 +854,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageBase64: dataUrl,
-          confidence: 0.38,
-          imgsz: 128,
+          confidence: 0.25,
+          imgsz: 192,
           minSharpness: 0
         })
       })
@@ -899,9 +864,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           if (json.cards && json.cards.length > 0) {
             handleCardMatch(json.bestCard || json.cards[0], dataUrl);
           } else {
-            // ĐỐI CHIẾU 120FPS REPLAY: Chỉ kích hoạt khi có ứng viên đang chờ xác nhận (bài lướt nhanh)
-            const cand = candidateRef.current;
-            if (isLive && cand && (now - cand.firstSeen < 300) && replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused && !replayVideo.ended) {
+            // ĐỐI CHIẾU 120FPS REPLAY: Khi Live không bắt được (bài lướt nhanh bị mờ),
+            // lấy ngay frame của luồng Master 120fps Replay (tốc độ chụp 1/240s không nhòe) để AI đọc
+            if (replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused && !replayVideo.ended) {
               const replayUrl = captureCrop(replayVideo);
               if (replayUrl && replayUrl !== dataUrl) {
                 fetch('/api/ai/yolo-detect', {
@@ -909,8 +874,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     imageBase64: replayUrl,
-                    confidence: 0.35,
-                    imgsz: 128
+                    confidence: 0.25,
+                    imgsz: 192
                   })
                 })
                   .then((r2) => r2.json())
@@ -921,10 +886,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   })
                   .catch(() => {});
               }
-            } else if (!candidateRef.current || (now - candidateRef.current.firstSeen > 400)) {
-              candidateRef.current = null;
             }
-            setAiStatus('⚡ Đang quét siêu mượt 30fps...');
+            setAiStatus('⚡ Đang quét khung đỏ (Full AI Local)...');
           }
         })
         .catch(() => {})
