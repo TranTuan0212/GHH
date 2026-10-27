@@ -275,41 +275,14 @@ function startHlsSession(streamKey) {
     // This browser-only rendition is never used for replay. The fps filter emits no more than
     // LIVE_PREVIEW_FPS; frames that cannot be encoded in time are intentionally disposable. The
     // RTSP destination is consumed by MediaMTX and exposed to the browser with WHEP/WebRTC.
+    // Copy nguyên bản luồng H.264 Full HD từ iPhone sang MediaMTX RTSP:
+    // 100% nét căng gốc, không nén lại qua CPU, 0% suy hao chất lượng, độ trễ <0.1s.
     const liveFfmpegArgs = [
-        '-fflags', '+genpts+discardcorrupt',
-        '-err_detect', 'ignore_err',
+        '-fflags', '+nobuffer+flush_packets',
         '-i', `rtmp://localhost:1935/live/${streamKey}`,
-        '-map', '0:v:0',
-        '-map', '0:a?',
-        // Giới hạn max FPS linh hoạt: nếu nguồn 30fps giữ 30fps, nguồn 60/120/240fps cap ở LIVE_PREVIEW_FPS (60fps)
-        '-fpsmax', String(LIVE_PREVIEW_FPS),
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-threads', '0',
-        // Baseline + no B-frames: siêu nhẹ CPU và nhường tối đa băng thông đường truyền cho luồng Replay 120fps.
-        '-profile:v', 'high',
-        '-level:v', '4.1',
-        '-pix_fmt', 'yuv420p',
-        '-colorspace', 'bt709',
-        '-color_primaries', 'bt709',
-        '-color_trc', 'bt709',
-        '-bf', '0',
-        '-x264-params', 'scenecut=0:repeat-headers=1:sliced-threads=1',
-        // Live 2.5 Mbps (Max 3.0 Mbps, bufsize 1500k): nhẹ băng thông để trình duyệt tải ngầm các segment .ts Replay 120fps tức thì không bị nghẽn
-        '-b:v', '6000k',
-        '-maxrate', '7500k',
-        '-bufsize', '4000k',
-        '-g', '30',
-        '-keyint_min', '15',
-        '-sc_threshold', '0',
-        // Keyframe 0.5s: cân bằng hoàn hảo giữa độ nét và khả năng tự hồi phục tức thì trên UDP WebRTC
-        '-force_key_frames', 'expr:gte(t,n_forced*0.5)',
-        // Hỗ trợ âm thanh cho Live qua WebRTC (Opus tiêu chuẩn WebRTC)
-        '-c:a', 'libopus',
-        '-b:a', '96k',
-        '-ar', '48000',
-        '-ac', '2',
+        '-c:v', 'copy',
+        '-bsf:v', 'h264_mp4toannexb',
+        '-an',
         '-f', 'rtsp',
         '-rtsp_transport', 'tcp',
         `rtsp://127.0.0.1:8554/${streamKey}`

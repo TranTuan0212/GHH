@@ -133,7 +133,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const [isBrightBoost, setIsBrightBoost] = useState<boolean>(false);
   // Chế độ phóng to lấp đầy màn hình (Fill/Cover vs Contain)
   const [isFillMode, setIsFillMode] = useState<boolean>(() => {
-    return localStorage.getItem('mode2_video_fill') !== 'false';
+    return localStorage.getItem('mode2_video_fill') === 'true';
   });
 
   useEffect(() => {
@@ -767,8 +767,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         ctx.translate(W / 2, H / 2);
 
         if (rotation === 90 || rotation === 270) {
-          const fillScale = isFillMode ? 1.78 : 1;
-          ctx.scale(fillScale, fillScale);
           ctx.rotate((rotation * Math.PI) / 180);
         } else if (rotation === 180) {
           ctx.rotate(Math.PI);
@@ -1288,7 +1286,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               style={{
                 transform: `${
                   (rotation === 90 || rotation === 270)
-                    ? `scale(${isFillMode ? 1.78 : 1}) rotate(${rotation}deg)`
+                    ? `rotate(${rotation}deg)`
                     : `rotate(${rotation}deg)`
                 } scaleX(${isFlipped ? -1 : 1})`,
                 transformOrigin: 'center center',
@@ -1309,7 +1307,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               style={{
                 transform: `${
                   (rotation === 90 || rotation === 270)
-                    ? `scale(${isFillMode ? 1.78 : 1}) rotate(${rotation}deg)`
+                    ? `rotate(${rotation}deg)`
                     : `rotate(${rotation}deg)`
                 } scaleX(${isFlipped ? -1 : 1})`,
                 transformOrigin: 'center center',
