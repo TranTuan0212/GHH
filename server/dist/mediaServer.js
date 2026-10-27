@@ -666,7 +666,36 @@ function startNativeMediaServer() {
         // Khi iOS bắt đầu push RTMP — xác thực streamKey trong Database trước khi cho phép
         nms.on('prePublish', (id, StreamPath, _args) => {
             const streamKey = StreamPath.split('/').pop() || '';
-            const activeStream = db_1.db.getStreams().find(s => s.streamKey === streamKey && (s.status === 'LIVE' || pendingDisconnects.has(streamKey)));
+            let activeStream = db_1.db.getStreams().find(s => s.streamKey === streamKey && (s.status === 'LIVE' || pendingDisconnects.has(streamKey)));
+            if (!activeStream) {
+                // Tự động tái kích hoạt nếu streamKey đã tồn tại trong DB (kể cả vừa bị ENDED)
+                const anyStream = db_1.db.getStreams().find(s => s.streamKey === streamKey);
+                if (anyStream) {
+                    anyStream.status = 'LIVE';
+                    anyStream.endedAt = undefined;
+                    activeStream = anyStream;
+                    console.log(`[MediaServer] 🔄 Tự động tái kích hoạt phiên LIVE cho streamKey: ${streamKey}`);
+                }
+                else if (streamKey.startsWith('live_usr-')) {
+                    // Tự động cấp quyền phiên mới cho iPhone nếu đúng định dạng live_usr-
+                    const match = streamKey.match(/^live_(usr-[^_]+)/);
+                    const userId = match ? match[1] : 'usr-default';
+                    const user = db_1.db.getUsers().find(u => u.id === userId);
+                    const newStream = {
+                        id: `stream-${Date.now()}`,
+                        userId,
+                        username: user ? user.username : 'iPhone User',
+                        streamKey,
+                        status: 'LIVE',
+                        hlsPlaylistUrl: `http://192.145.3.102:4000/live/${streamKey}/index.m3u8`,
+                        vodUrl: '',
+                        startedAt: new Date().toISOString()
+                    };
+                    db_1.db.getStreams().unshift(newStream);
+                    activeStream = newStream;
+                    console.log(`[MediaServer] ⚡ Tự động cấp phép và mở phiên LIVE mới cho iPhone: ${streamKey}`);
+                }
+            }
             if (!activeStream) {
                 console.warn(`[MediaServer] [BẢO MẬT] Từ chối kết nối RTMP không hợp lệ hoặc chưa được cấp phép: ${StreamPath} (Session: ${id})`);
                 try {

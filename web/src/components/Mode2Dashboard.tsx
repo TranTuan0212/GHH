@@ -415,20 +415,55 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     setActiveStreamSession(stream);
   }, [stream]);
 
-  // Tự động kiểm tra luồng mới mỗi 2s nếu chưa có tín hiệu video (tránh phải F5 lại trang)
+  // Đồng bộ trạng thái Stream tức thì qua Socket.io
+  useEffect(() => {
+    if (!socket) return;
+    const handleStatusChanged = (data: { roomId?: string; status: 'LIVE' | 'ENDED'; session?: StreamSession }) => {
+      if (data.status === 'LIVE' && data.session) {
+        console.log('[Mode2] ⚡ Socket thông báo có luồng Live mới:', data.session.streamKey);
+        setActiveStreamSession(data.session);
+        setHasVideoSignal(false);
+        setHasWebRtcSignal(false);
+      } else if (data.status === 'ENDED') {
+        console.log('[Mode2] ⏹ Socket thông báo phiên Live kết thúc');
+        setActiveStreamSession(null);
+        setHasVideoSignal(false);
+        setHasWebRtcSignal(false);
+      }
+    };
+    socket.on('stream_status_changed', handleStatusChanged);
+    return () => {
+      socket.off('stream_status_changed', handleStatusChanged);
+    };
+  }, [socket]);
+
+  // Tự động kiểm tra luồng mới mỗi 2s liên tục (chuyển đổi luồng tức thì không cần F5)
   useEffect(() => {
     let cancelled = false;
     const pollInterval = setInterval(async () => {
-      if (hasVideoSignal) return;
       try {
         const res = await fetch(`/api/stream/active?roomId=${encodeURIComponent(roomId || '')}`);
         if (res.ok) {
           const data = await res.json();
-          if (!cancelled && data?.stream?.status === 'LIVE') {
+          if (cancelled) return;
+          if (data?.stream?.status === 'LIVE') {
             setActiveStreamSession((prev) => {
               if (prev?.streamKey !== data.stream.streamKey) {
                 console.log('[Mode2] Tự động bắt luồng Live mới từ server:', data.stream.streamKey);
+                setHasVideoSignal(false);
+                setHasWebRtcSignal(false);
                 return data.stream;
+              }
+              return prev;
+            });
+          } else if (data?.stream?.status === 'ENDED' || !data?.stream) {
+            // Khi phiên stream cũ kết thúc, xóa active session để ngắt WebRTC/HLS cũ, ngừng gọi 404
+            setActiveStreamSession((prev) => {
+              if (prev !== null) {
+                console.log('[Mode2] Phiên Live cũ đã dừng, reset player chờ luồng mới...');
+                setHasVideoSignal(false);
+                setHasWebRtcSignal(false);
+                return null;
               }
               return prev;
             });
@@ -441,7 +476,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       cancelled = true;
       clearInterval(pollInterval);
     };
-  }, [roomId, hasVideoSignal]);
+  }, [roomId]);
 
   // KẾT NỐI CƠ CHẾ KÉP (DUAL-ENGINE): WEBRTC LIVE 0 DELAY (<0.2S) + HLS REPLAY 120FPS
   const whepUrl = useMemo(() => {
