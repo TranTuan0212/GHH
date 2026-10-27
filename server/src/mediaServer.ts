@@ -275,8 +275,10 @@ function startHlsSession(streamKey: string): void {
   // Copy nguyên bản luồng H.264 Full HD từ iPhone sang MediaMTX RTSP:
   // 100% nét căng gốc, không nén lại qua CPU, 0% suy hao chất lượng, độ trễ <0.1s.
   // WebRTC Live: 1080p 60fps sieu net High Profile @ 8.5Mbps, zero latency (<0.1s), Keyframe 0.5s deu dan
+  // WebRTC Live: 1080p 60fps sieu net High Profile @ 8.5Mbps, zero latency (<0.1s), Keyframe 0.5s deu dan
   const liveFfmpegArgs = [
-    '-fflags', '+nobuffer+flush_packets',
+    '-fflags', '+genpts+discardcorrupt',
+    '-err_detect', 'ignore_err',
     '-i', `rtmp://localhost:1935/live/${streamKey}`,
     '-map', '0:v:0',
     '-fpsmax', '60',
@@ -422,7 +424,10 @@ function onStreamStart(sessionId: string, streamPath: string): void {
     }
   }
 
-  startHlsSession(streamKey);
+  // Cho NMS 150ms on-air on RTMP truoc khi spawn FFmpeg tranh EOF
+  setTimeout(() => {
+    startHlsSession(streamKey);
+  }, 150);
 }
 
 /** Called when NMS detects RTMP disconnect */
