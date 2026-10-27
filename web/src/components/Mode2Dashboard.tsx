@@ -710,7 +710,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
       const now = Date.now();
       // Nhịp quét siêu tốc 33ms (~30 lần/giây): mượt mà tuyệt đối, 0% nghẽn CPU
-      if (now - lastDispatchTime < 33 || inFlightCount >= 2) {
+      if (now - lastDispatchTime < 33 || inFlightCount >= 1) {
         rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
