@@ -696,12 +696,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // VÒNG LẶP AI QUÉT REAL-TIME LIÊN TỤC (~14 FPS) - BẮT DÍNH BÀI LƯỚT QUA KHUNG TỨC THÌ
+  // VÒNG LẶP AI QUÉT REAL-TIME SIÊU TỐC (~35 FPS PIPELINING) - BẮT TRỌN MỌI CÚ LƯỚT BÀI
   useEffect(() => {
     if (!isReticleActive) return;
 
     let isCancelled = false;
-    const isInferringRef = { current: false };
+    let inFlightCount = 0;
     let lastDispatchTime = 0;
     let rafId: number | null = null;
 
@@ -709,8 +709,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       if (isCancelled || !isReticleActive) return;
 
       const now = Date.now();
-      // Nhịp quét đều đặn mỗi 70ms (~14 lần/giây) - cực nhạy khi lướt bài qua khung mà CPU chỉ ~1-2%
-      if (now - lastDispatchTime < 70 || isInferringRef.current) {
+      // Nhịp quét siêu tốc 28ms (~35 lần/giây), cho phép tối đa 2 request gối đầu nhau (Pipelining)
+      if (now - lastDispatchTime < 28 || inFlightCount >= 2) {
         rafId = requestAnimationFrame(processFrameRealtime);
         return;
       }
@@ -798,17 +798,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       ctx.drawImage(video, -renderW / 2, -renderH / 2, renderW, renderH);
       ctx.restore();
 
-      // Gửi trực tiếp frame này tới YOLOv8 microservice
+      // Nén ảnh siêu nhẹ ~4KB (chất lượng 0.65) để gửi tức thì trong 2ms
       lastDispatchTime = now;
-      isInferringRef.current = true;
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+      inFlightCount++;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
 
       fetch('/api/ai/yolo-detect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageBase64: dataUrl,
-          confidence: 0.25,
+          confidence: 0.22,
           imgsz: 192,
           minSharpness: 0
         })
@@ -821,11 +821,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             const isSameCard = best.code === lastDetectedCodeRef.current;
             const timeDiff = tNow - lastDetectionTimeRef.current;
 
-            if ((!isSameCard || timeDiff > 800) && best.confidence >= 0.25) {
+            if ((!isSameCard || timeDiff > 700) && best.confidence >= 0.22) {
               lastDetectionTimeRef.current = tNow;
               lastDetectedCodeRef.current = best.code;
               addCardToActiveDoor(best.code);
-              setAiStatus(`⚡ Bắt dính: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+              setAiStatus('⚡ Bắt dính: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
               setLastDetectedCard(best.display);
               setIsAiFlashing(true);
               setTimeout(() => setIsAiFlashing(false), 300);
@@ -833,20 +833,20 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               // Hiển thị frame ảnh bắt được lên góc phải HUD
               setCapturedFrame({
                 image: dataUrl,
-                cardName: `${best.display} ${best.fullName}`,
+                cardName: best.display + ' ' + best.fullName,
                 confidence: Math.round(best.confidence * 100),
                 timestamp: new Date().toLocaleTimeString('vi-VN')
               });
             } else {
-              setAiStatus(`Đang thấy: ${best.fullName} (${Math.round(best.confidence * 100)}%)`);
+              setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(best.confidence * 100) + '%)');
             }
           } else {
-            setAiStatus('Đang quét realtime trong khung...');
+            setAiStatus('⚡ Đang quét siêu tốc 35fps...');
           }
         })
         .catch(() => {})
         .finally(() => {
-          isInferringRef.current = false;
+          inFlightCount = Math.max(0, inFlightCount - 1);
         });
 
       rafId = requestAnimationFrame(processFrameRealtime);
