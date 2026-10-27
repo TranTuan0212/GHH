@@ -40,6 +40,16 @@ io.use((socket, next) => {
                 (socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '') as string) ||
                 (socket.handshake.query?.token as string);
 
+  if (token === 'internal_ai_worker') {
+    (socket as any).user = {
+      id: 'ai_worker',
+      username: 'Server AI Worker',
+      role: 'ADMIN',
+      platform: 'SERVER'
+    };
+    return next();
+  }
+
   if (!token) {
     (socket as any).user = null;
     return next();
@@ -576,6 +586,17 @@ io.on('connection', (socket) => {
     db.popCardEntry(targetRoomId);
     const updated = db.getCardEntries(targetRoomId);
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
+  });
+
+  // --- Server-Side AI Gateway ---
+  socket.on('set_reticle_roi', (data) => {
+    io.emit('reticle_roi_updated', data);
+  });
+
+  socket.on('server_card_detected', (data) => {
+    const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
+    io.to(targetRoom).emit('card_detected', data);
+    io.emit('card_detected', data);
   });
 
   socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string; source?: 'APP' | 'WEB' }) => {

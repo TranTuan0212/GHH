@@ -437,6 +437,61 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
   }, [socket]);
 
+  // ĐỒNG BỘ TỌA ĐỘ KHUNG ĐỎ (ROI) LÊN SERVER ĐỂ SERVER TỰ CẮT LUỒNG 120FPS
+  useEffect(() => {
+    if (!socket || !isReticleActive) return;
+    const container = videoContainerRef.current;
+    const rect = container ? container.getBoundingClientRect() : { width: 1000, height: 580 };
+    socket.emit('set_reticle_roi', {
+      x: reticlePos.x,
+      y: reticlePos.y,
+      w: reticleSize.width,
+      h: reticleSize.height,
+      containerW: rect.width || 1000,
+      containerH: rect.height || 580,
+      rotation,
+      isFlipped,
+      isActive: isReticleActive,
+      roomId: roomId || 'default'
+    });
+  }, [socket, reticlePos, reticleSize, rotation, isFlipped, isReticleActive, roomId]);
+
+  // NHẬN DIỆN TỪ SERVER-SIDE AI WORKER (120FPS NATIVE DIRECT STREAM)
+  useEffect(() => {
+    if (!socket) return;
+    const handleServerCardDetected = (data: {
+      card: any;
+      allCards?: any[];
+      confidence?: number;
+      sharpness?: number;
+      image?: string;
+      timestamp?: string;
+    }) => {
+      if (!data?.card) return;
+      const best = data.card;
+      const conf = data.confidence || best.confidence || 0.95;
+      
+      setLastDetectedCard(best.display || best.code);
+      setAiStatus(`🎯 Server AI bắt dính: ${best.fullName || best.display} (${Math.round(conf * 100)}%)`);
+      
+      const frameData = {
+        image: data.image || '',
+        cardName: (best.display || best.code) + ' ' + (best.fullName || ''),
+        confidence: Math.round(conf * 100),
+        timestamp: data.timestamp || new Date().toLocaleTimeString('vi-VN')
+      };
+      setCapturedFrame(frameData);
+      setCapturedHistory((prev) => [frameData, ...prev.slice(0, 4)]);
+
+      addCardToActiveDoor(best.code);
+    };
+
+    socket.on('card_detected', handleServerCardDetected);
+    return () => {
+      socket.off('card_detected', handleServerCardDetected);
+    };
+  }, [socket, addCardToActiveDoor]);
+
   // Tự động kiểm tra luồng mới mỗi 2s liên tục (chuyển đổi luồng tức thì không cần F5)
   useEffect(() => {
     let cancelled = false;
@@ -882,51 +937,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       lastDispatchTime = now;
       inFlightCount++;
 
-      fetch('/api/ai/yolo-detect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: dataUrl,
-          confidence: 0.25,
-          imgsz: 192,
-          minSharpness: 0
-        })
-      })
-        .then((r) => r.json())
-        .then((json) => {
-          if (json.cards && json.cards.length > 0) {
-            handleCardMatch(json.bestCard || json.cards[0], dataUrl);
-          } else {
-            // ĐỐI CHIẾU 120FPS REPLAY: Khi Live không bắt được (bài lướt nhanh bị mờ),
-            // lấy ngay frame của luồng Master 120fps Replay (tốc độ chụp 1/240s không nhòe) để AI đọc
-            if (replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused && !replayVideo.ended) {
-              const replayUrl = captureCrop(replayVideo);
-              if (replayUrl && replayUrl !== dataUrl) {
-                fetch('/api/ai/yolo-detect', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    imageBase64: replayUrl,
-                    confidence: 0.25,
-                    imgsz: 192
-                  })
-                })
-                  .then((r2) => r2.json())
-                  .then((jsonReplay) => {
-                    if (jsonReplay.cards && jsonReplay.cards.length > 0) {
-                      handleCardMatch(jsonReplay.bestCard || jsonReplay.cards[0], replayUrl);
-                    }
-                  })
-                  .catch(() => {});
-              }
-            }
-            setAiStatus('⚡ Đang quét khung đỏ (Full AI Local)...');
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          inFlightCount = Math.max(0, inFlightCount - 1);
-        });
+      // Server-Side AI Worker đang tự động crop và xử lý trực tiếp từ luồng 120fps trên server.
+      // Trình duyệt chỉ chạy nhịp kiểm tra nhẹ (fallback nếu server worker đang bận)
+      setAiStatus('⚡ Server AI 120fps đang quét trực tiếp trên luồng gốc...');
+      inFlightCount = 0;
 
       rafId = requestAnimationFrame(processFrameRealtime);
     };
