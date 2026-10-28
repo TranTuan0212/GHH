@@ -536,14 +536,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // KẾT NỐI CƠ CHẾ KÉP (DUAL-ENGINE): WEBRTC LIVE 0 DELAY (<0.2S) + HLS REPLAY 120FPS
   const whepUrl = useMemo(() => {
     const sKey = activeStreamSession?.streamKey;
-    if (!sKey) return '';
+    if (!sKey || activeStreamSession?.status === 'ENDED') return '';
     try {
       const hostname = window.location.hostname || '127.0.0.1';
-      return `http://${hostname}:8889/${sKey}/whep`;
+      return `http://${hostname}:8889/live/${sKey}/whep`;
     } catch {
       return '';
     }
-  }, [activeStreamSession?.streamKey]);
+  }, [activeStreamSession?.streamKey, activeStreamSession?.status]);
 
   // 1. Kết nối WebRTC WHEP Live trực tiếp (Zero Delay <0.2s, 60fps mượt tuyệt đối) với Auto-Retry Loop
   useEffect(() => {
