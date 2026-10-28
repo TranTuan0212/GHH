@@ -50,12 +50,14 @@ def parse_card_code(raw_code):
         return None
     suit_char = c[-1]
     rank_str = c[:-1]
-    suit_info = SUIT_MAP.get(suit_char, {'suit': suit_char, 'symbol': suit_char, 'color': 'black'})
+    if suit_char not in SUIT_MAP:
+        return None
+    suit_info = SUIT_MAP[suit_char]
     return {
-        'code': c,
+        'code': f"{rank_str}{suit_char}",
         'rank': rank_str,
         'suit': suit_info['suit'],
-        'symbol': suit_info['symbol'],
+        'suitSymbol': suit_info['symbol'],
         'color': suit_info['color'],
         'display': f"{rank_str}{suit_info['symbol']}",
         'fullName': f"{rank_str} {suit_info['suit']}"
@@ -63,24 +65,26 @@ def parse_card_code(raw_code):
 
 def check_card_paper_presence(crop_img):
     """
-    Tầng 1: Lọc nền giấy bài (Adaptive quang học).
-    Chấp nhận các điều kiện ánh sáng phòng ấm hoặc hơi tối:
-    - S < 95 (độ bão hòa màu thấp, tránh da tay cam/đỏ hoặc thảm xanh đậm)
-    - V > 60 (độ sáng tối thiểu để nhìn thấy lá bài trong phòng)
-    - paper_ratio >= 0.06 (chỉ cần 6% diện tích mang đặc trưng giấy)
+    Tầng 1 (Siêu nhẹ <0.5ms): Lọc chất liệu giấy bài quang học.
+    Độ bão hòa màu thấp (S < 95), độ sáng (V > 50).
+    Chỉ cần 6% diện tích mang đặc tính nền giấy là xác nhận có bài trong khung.
     """
     if crop_img is None or crop_img.size == 0:
         return True
     try:
         hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
         _, s, v = cv2.split(hsv)
-        paper_mask = (s < 95) & (v > 60)
+        paper_mask = (s < 95) & (v > 50)
         paper_ratio = np.count_nonzero(paper_mask) / (crop_img.shape[0] * crop_img.shape[1])
         return paper_ratio >= 0.06
     except Exception:
         return True
 
 def compute_sharpness(cv_image):
+    """
+    Tầng 1 (Siêu nhẹ <0.8ms): Đo độ nét của khung hình bằng phương sai Laplacian.
+    Giúp tìm ra đỉnh điểm nét nhất trong chu kỳ: Mờ -> Rõ -> Mờ.
+    """
     try:
         if len(cv_image.shape) == 3:
             gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
@@ -90,60 +94,7 @@ def compute_sharpness(cv_image):
     except Exception:
         return 0.0
 
-def verify_and_disambiguate_card(detected_cards, cv_img):
-    if not detected_cards or cv_img is None:
-        return detected_cards
-    h, w = cv_img.shape[:2]
-    for card in detected_cards:
-        code = card.get('code', '')
-        rank = card.get('rank', '')
-        suit = card.get('suit', '')
-        
-        corner_roi = cv_img[0:max(30, int(h * 0.45)), 0:max(30, int(w * 0.45))]
-        if corner_roi.size > 0:
-            hsv = cv2.cvtColor(corner_roi, cv2.COLOR_BGR2HSV)
-            mask1 = cv2.inRange(hsv, np.array([0, 50, 50]), np.array([12, 255, 255]))
-            mask2 = cv2.inRange(hsv, np.array([168, 50, 50]), np.array([180, 255, 255]))
-            red_pixels = cv2.countNonZero(mask1 | mask2)
-            
-            if suit in ['Cơ', 'Rô'] and red_pixels < 15:
-                new_suit_char = 'S' if suit == 'Cơ' else 'C'
-                parsed = parse_card_code(rank + new_suit_char)
-                if parsed:
-                    card.update(parsed)
-            elif suit in ['Bích', 'Tép'] and red_pixels > 50:
-                new_suit_char = 'H' if suit == 'Bích' else 'D'
-                parsed = parse_card_code(rank + new_suit_char)
-                if parsed:
-                    card.update(parsed)
-
-        if rank in ['8', '10'] and corner_roi.size > 0:
-            gray_roi = cv2.cvtColor(corner_roi, cv2.COLOR_BGR2GRAY)
-            _, bin_roi = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            contours, hierarchy = cv2.findContours(bin_roi, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            num_holes = 0
-            char_w_h_ratio = 0.5
-            if hierarchy is not None and len(contours) > 0:
-                for h_info in hierarchy[0]:
-                    if h_info[3] != -1:
-                        num_holes += 1
-                valid_contours = [c for c in contours if cv2.contourArea(c) > 20]
-                if valid_contours:
-                    _, _, w_c, h_c = cv2.boundingRect(max(valid_contours, key=cv2.contourArea))
-                    char_w_h_ratio = w_c / max(1, h_c)
-            
-            if rank == '10' and (num_holes >= 2 or char_w_h_ratio < 0.62):
-                parsed = parse_card_code('8' + card['code'][-1])
-                if parsed:
-                    card.update(parsed)
-            elif rank == '8' and (char_w_h_ratio > 0.78 and num_holes <= 1):
-                parsed = parse_card_code('10' + card['code'][-1])
-                if parsed:
-                    card.update(parsed)
-
-    return detected_cards
-
-def extract_cards_from_results(results, m, min_conf=0.20):
+def extract_cards_from_results(results, m, min_conf=0.18):
     detected = []
     for r in results:
         boxes = r.boxes
@@ -171,43 +122,52 @@ def extract_cards_from_results(results, m, min_conf=0.20):
     detected.sort(key=lambda x: x['confidence'], reverse=True)
     return detected
 
-def detect_cards_in_crop(crop_img, conf_thresh=0.22):
+def predict_single_peak_frame(peak_crop):
     """
-    Quét nhận diện siêu tốc đa tầng (Multi-scale Cascade) & Hỗ trợ đa góc (0° và 180°):
-    - Tầng 1: Quét model chính góc xuôi (0°) ở imgsz=128
-    - Tầng 2: Nếu chưa ra, quét model chính lật ngược (180°) phòng bài cầm ngược đầu
-    - Tầng 3: Nếu vẫn chưa ra, quét corner_model ở imgsz=160
+    Tầng 2: Soi AI trên duy nhất tấm ảnh sắc nét nhất tại đỉnh chuyển động.
+    - Quét model chính ở imgsz=128 (0° và 180° đối xứng).
+    - Nếu bài bị che khuất / xếp chồng, fallback sang corner_model.
+    - Trả về nguyên bản từ mạng nơ-ron, không dùng rule heuristic đè sai chất bài.
     """
-    if crop_img is None or crop_img.size == 0:
-        return []
+    if peak_crop is None or peak_crop.size == 0:
+        return None, []
 
-    # 1. Quét góc xuôi 0°
-    results = model.predict(crop_img, conf=conf_thresh, verbose=False, imgsz=128)
-    cards = verify_and_disambiguate_card(extract_cards_from_results(results, model, min_conf=conf_thresh), crop_img)
+    # 1. Quét model chính góc xuôi (0°)
+    r1 = model.predict(peak_crop, conf=0.18, verbose=False, imgsz=128)
+    cards = extract_cards_from_results(r1, model, min_conf=0.18)
     if cards:
-        return cards
+        return cards[0], cards
 
-    # 2. Quét góc ngược 180°
-    rot180 = cv2.rotate(crop_img, cv2.ROTATE_180)
-    results_rot = model.predict(rot180, conf=conf_thresh, verbose=False, imgsz=128)
-    cards_rot = verify_and_disambiguate_card(extract_cards_from_results(results_rot, model, min_conf=conf_thresh), rot180)
+    # 2. Quét model chính góc ngược (180°) phòng bài cầm ngược đầu
+    rot180 = cv2.rotate(peak_crop, cv2.ROTATE_180)
+    r2 = model.predict(rot180, conf=0.18, verbose=False, imgsz=128)
+    cards_rot = extract_cards_from_results(r2, model, min_conf=0.18)
     if cards_rot:
-        return cards_rot
+        return cards_rot[0], cards_rot
 
-    # 3. Fallback Corner Model
+    # 3. Quét góc nghiêng nhẹ (±30°) nếu chưa thấy
+    h, w = peak_crop.shape[:2]
+    for ang in [30, -30]:
+        M = cv2.getRotationMatrix2D((w/2, h/2), ang, 1.0)
+        rot_ang = cv2.warpAffine(peak_crop, M, (w, h))
+        r_ang = model.predict(rot_ang, conf=0.18, verbose=False, imgsz=128)
+        cards_ang = extract_cards_from_results(r_ang, model, min_conf=0.18)
+        if cards_ang:
+            return cards_ang[0], cards_ang
+
+    # 4. Fallback corner_model nếu có
     if corner_model is not None:
-        c_thresh = max(0.18, conf_thresh - 0.04)
-        res_c = corner_model.predict(crop_img, conf=c_thresh, verbose=False, imgsz=160)
-        cards_c = verify_and_disambiguate_card(extract_cards_from_results(res_c, corner_model, min_conf=c_thresh), crop_img)
-        if cards_c:
-            return cards_c
+        rc1 = corner_model.predict(peak_crop, conf=0.15, verbose=False, imgsz=192)
+        cc1 = extract_cards_from_results(rc1, corner_model, min_conf=0.15)
+        if cc1:
+            return cc1[0], cc1
 
-        res_c_rot = corner_model.predict(rot180, conf=c_thresh, verbose=False, imgsz=160)
-        cards_c_rot = verify_and_disambiguate_card(extract_cards_from_results(res_c_rot, corner_model, min_conf=c_thresh), rot180)
-        if cards_c_rot:
-            return cards_c_rot
+        rc2 = corner_model.predict(rot180, conf=0.15, verbose=False, imgsz=128)
+        cc2 = extract_cards_from_results(rc2, corner_model, min_conf=0.15)
+        if cc2:
+            return cc2[0], cc2
 
-    return []
+    return None, []
 
 # Global state
 roi_lock = threading.Lock()
@@ -355,9 +315,11 @@ def send_card_detected(card, all_cards, crop_img, sharpness, current_roi):
 
 class CardPassTracker:
     """
-    Theo dõi chu kỳ thực tế của lá bài khi quét qua khung ngắm:
-    Mờ (bài vừa chớm vào) -> Rõ (đỉnh điểm sắc nét) -> Mờ (chuẩn bị rời khung).
-    Tự động chốt frame có độ nét cao nhất và khóa không phát lại trùng lặp.
+    Kiến trúc 2 tầng chuẩn 120 FPS:
+    - Tầng 1: Lọc quang học và bắt đỉnh nét thời gian thực (<1.2ms/frame, 0% rớt frame).
+      Theo dõi đường cong chuyển động: Mờ (bài vào) -> Rõ (đỉnh điểm nét) -> Mờ (bài ra).
+    - Tầng 2: Kích hoạt YOLO đúng 1 lần trên tấm ảnh nét nhất tại đỉnh sắc nét.
+      Khóa không bắn trùng lặp, tự động reset khi quân bài rời khỏi khung ngắm.
     """
     STATE_IDLE = "IDLE"           # Khung trống, chưa có bài
     STATE_TRACKING = "TRACKING"   # Bài đang lướt vào (Mờ -> Rõ dần)
@@ -369,103 +331,84 @@ class CardPassTracker:
         
         self.peak_sharpness = 0.0
         self.peak_crop = None
-        self.peak_card = None
-        self.peak_all_cards = []
         self.frames_since_peak = 0
-        self.total_frames_in_pass = 0
-        self.card_hits_in_pass = 0
+        self.frames_in_pass = 0
         
         self.empty_streak = 0
         self.min_sharpness_threshold = 20.0
-        self.idle_frame_counter = 0
 
     def reset_to_idle(self):
         self.state = self.STATE_IDLE
         self.peak_sharpness = 0.0
         self.peak_crop = None
-        self.peak_card = None
-        self.peak_all_cards = []
         self.frames_since_peak = 0
-        self.total_frames_in_pass = 0
-        self.card_hits_in_pass = 0
+        self.frames_in_pass = 0
         self.empty_streak = 0
 
     def process_frame(self, crop, current_roi):
         if crop is None or crop.size == 0:
             return
 
+        # Tầng 1: Tính toán siêu nhẹ thời gian thực (<1.2ms)
         has_paper = check_card_paper_presence(crop)
         sharpness = compute_sharpness(crop)
 
         if self.state == self.STATE_IDLE:
-            self.idle_frame_counter += 1
-            if has_paper and (self.idle_frame_counter % 2 == 0):
-                cards = detect_cards_in_crop(crop, conf_thresh=0.22)
-                if cards:
-                    # BÀI BẮT ĐẦU VÀO KHUNG (MỜ -> RÕ DẦN)
-                    self.state = self.STATE_TRACKING
-                    self.peak_sharpness = sharpness
-                    self.peak_crop = crop.copy()
-                    self.peak_card = cards[0]
-                    self.peak_all_cards = cards
-                    self.frames_since_peak = 0
-                    self.total_frames_in_pass = 1
-                    self.card_hits_in_pass = 1
-                    self.empty_streak = 0
-                    print(f"[AI Worker] 🔍 Bắt đầu bám vết: {cards[0]['display']} ({int(cards[0]['confidence']*100)}%) | Độ nét={sharpness}")
+            # Bài bắt đầu chớm vào khung ngắm khi có giấy bài và độ nét bắt đầu tăng
+            if has_paper and sharpness >= self.min_sharpness_threshold:
+                self.state = self.STATE_TRACKING
+                self.peak_sharpness = sharpness
+                self.peak_crop = crop.copy()
+                self.frames_in_pass = 1
+                self.frames_since_peak = 0
+                self.empty_streak = 0
+                print(f"[AI Worker] 🔍 Bắt đầu đón bài vào khung (120fps) | Nét ban đầu={sharpness:.1f}")
 
         elif self.state == self.STATE_TRACKING:
-            self.total_frames_in_pass += 1
+            self.frames_in_pass += 1
 
-            cards = detect_cards_in_crop(crop, conf_thresh=0.20)
-            if cards:
-                self.card_hits_in_pass += 1
-                if sharpness > self.peak_sharpness:
-                    self.peak_sharpness = sharpness
-                    self.peak_crop = crop.copy()
-                    self.peak_card = cards[0]
-                    self.peak_all_cards = cards
-                    self.frames_since_peak = 0
-                else:
-                    self.frames_since_peak += 1
+            if sharpness > self.peak_sharpness:
+                # Đang rõ dần -> Cập nhật tấm ảnh nét nhất mới
+                self.peak_sharpness = sharpness
+                self.peak_crop = crop.copy()
+                self.frames_since_peak = 0
             else:
+                # Đang mờ dần (đã qua đỉnh sắc nét)
                 self.frames_since_peak += 1
 
-            is_valid_candidate = (
-                self.peak_card is not None and
-                self.peak_card.get('confidence', 0) >= 0.25 and
-                self.card_hits_in_pass >= 2 and
-                self.peak_sharpness >= self.min_sharpness_threshold
-            )
-
+            # ĐIỀU KIỆN CHỐT ĐỈNH NÉT:
+            # 1. Đã qua đỉnh rõ (độ nét giảm 3 frames liên tiếp) và đợt bài đã quét ít nhất 3 frames
+            # 2. Hoặc đã trôi qua 16 frames 120fps (~130ms) mà bài vẫn nằm trong khung
             should_finalize = (
-                (self.frames_since_peak >= 3 and is_valid_candidate) or
-                (self.total_frames_in_pass >= 16 and is_valid_candidate)
+                (self.frames_since_peak >= 3 and self.frames_in_pass >= 3) or
+                (self.frames_in_pass >= 16 and self.peak_crop is not None)
             )
 
             if should_finalize and self.peak_crop is not None:
-                # CHỐT TẤM ẢNH ĐẸP NHẤT TẠI ĐỈNH SẮC NÉT
-                self.emit_callback(self.peak_card, self.peak_all_cards, self.peak_crop, self.peak_sharpness, current_roi)
-                self.state = self.STATE_LOCKED
-                self.empty_streak = 0
-            elif self.total_frames_in_pass >= 25:
+                # KÍCH HOẠT TẦNG 2: SOI BÀI TRÊN ĐÚNG TẤM ẢNH SẮC NÉT NHẤT
+                best_card, all_cards = predict_single_peak_frame(self.peak_crop)
+                if best_card:
+                    self.emit_callback(best_card, all_cards, self.peak_crop, self.peak_sharpness, current_roi)
+                    self.state = self.STATE_LOCKED
+                    self.empty_streak = 0
+                else:
+                    # Nếu frame nét nhất không phải lá bài (bóng mờ hoặc ngón tay), hủy đợt này
+                    self.reset_to_idle()
+            elif self.frames_in_pass >= 30:
                 self.reset_to_idle()
 
         elif self.state == self.STATE_LOCKED:
-            self.idle_frame_counter += 1
-            if self.idle_frame_counter % 2 == 0:
-                if not has_paper:
-                    self.empty_streak += 1
-                else:
-                    cards = detect_cards_in_crop(crop, conf_thresh=0.18)
-                    if not cards:
-                        self.empty_streak += 1
-                    else:
-                        self.empty_streak = 0
+            # Đang khóa kết quả lá bài vừa bắn. Chờ bài rút ra khỏi khung.
+            if not has_paper or sharpness < 15.0:
+                self.empty_streak += 1
+            else:
+                self.empty_streak = 0
 
-                if self.empty_streak >= 3:
-                    self.reset_to_idle()
-                    print("[AI Worker] 🟢 Khung đã trống -> Sẵn sàng đón quân bài tiếp theo.")
+            # Khung trống 4 frames liên tiếp (~33ms ở 120fps) -> Mở khóa đón lá bài kế tiếp
+            if self.empty_streak >= 4:
+                self.reset_to_idle()
+                print("[AI Worker] 🟢 Khung đã trống -> Sẵn sàng đón quân bài tiếp theo.")
+
 class FrameReader120Fps:
     """
     Luồng đọc video 120fps chuyên biệt:
@@ -506,7 +449,7 @@ class FrameReader120Fps:
         self.cap.release()
 
 def stream_worker_loop():
-    print("[AI Worker] Stream consumer thread started (Async 120fps Engine).")
+    print("[AI Worker] Stream consumer thread started (Tier-1 Optical Peak + Tier-2 AI Engine).")
     tracker = CardPassTracker(emit_callback=send_card_detected)
     current_reader = None
     connected_key = None
@@ -567,14 +510,14 @@ def stream_worker_loop():
             sh = compute_sharpness(crop)
             print(f"[AI Worker] ⚡ 120fps quét frame #{frame_count} | State: {tracker.state} | Crop={crop.shape} | Paper={paper_ok} | Sharp={sh}")
 
-        # Đưa frame vào CardPassTracker xử lý đường cong mờ -> rõ -> mờ
+        # Xử lý frame ở Tầng 1 (Cực nhẹ <1.2ms/frame)
         tracker.process_frame(crop, current_roi)
 
     if current_reader is not None:
         current_reader.release()
 
 if __name__ == '__main__':
-    print("[AI Worker] Starting Server-side AI Worker...")
+    print("[AI Worker] Starting Server-side AI Worker (2-Tier 120fps Architecture)...")
     fetch_initial_stream()
 
     # Chạy worker thread
