@@ -61,6 +61,23 @@ def parse_card_code(raw_code):
         'fullName': f"{rank_str} {suit_info['suit']}"
     }
 
+def check_card_paper_presence(crop_img):
+    """
+    Tầng 1: Lọc nền trắng quang học (chất liệu giấy bài).
+    Lá bài tây luôn có tỷ lệ nền giấy trắng ngà / trắng sáng cao (V > 135, S < 70).
+    Mặt bàn cược (thảm xanh/đỏ/nâu) hoặc da tay người có S cao và Hue khác biệt.
+    """
+    if crop_img is None or crop_img.size == 0:
+        return False
+    try:
+        hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
+        _, s, v = cv2.split(hsv)
+        white_mask = (s < 70) & (v > 135)
+        white_ratio = np.count_nonzero(white_mask) / (crop_img.shape[0] * crop_img.shape[1])
+        return white_ratio >= 0.20
+    except Exception:
+        return True
+
 def compute_sharpness(cv_image):
     try:
         if len(cv_image.shape) == 3:
@@ -131,13 +148,19 @@ def extract_cards_from_results(results, m):
         for i in range(len(boxes)):
             cls_id = int(boxes.cls[i].item())
             conf = float(boxes.conf[i].item())
+            if conf < 0.35:  # Lọc bỏ các phát hiện mơ hồ
+                continue
             class_name = m.names.get(cls_id, '')
             parsed = parse_card_code(class_name)
             if parsed:
                 box_xyxy = boxes.xyxy[i].tolist()
                 box_w = box_xyxy[2] - box_xyxy[0]
                 box_h = box_xyxy[3] - box_xyxy[1]
-                if box_w < 18 or box_h < 18:
+                # Tầng 2: Kích thước tối thiểu và tỷ lệ hình học chuẩn lá bài trên 1080p
+                if box_w < 25 or box_h < 25:
+                    continue
+                ratio = box_w / max(1.0, box_h)
+                if ratio < 0.25 or ratio > 2.0:
                     continue
                 detected.append({
                     **parsed,
@@ -297,9 +320,12 @@ def send_card_detected(card, all_cards, crop_img, sharpness, current_roi):
 
 class CardPassTracker:
     """
+    Bộ lọc 4 tầng chống nhận diện nhầm tạp chất trên Server 1080p120fps:
+    - Tầng 1: Lọc nền trắng quang học (chất liệu giấy bài tây).
+    - Tầng 2: Lọc tỷ lệ kích thước hình học Bounding Box.
+    - Tầng 3: Nâng ngưỡng Confidence (>= 0.48).
+    - Tầng 4: Bộ lọc nhất quán thời gian (Bắt buộc xuất hiện >= 2 frames liên tiếp).
     Theo dõi đường cong độ nét thực tế: Mờ (bài vào) -> Rõ (giữa khung) -> Mờ (bài ra).
-    Tự động bắt đúng duy nhất 1 frame sắc nét nhất ở đỉnh và khóa không bao giờ nhận diện trùng lặp.
-    Khi bài rời khỏi khung (khung trống), tự động reset để sẵn sàng đón con tiếp theo.
     """
     STATE_IDLE = "IDLE"           # Khung trống, chưa có bài
     STATE_TRACKING = "TRACKING"   # Bài đang lướt vào (Mờ -> Rõ dần)
@@ -316,10 +342,11 @@ class CardPassTracker:
         self.peak_all_cards = []
         self.frames_since_peak = 0
         self.total_frames_in_pass = 0
+        self.card_hits_in_pass = 0  # Số frame thực sự phát hiện thấy bài trong đợt này
         
         # Exit detection
         self.empty_streak = 0
-        self.min_sharpness_threshold = 40.0
+        self.min_sharpness_threshold = 45.0  # Ngưỡng sắc nét chuẩn trên 1080p
         self.idle_frame_counter = 0
 
     def reset_to_idle(self):
@@ -330,22 +357,25 @@ class CardPassTracker:
         self.peak_all_cards = []
         self.frames_since_peak = 0
         self.total_frames_in_pass = 0
+        self.card_hits_in_pass = 0
         self.empty_streak = 0
 
     def process_frame(self, crop, current_roi):
         if crop is None or crop.size == 0:
             return
 
+        # Tầng 1: Lọc nền trắng quang học (chất liệu giấy bài)
+        has_paper = check_card_paper_presence(crop)
         sharpness = compute_sharpness(crop)
 
         if self.state == self.STATE_IDLE:
             self.idle_frame_counter += 1
-            # Quét nhận diện bài định kỳ mỗi 2 frame (~16ms) để tiết kiệm CPU
-            if self.idle_frame_counter % 2 == 0:
-                results = model.predict(crop, conf=0.25, verbose=False, imgsz=160)
+            # Chỉ chạy YOLO nếu vùng crop có ít nhất 20% nền giấy trắng bài
+            if has_paper and (self.idle_frame_counter % 2 == 0):
+                results = model.predict(crop, conf=0.40, verbose=False, imgsz=160)
                 cards = verify_and_disambiguate_card(extract_cards_from_results(results, model), crop)
                 if not cards and corner_model is not None:
-                    res_c = corner_model.predict(crop, conf=0.20, verbose=False, imgsz=160)
+                    res_c = corner_model.predict(crop, conf=0.35, verbose=False, imgsz=160)
                     cards = extract_cards_from_results(res_c, corner_model)
 
                 if cards:
@@ -357,55 +387,74 @@ class CardPassTracker:
                     self.peak_all_cards = cards
                     self.frames_since_peak = 0
                     self.total_frames_in_pass = 1
+                    self.card_hits_in_pass = 1
                     self.empty_streak = 0
 
         elif self.state == self.STATE_TRACKING:
             self.total_frames_in_pass += 1
 
-            # So sánh độ nét: nếu frame này nét hơn -> cập nhật ĐỈNH RÕ
-            if sharpness > self.peak_sharpness:
-                self.peak_sharpness = sharpness
-                self.peak_crop = crop.copy()
-                self.frames_since_peak = 0
-
-                # Chạy lại YOLO trên frame mới nét hơn này để cập nhật nhãn chính xác nhất
-                results = model.predict(crop, conf=0.25, verbose=False, imgsz=160)
+            if has_paper:
+                # Quét nhận diện bài ở frame này
+                results = model.predict(crop, conf=0.38, verbose=False, imgsz=160)
                 cards = verify_and_disambiguate_card(extract_cards_from_results(results, model), crop)
                 if cards:
-                    self.peak_card = cards[0]
-                    self.peak_all_cards = cards
+                    self.card_hits_in_pass += 1
+                    if sharpness > self.peak_sharpness:
+                        self.peak_sharpness = sharpness
+                        self.peak_crop = crop.copy()
+                        self.peak_card = cards[0]
+                        self.peak_all_cards = cards
+                        self.frames_since_peak = 0
+                    else:
+                        self.frames_since_peak += 1
+                else:
+                    self.frames_since_peak += 1
             else:
                 self.frames_since_peak += 1
 
-            # ĐIỀU KIỆN CHỐT: Đã qua đỉnh rõ và bắt đầu mờ đi (MỜ -> RÕ -> MỜ)
-            # Hoặc đã thu thập đủ 18 frames (>150ms) có đỉnh nét
-            should_finalize = (
-                (self.frames_since_peak >= 3 and self.peak_sharpness >= self.min_sharpness_threshold) or
-                (self.total_frames_in_pass >= 18 and self.peak_sharpness >= self.min_sharpness_threshold)
+            # ĐIỀU KIỆN CHỐT AN TOÀN:
+            # 1. Đã qua đỉnh rõ (frames_since_peak >= 3)
+            # 2. Độ nét đỉnh đạt chuẩn (>= 45.0)
+            # 3. Temporal Consistency: Bắt buộc thấy bài trong >= 2 frames để triệt tiêu nhiễu 1 frame
+            # 4. Confidence của lá bài đỉnh >= 0.48
+            is_valid_candidate = (
+                self.peak_card is not None and
+                self.peak_card.get('confidence', 0) >= 0.48 and
+                self.card_hits_in_pass >= 2 and
+                self.peak_sharpness >= self.min_sharpness_threshold
             )
 
-            if should_finalize and self.peak_card is not None and self.peak_crop is not None:
+            should_finalize = (
+                (self.frames_since_peak >= 3 and is_valid_candidate) or
+                (self.total_frames_in_pass >= 18 and is_valid_candidate)
+            )
+
+            if should_finalize and self.peak_crop is not None:
                 # CHỐT TẤM ẢNH ĐẸP NHẤT TẠI ĐỈNH SẮC NÉT
                 self.emit_callback(self.peak_card, self.peak_all_cards, self.peak_crop, self.peak_sharpness, current_roi)
                 self.state = self.STATE_LOCKED
                 self.empty_streak = 0
-            elif self.total_frames_in_pass >= 25 and self.peak_card is None:
+            elif self.total_frames_in_pass >= 25:
+                # Nếu theo dõi 25 frames mà không đủ điều kiện (nhiễu ngón tay hoặc bóng mờ)
                 self.reset_to_idle()
 
         elif self.state == self.STATE_LOCKED:
-            # Lá bài đã được chốt xong. Tuyệt đối không phát lại lá bài này.
-            # Kiểm tra xem bài đã rời khỏi khung chưa
+            # Lá bài đã được chốt xong. Đang chờ bài rời khỏi khung.
             self.idle_frame_counter += 1
             if self.idle_frame_counter % 2 == 0:
-                results = model.predict(crop, conf=0.20, verbose=False, imgsz=160)
-                cards = extract_cards_from_results(results, model)
-                if not cards:
+                if not has_paper:
                     self.empty_streak += 1
-                    if self.empty_streak >= 4:  # 4 frame trống liên tiếp (~33ms) -> bài đã ra hẳn
-                        self.reset_to_idle()
-                        print("[AI Worker] 🟢 Khung đã trống -> Sẵn sàng đón quân bài tiếp theo.")
                 else:
-                    self.empty_streak = 0
+                    results = model.predict(crop, conf=0.25, verbose=False, imgsz=160)
+                    cards = extract_cards_from_results(results, model)
+                    if not cards:
+                        self.empty_streak += 1
+                    else:
+                        self.empty_streak = 0
+
+                if self.empty_streak >= 4:  # Khung trống 4 frame liên tiếp
+                    self.reset_to_idle()
+                    print("[AI Worker] 🟢 Khung đã trống -> Sẵn sàng đón quân bài tiếp theo.")
 
 def stream_worker_loop():
     print("[AI Worker] Stream consumer thread started.")
