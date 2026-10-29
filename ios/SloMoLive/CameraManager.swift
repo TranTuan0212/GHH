@@ -1371,20 +1371,23 @@ public class CardDetector: NSObject, ObservableObject {
     private var lastInferenceTime: Double = 0.0
     private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
 
-    private struct FrameDetection {
-        let cardCode: String
-        let confidence: Float
-        let sharpness: Double
-        let base64Image: String?
-        let timestamp: TimeInterval
+    private struct CardPassTrajectory {
+        let id: UUID
+        var cardCode: String
+        var lastBoundingBox: CGRect
+        var lastSeenTime: TimeInterval
+        var firstSeenTime: TimeInterval
+        var frameCount: Int
+        var bestSharpness: Double
+        var bestConfidence: Float
+        var bestImageBase64: String?
+        var isCommittedToGame: Bool
     }
 
-    // Cửa sổ trượt 4-5 frame để bầu chọn chính xác tuyệt đối ở 120fps
-    private var frameHistory: [FrameDetection] = []
-    private let historyMaxFrames = 5
-    private var lastConfirmedCard: String = ""
-    private var lastConfirmedSharpness: Double = 0.0
-    private var lastConfirmedTime: TimeInterval = 0.0
+    // Bám đuôi quỹ đạo chuyển động lướt qua của lá bài ở 120fps (Trajectory Motion Tracker)
+    private var activeTrajectory: CardPassTrajectory?
+    private var lastFinishedCardCode: String = ""
+    private var lastFinishedTime: TimeInterval = 0.0
 
     @Published public var isModelLoaded: Bool = false
 
@@ -1446,12 +1449,17 @@ public class CardDetector: NSObject, ObservableObject {
                     NSLog("[CardDetector] ❌ Vision Error: %@", err.localizedDescription)
                     return
                 }
-                guard let results = req.results, !results.isEmpty else { return }
+                guard let results = req.results, !results.isEmpty else {
+                    self?.checkTrajectoryTimeout()
+                    return
+                }
 
-                if let objectObs = results as? [VNRecognizedObjectObservation] {
+                if let objectObs = results as? [VNRecognizedObjectObservation], !objectObs.isEmpty {
                     self?.handleDetections(objectObs, pixelBuffer: pixelBuffer, roiRect: roiRect)
-                } else if let featureObs = results as? [VNCoreMLFeatureValueObservation] {
+                } else if let featureObs = results as? [VNCoreMLFeatureValueObservation], !featureObs.isEmpty {
                     self?.handleFeatureObservations(featureObs, pixelBuffer: pixelBuffer, roiRect: roiRect)
+                } else {
+                    self?.checkTrajectoryTimeout()
                 }
             }
             request.imageCropAndScaleOption = .scaleFill
@@ -1462,14 +1470,27 @@ public class CardDetector: NSObject, ObservableObject {
         }
     }
 
+    private func checkTrajectoryTimeout() {
+        let now = Date().timeIntervalSince1970
+        if let traj = activeTrajectory, (now - traj.lastSeenTime) > 0.18 {
+            NSLog("[CardTrajectory] 💨 Lá bài %@ đã lướt RA KHỎI Ô ĐỎ. Sẵn sàng cho lá tiếp theo!", traj.cardCode)
+            lastFinishedCardCode = traj.cardCode
+            lastFinishedTime = traj.lastSeenTime
+            activeTrajectory = nil
+        }
+    }
+
     private func handleDetections(_ observations: [VNRecognizedObjectObservation], pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
         guard let best = observations.max(by: { $0.confidence < $1.confidence }),
               let label = best.labels.first,
-              label.confidence >= 0.35 else { return }
+              label.confidence >= 0.35 else {
+            checkTrajectoryTimeout()
+            return
+        }
 
         let cardCode = label.identifier
         let conf = Int(Float(label.confidence * 100.0).rounded())
-        processCardCandidate(cardCode: cardCode, conf: conf, pixelBuffer: pixelBuffer, roiRect: roiRect)
+        processCardCandidate(cardCode: cardCode, conf: conf, boundingBox: best.boundingBox, pixelBuffer: pixelBuffer, roiRect: roiRect)
     }
 
     private func handleFeatureObservations(_ features: [VNCoreMLFeatureValueObservation], pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
@@ -1499,108 +1520,119 @@ public class CardDetector: NSObject, ObservableObject {
                     ]
                     let cardCode = (maxIdx < cardNames.count) ? cardNames[maxIdx] : "\(maxIdx)"
                     let conf = Int((maxConf * 100.0).rounded())
-                    processCardCandidate(cardCode: cardCode, conf: conf, pixelBuffer: pixelBuffer, roiRect: roiRect)
+                    let defaultBox = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+                    processCardCandidate(cardCode: cardCode, conf: conf, boundingBox: defaultBox, pixelBuffer: pixelBuffer, roiRect: roiRect)
+                    return
                 }
             }
         }
+        checkTrajectoryTimeout()
     }
 
-    private func processCardCandidate(cardCode: String, conf: Int, pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
-        let (base64Image, sharpness) = extractCroppedImageAndSharpness(from: pixelBuffer, roiRect: roiRect)
+    private func processCardCandidate(cardCode: String, conf: Int, boundingBox: CGRect, pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
         let now = Date().timeIntervalSince1970
         let confFloat = Float(conf) / 100.0
 
-        let detection = FrameDetection(
-            cardCode: cardCode,
-            confidence: confFloat,
-            sharpness: sharpness,
-            base64Image: base64Image,
-            timestamp: now
-        )
+        // 1. Kiểm tra xem có đang nằm trên quỹ đạo của lá bài đang lướt không
+        if var traj = activeTrajectory {
+            let dt = now - traj.lastSeenTime
+            let centerCur = CGPoint(x: boundingBox.midX, y: boundingBox.midY)
+            let centerPrev = CGPoint(x: traj.lastBoundingBox.midX, y: traj.lastBoundingBox.midY)
+            let dist = hypot(centerCur.x - centerPrev.x, centerCur.y - centerPrev.y)
 
-        frameHistory.append(detection)
-        if frameHistory.count > historyMaxFrames {
-            frameHistory.removeFirst()
-        }
+            // Nếu trong vòng 250ms và khoảng cách chuyển động liên tục:
+            // ĐÂY LÀ CÙNG 1 LÁ BÀI ĐANG TRONG QUÁ TRÌNH LƯỚT QUA Ô ĐỎ!
+            if dt < 0.25 && dist < 0.55 {
+                let (base64Image, sharpness) = extractCroppedImageAndSharpness(from: pixelBuffer, roiRect: roiRect)
+                traj.lastBoundingBox = boundingBox
+                traj.lastSeenTime = now
+                traj.frameCount += 1
 
-        // Lọc bỏ frame quá cũ (> 0.45s) để thích ứng tốc độ chia bài siêu nhanh của dealer
-        frameHistory.removeAll { (now - $0.timestamp) > 0.45 }
+                // Săn frame nét nhất trong hành trình lướt qua:
+                if sharpness > traj.bestSharpness {
+                    traj.bestSharpness = sharpness
+                    traj.bestImageBase64 = base64Image
+                    if confFloat >= traj.bestConfidence {
+                        traj.cardCode = cardCode
+                        traj.bestConfidence = confFloat
+                    }
 
-        // Cần ít nhất 3 frame trong chuỗi 4-5 frame để hoàn tất bầu chọn
-        guard frameHistory.count >= 3 else { return }
-
-        // Bầu chọn có trọng số: Score = Confidence * (Sharpness / 100.0)
-        var counts: [String: Int] = [:]
-        var scores: [String: Double] = [:]
-        var bestFrameByCode: [String: FrameDetection] = [:]
-        var totalScore: Double = 0.0
-
-        for item in frameHistory {
-            counts[item.cardCode, default: 0] += 1
-            let s = Double(item.confidence) * max(1.0, item.sharpness / 100.0)
-            scores[item.cardCode, default: 0.0] += s
-            totalScore += s
-
-            if let existing = bestFrameByCode[item.cardCode] {
-                if item.sharpness > existing.sharpness {
-                    bestFrameByCode[item.cardCode] = item
+                    // Nếu đã chốt vào Cửa cược, nâng cấp bức ảnh rõ nét nhất lên Web
+                    if traj.isCommittedToGame {
+                        let confPercent = Int((traj.bestConfidence * 100.0).rounded())
+                        NSLog("[CardTrajectory] ✨ 120fps NÂNG CẤP ẢNH NÉT NHẤT giữa chuyển động cho %@: Nét=%.1f", traj.cardCode, traj.bestSharpness)
+                        DispatchQueue.main.async {
+                            RoiSyncManager.shared.notifyCardDetected(
+                                cardCode: traj.cardCode,
+                                conf: confPercent,
+                                sharpness: traj.bestSharpness,
+                                imageBase64: traj.bestImageBase64,
+                                updateFrameOnly: true
+                            )
+                        }
+                    }
                 }
+
+                // Nếu chưa chốt và đã đủ 2 frame hoặc conf >= 85%: Chốt vào Cửa cược!
+                if !traj.isCommittedToGame && (traj.frameCount >= 2 || confFloat >= 0.85) {
+                    traj.isCommittedToGame = true
+                    let confPercent = Int((traj.bestConfidence * 100.0).rounded())
+                    NSLog("[CardTrajectory] 🎯 120fps CHỐT BÀI ĐANG LƯỚT: %@ (%d%%) | Nét=%.1f", traj.cardCode, confPercent, traj.bestSharpness)
+
+                    DispatchQueue.main.async {
+                        RoiSyncManager.shared.notifyCardDetected(
+                            cardCode: traj.cardCode,
+                            conf: confPercent,
+                            sharpness: traj.bestSharpness,
+                            imageBase64: traj.bestImageBase64,
+                            updateFrameOnly: false
+                        )
+                    }
+                }
+
+                activeTrajectory = traj
+                return
             } else {
-                bestFrameByCode[item.cardCode] = item
+                // Quỹ đạo cũ kết thúc (bài đã trôi ra ngoài biên)
+                NSLog("[CardTrajectory] 💨 Quỹ đạo cũ kết thúc cho %@. Bắt đầu quỹ đạo bài mới!", traj.cardCode)
+                lastFinishedCardCode = traj.cardCode
+                lastFinishedTime = traj.lastSeenTime
+                activeTrajectory = nil
             }
         }
 
-        guard let (winnerCode, winnerScore) = scores.max(by: { $0.value < $1.value }),
-              let winnerCount = counts[winnerCode],
-              let bestWinner = bestFrameByCode[winnerCode] else { return }
+        // 2. KHỞI TẠO QUỸ ĐẠO BÀI MỚI VỪA LƯỚT VÀO Ô ĐỎ
+        let (base64Image, sharpness) = extractCroppedImageAndSharpness(from: pixelBuffer, roiRect: roiRect)
+        var newTraj = CardPassTrajectory(
+            id: UUID(),
+            cardCode: cardCode,
+            lastBoundingBox: boundingBox,
+            lastSeenTime: now,
+            firstSeenTime: now,
+            frameCount: 1,
+            bestSharpness: sharpness,
+            bestConfidence: confFloat,
+            bestImageBase64: base64Image,
+            isCommittedToGame: false
+        )
 
-        // Điều kiện chốt:
-        // 1. Phải xuất hiện trong ít nhất 3 frame (hoặc chiếm >= 60% số frame trong window)
-        // 2. Điểm số trọng số chiếm đa số áp đảo (>= 60% tổng điểm)
-        guard winnerCount >= 3, (totalScore > 0 && winnerScore / totalScore >= 0.60) else {
-            return
-        }
-
-        let isSameCard = (winnerCode == lastConfirmedCard && (now - lastConfirmedTime) < 2.5)
-
-        if !isSameCard {
-            // Chốt LÁ BÀI MỚI bằng đồng thuận 120fps!
-            lastConfirmedCard = winnerCode
-            lastConfirmedSharpness = bestWinner.sharpness
-            lastConfirmedTime = now
-
-            let confPercent = Int((bestWinner.confidence * 100.0).rounded())
-            NSLog("[CardDetector] 🎯 120fps CHỐT BÀI MỚI (Đồng thuận %d/%d frames): %@ (%d%%) | Nét=%.1f | Ảnh=%@",
-                  winnerCount, frameHistory.count, winnerCode, confPercent, bestWinner.sharpness, bestWinner.base64Image != nil ? "CÓ" : "KHÔNG")
-
+        // Nếu ngay frame đầu tiên đã cực nét và tin cậy cao (>= 85%), chốt ngay không trễ
+        if confFloat >= 0.85 {
+            newTraj.isCommittedToGame = true
+            let confPercent = Int((confFloat * 100.0).rounded())
+            NSLog("[CardTrajectory] 🎯 120fps BẮT DÍNH TỨC THÌ lá mới vào ô: %@ (%d%%) | Nét=%.1f", cardCode, confPercent, sharpness)
             DispatchQueue.main.async {
                 RoiSyncManager.shared.notifyCardDetected(
-                    cardCode: winnerCode,
+                    cardCode: cardCode,
                     conf: confPercent,
-                    sharpness: bestWinner.sharpness,
-                    imageBase64: bestWinner.base64Image,
+                    sharpness: sharpness,
+                    imageBase64: base64Image,
                     updateFrameOnly: false
                 )
             }
-        } else if bestWinner.sharpness > (lastConfirmedSharpness + 15.0) {
-            // Cùng lá bài nhưng tìm thấy frame NÉT HƠN NỮA! Nâng cấp ảnh nét nhất
-            let oldSharp = lastConfirmedSharpness
-            lastConfirmedSharpness = bestWinner.sharpness
-            lastConfirmedTime = now
-
-            let confPercent = Int((bestWinner.confidence * 100.0).rounded())
-            NSLog("[CardDetector] ✨ 120fps NÂNG CẤP ẢNH NÉT NHẤT cho %@ | Nét mới=%.1f (cũ=%.1f)", winnerCode, bestWinner.sharpness, oldSharp)
-
-            DispatchQueue.main.async {
-                RoiSyncManager.shared.notifyCardDetected(
-                    cardCode: winnerCode,
-                    conf: confPercent,
-                    sharpness: bestWinner.sharpness,
-                    imageBase64: bestWinner.base64Image,
-                    updateFrameOnly: true
-                )
-            }
         }
+
+        activeTrajectory = newTraj
     }
 
     /// Trích xuất ảnh cropped trong ô đỏ và tính toán chỉ số độ nét (Laplacian Variance)
