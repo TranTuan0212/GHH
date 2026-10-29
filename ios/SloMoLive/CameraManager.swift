@@ -1255,21 +1255,15 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             // from background threads" và truy cập thread-safe.
             // Chạy On-Device AI trực tiếp trên CVPixelBuffer gốc không nén
             if RoiSyncManager.shared.isActive {
-                let orientationProp: CGImagePropertyOrientation = {
-                    switch self.currentCaptureOrientation {
-                    case .landscapeRight: return .up
-                    case .landscapeLeft: return .down
-                    case .portraitUpsideDown: return .left
-                    default: return .right
-                    }
-                }()
+                // videoDataOutput connection đã tự xoay buffer theo currentCaptureOrientation.
+                // Do đó buffer đưa vào đây đã là ảnh thẳng đứng (.up). Vision không cần xoay thêm.
                 CardDetector.shared.processFrame(
                     pixelBuffer: pixelBuffer,
                     normX: RoiSyncManager.shared.normX,
                     normY: RoiSyncManager.shared.normY,
                     normW: RoiSyncManager.shared.normW,
                     normH: RoiSyncManager.shared.normH,
-                    orientation: orientationProp
+                    orientation: .up
                 )
             }
 
@@ -1426,8 +1420,17 @@ public class CardDetector: NSObject, ObservableObject {
             guard let self = self else { return }
 
             let request = VNCoreMLRequest(model: visionModel) { [weak self] req, err in
-                guard err == nil, let results = req.results as? [VNRecognizedObjectObservation], !results.isEmpty else { return }
-                self?.handleDetections(results)
+                if let err = err {
+                    print("[CardDetector] ❌ Vision Error: \(err.localizedDescription)")
+                    return
+                }
+                guard let results = req.results, !results.isEmpty else { return }
+
+                if let objectObs = results as? [VNRecognizedObjectObservation] {
+                    self?.handleDetections(objectObs)
+                } else if let featureObs = results as? [VNCoreMLFeatureValueObservation] {
+                    self?.handleFeatureObservations(featureObs)
+                }
             }
             request.imageCropAndScaleOption = .scaleFill
             request.regionOfInterest = roiRect
@@ -1448,6 +1451,42 @@ public class CardDetector: NSObject, ObservableObject {
 
         DispatchQueue.main.async {
             RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)
+        }
+    }
+
+    private func handleFeatureObservations(_ features: [VNCoreMLFeatureValueObservation]) {
+        for feat in features {
+            if feat.featureName == "confidence", let multiArray = feat.featureValue.multiArrayValue {
+                let count = multiArray.count
+                guard count > 0 else { continue }
+                var maxConf: Float = 0.0
+                var maxIdx = -1
+                let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: count)
+                for i in 0..<min(count, 52) {
+                    let c = ptr[i]
+                    if c > maxConf {
+                        maxConf = c
+                        maxIdx = i
+                    }
+                }
+                if maxConf >= 0.40 && maxIdx >= 0 {
+                    let cardNames = [
+                        "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S",
+                        "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S",
+                        "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S",
+                        "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S",
+                        "9C", "9D", "9H", "9S", "AC", "AD", "AH", "AS",
+                        "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS",
+                        "QC", "QD", "QH", "QS"
+                    ]
+                    let cardCode = (maxIdx < cardNames.count) ? cardNames[maxIdx] : "\(maxIdx)"
+                    let conf = Int((maxConf * 100.0).rounded())
+                    print("[CardDetector] 🎯 ANE Feature phát hiện bài: \(cardCode) (\(conf)%)")
+                    DispatchQueue.main.async {
+                        RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)
+                    }
+                }
+            }
         }
     }
 }

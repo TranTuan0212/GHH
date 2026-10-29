@@ -13,6 +13,7 @@ public class NetworkManager: ObservableObject {
     @Published public var serverURL: String = defaultServerURL {
         didSet {
             UserDefaults.standard.set(serverURL, forKey: "saved_server_url")
+            RoiSyncManager.shared.connect()
         }
     }
     @Published public var isAuthenticated = false
@@ -336,6 +337,7 @@ public class NetworkManager: ObservableObject {
                 if let roiObj = json["roi"] as? [String: Any] {
                     RoiSyncManager.shared.updateRoi(data: roiObj)
                 }
+                RoiSyncManager.shared.connect()
                 completion(true)
             }
         }.resume()

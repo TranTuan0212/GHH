@@ -15,6 +15,7 @@ class VideoPreviewView: UIView {
 
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
+    var orientation: AVCaptureVideoOrientation = .portrait
     var onTapToFocus: ((CGPoint, CGPoint) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
@@ -26,6 +27,9 @@ struct CameraPreviewView: UIViewRepresentable {
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
+        if let conn = view.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
+            conn.videoOrientation = orientation
+        }
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
@@ -37,6 +41,11 @@ struct CameraPreviewView: UIViewRepresentable {
     func updateUIView(_ uiView: VideoPreviewView, context: Context) {
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
+        }
+        if let conn = uiView.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
+            if conn.videoOrientation != orientation {
+                conn.videoOrientation = orientation
+            }
         }
         context.coordinator.parent = self
     }
@@ -277,7 +286,7 @@ struct ContentView: View {
             } else {
                 // Live Stream Camera Preview View
                 ZStack {
-                    CameraPreviewView(session: cameraManager.session, onTapToFocus: { viewPoint, devicePoint in
+                    CameraPreviewView(session: cameraManager.session, orientation: cameraManager.currentCaptureOrientation, onTapToFocus: { viewPoint, devicePoint in
                         cameraManager.focus(at: devicePoint, shouldLock: false)
                         focusPoint = viewPoint
                         showFocusBox = true
@@ -303,15 +312,9 @@ struct ContentView: View {
                         let viewH = geo.size.height
 
                         if roiSync.isRoiVisible && roiSync.isActive {
+                            let orient = cameraManager.currentCaptureOrientation
                             let isFront = (cameraManager.currentDevicePosition == .front)
-                            let sensorW: CGFloat = 1080
-                            let sensorH: CGFloat = 1920
-
-                            let scale = max(viewW / sensorW, viewH / sensorH)
-                            let renderedW = sensorW * scale
-                            let renderedH = sensorH * scale
-                            let offsetX = (viewW - renderedW) / 2
-                            let offsetY = (viewH - renderedH) / 2
+                            let isLandscape = (orient == .landscapeLeft || orient == .landscapeRight)
 
                             // Khử lệch gương của Cam trước nếu dùng camera selfie
                             let rx = isFront ? (1.0 - roiSync.normX) : roiSync.normX
@@ -319,11 +322,53 @@ struct ContentView: View {
                             let rw = roiSync.normW
                             let rh = roiSync.normH
 
-                            let boxW = renderedW * rw
-                            let boxH = renderedH * rh
-                            // Tọa độ tâm chuẩn xác 1:1 theo video stream
-                            let boxX = offsetX + rx * renderedW
-                            let boxY = offsetY + ry * renderedH
+                            // Trên màn hình portrait của iPhone (viewW x viewH, viewW < viewH):
+                            let screenLong = max(viewW, viewH)
+                            let screenShort = min(viewW, viewH)
+
+                            // Khi để ngang (Landscape):
+                            // Luồng video trên Web là 16:9 (1920x1080).
+                            // - Chiều ngang theo mắt người (dọc theo cạnh dài phone) = rw * 1920 (scaled)
+                            // - Chiều dọc theo mắt người (dọc theo cạnh ngắn phone) = rh * 1080 (scaled)
+                            let scale = isLandscape
+                                ? max(screenLong / 1920.0, screenShort / 1080.0)
+                                : max(viewW / 1080.0, viewH / 1920.0)
+
+                            let renderedW = (isLandscape ? 1920.0 : 1080.0) * scale
+                            let renderedH = (isLandscape ? 1080.0 : 1920.0) * scale
+
+                            // boxW vẽ dọc theo SwiftUI X (cạnh ngắn máy), boxH vẽ dọc theo SwiftUI Y (cạnh dài máy)
+                            let boxW: CGFloat = isLandscape ? (renderedH * rh) : (renderedW * rw)
+                            let boxH: CGFloat = isLandscape ? (renderedW * rw) : (renderedH * rh)
+
+                            let (boxX, boxY): (CGFloat, CGFloat) = {
+                                if isLandscape {
+                                    let offsetX = (screenShort - renderedH) / 2.0
+                                    let offsetY = (screenLong - renderedW) / 2.0
+                                    switch orient {
+                                    case .landscapeRight:
+                                        // Camera ở bên trái người nhìn
+                                        let px = offsetX + (1.0 - ry) * renderedH
+                                        let py = offsetY + rx * renderedW
+                                        return (px, py)
+                                    case .landscapeLeft:
+                                        // Camera ở bên phải người nhìn
+                                        let px = offsetX + ry * renderedH
+                                        let py = offsetY + (1.0 - rx) * renderedW
+                                        return (px, py)
+                                    default:
+                                        return (viewW / 2, viewH / 2)
+                                    }
+                                } else {
+                                    let offsetX = (viewW - renderedW) / 2.0
+                                    let offsetY = (viewH - renderedH) / 2.0
+                                    if orient == .portraitUpsideDown {
+                                        return (offsetX + (1.0 - rx) * renderedW, offsetY + (1.0 - ry) * renderedH)
+                                    } else {
+                                        return (offsetX + rx * renderedW, offsetY + ry * renderedH)
+                                    }
+                                }
+                            }()
 
                             ZStack {
                                 // Khung chữ nhật ô soi: Đỏ khi rà soát, Xanh lá rực khi phát hiện bài
@@ -1174,7 +1219,14 @@ public class RoiSyncManager: ObservableObject {
     }
 
     public func sendDetectedCardToServer(cardCode: String, conf: Int, sharpness: Double) {
-        guard isConnected else { return }
+        guard isConnected else {
+            print("[RoiSyncManager] ⚠️ WebSocket chưa kết nối! Đang tự động kết nối lại để gửi bài: \(cardCode)...")
+            connect()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.sendDetectedCardToServer(cardCode: cardCode, conf: conf, sharpness: sharpness)
+            }
+            return
+        }
         let payload: [String: Any] = [
             "type": "card_detected_from_ios",
             "data": [
@@ -1188,7 +1240,9 @@ public class RoiSyncManager: ObservableObject {
            let str = String(data: data, encoding: .utf8) {
             webSocketTask?.send(.string(str)) { err in
                 if let err = err {
-                    print("[RoiSyncManager] Error sending card to server: \(err)")
+                    print("[RoiSyncManager] ❌ Lỗi gửi bài lên WebSocket: \(err)")
+                } else {
+                    print("[RoiSyncManager] 🚀 Đã gửi thành công lá bài \(cardCode) (\(conf)%) lên Server!")
                 }
             }
         }
