@@ -348,8 +348,11 @@ struct ContentView: View {
                                 finalNormW = rw
                                 finalNormH = rh
                             case .portrait:
-                                fallthrough
-                            @unknown default:
+                                finalNormX = rx
+                                finalNormY = ry
+                                finalNormW = rw
+                                finalNormH = rh
+                            default:
                                 finalNormX = rx
                                 finalNormY = ry
                                 finalNormW = rw

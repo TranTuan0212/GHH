@@ -33,6 +33,7 @@ workflows:
       - name: Build iOS Application (.app)
         script: |
           set -e
+          set -o pipefail
           echo "=== Building with workspace ==="
           cd ios
           ls -la SloMoLive.xcworkspace
