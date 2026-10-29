@@ -54,5 +54,6 @@ server/media/
 test_*
 benchmark_*
 server/ai/
+!server/ai/cards_yolov8.pt
 view_images.html
 
