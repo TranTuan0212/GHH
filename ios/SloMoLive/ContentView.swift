@@ -1026,8 +1026,10 @@ public class RoiSyncManager: ObservableObject {
     @Published public var hasRecentDetection: Bool = false
 
     private var webSocketTask: URLSessionWebSocketTask?
+    private let session = URLSession(configuration: .default)
     private var isConnecting: Bool = false
     private var reconnectTimer: Timer?
+    private var pingTimer: Timer?
     private var clearDetectionWorkItem: DispatchWorkItem?
 
     public init() {
@@ -1040,6 +1042,9 @@ public class RoiSyncManager: ObservableObject {
 
     public func connect() {
         guard !isConnecting else { return }
+        if isConnected, let task = webSocketTask, task.state == .running {
+            return
+        }
         isConnecting = true
         webSocketTask?.cancel(with: .goingAway, reason: nil)
 
@@ -1049,12 +1054,37 @@ public class RoiSyncManager: ObservableObject {
             return
         }
 
-        let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: wsUrl)
         self.webSocketTask = task
         task.resume()
 
         listenForMessages()
+        startPingTimer()
+    }
+
+    private func startPingTimer() {
+        stopPingTimer()
+        DispatchQueue.main.async { [weak self] in
+            self?.pingTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+                guard let self = self, self.isConnected else { return }
+                self.webSocketTask?.sendPing { [weak self] error in
+                    if let error = error {
+                        print("[RoiSyncManager] WS Ping failed: \(error.localizedDescription)")
+                        DispatchQueue.main.async {
+                            self?.isConnected = false
+                            self?.scheduleReconnect()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func stopPingTimer() {
+        DispatchQueue.main.async { [weak self] in
+            self?.pingTimer?.invalidate()
+            self?.pingTimer = nil
+        }
     }
 
     private func buildWebSocketUrl() -> URL? {
@@ -1104,6 +1134,7 @@ public class RoiSyncManager: ObservableObject {
                     self.isConnected = false
                     self.isConnecting = false
                 }
+                self.stopPingTimer()
                 self.scheduleReconnect()
             }
         }
@@ -1193,7 +1224,7 @@ public class RoiSyncManager: ObservableObject {
     }
 
     
-    public func notifyCardDetected(cardCode: String, conf: Int, sharpness: Double) {
+    public func notifyCardDetected(cardCode: String, conf: Int, sharpness: Double, imageBase64: String? = nil, updateFrameOnly: Bool = false) {
         self.detectedCard = cardCode
         self.detectedConfidence = conf
         self.detectedSharpness = sharpness
@@ -1206,26 +1237,31 @@ public class RoiSyncManager: ObservableObject {
         self.clearDetectionWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: item)
 
-        sendDetectedCardToServer(cardCode: cardCode, conf: conf, sharpness: sharpness)
+        sendDetectedCardToServer(cardCode: cardCode, conf: conf, sharpness: sharpness, imageBase64: imageBase64, updateFrameOnly: updateFrameOnly)
     }
 
-    public func sendDetectedCardToServer(cardCode: String, conf: Int, sharpness: Double) {
+    public func sendDetectedCardToServer(cardCode: String, conf: Int, sharpness: Double, imageBase64: String? = nil, updateFrameOnly: Bool = false) {
         guard isConnected else {
             print("[RoiSyncManager] ⚠️ WebSocket chưa kết nối! Đang tự động kết nối lại để gửi bài: \(cardCode)...")
             connect()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.sendDetectedCardToServer(cardCode: cardCode, conf: conf, sharpness: sharpness)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.sendDetectedCardToServer(cardCode: cardCode, conf: conf, sharpness: sharpness, imageBase64: imageBase64, updateFrameOnly: updateFrameOnly)
             }
             return
         }
+        var cardData: [String: Any] = [
+            "cardValue": cardCode,
+            "confidence": Double(conf) / 100.0,
+            "sharpness": sharpness,
+            "updateFrameOnly": updateFrameOnly,
+            "timestamp": Date().timeIntervalSince1970
+        ]
+        if let img = imageBase64, !img.isEmpty {
+            cardData["image"] = img
+        }
         let payload: [String: Any] = [
             "type": "card_detected_from_ios",
-            "data": [
-                "cardValue": cardCode,
-                "confidence": Double(conf) / 100.0,
-                "sharpness": sharpness,
-                "timestamp": Date().timeIntervalSince1970
-            ]
+            "data": cardData
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
            let str = String(data: data, encoding: .utf8) {
@@ -1233,7 +1269,7 @@ public class RoiSyncManager: ObservableObject {
                 if let err = err {
                     print("[RoiSyncManager] ❌ Lỗi gửi bài lên WebSocket: \(err)")
                 } else {
-                    print("[RoiSyncManager] 🚀 Đã gửi thành công lá bài \(cardCode) (\(conf)%) lên Server!")
+                    print("[RoiSyncManager] 🚀 Đã gửi thành công lá bài \(cardCode) (\(conf)%) [ảnh: \(imageBase64 != nil ? "CÓ" : "KHÔNG"), updateOnly: \(updateFrameOnly)] lên Server!")
                 }
             }
         }

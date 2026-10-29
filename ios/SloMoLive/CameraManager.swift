@@ -3,6 +3,7 @@ import QuartzCore
 import Combine
 import Vision
 import CoreML
+import CoreImage
 import Foundation
 import AVFoundation
 import LFLiveKit
@@ -1368,6 +1369,12 @@ public class CardDetector: NSObject, ObservableObject {
     private var isBusy = false
     private let queue = DispatchQueue(label: "com.slomolive.ai.vision", qos: .userInitiated)
     private var lastInferenceTime: Double = 0.0
+    private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
+
+    // Theo dõi lá bài gần nhất để chọn bức ảnh rõ nét nhất (Best Frame Selection)
+    private var lastDetectedCard: String = ""
+    private var lastDetectedSharpness: Double = 0.0
+    private var lastDetectedTime: TimeInterval = 0.0
 
     @Published public var isModelLoaded: Bool = false
 
@@ -1377,13 +1384,18 @@ public class CardDetector: NSObject, ObservableObject {
     }
 
     public func loadModel() {
-        let possibleUrls = [
+        var possibleUrls = [
             Bundle.main.url(forResource: "cards_yolov8", withExtension: "mlmodelc"),
             Bundle.main.url(forResource: "cards_yolov8", withExtension: "mlpackage")
         ].compactMap { $0 }
 
+        let directModelc = Bundle.main.bundleURL.appendingPathComponent("cards_yolov8.mlmodelc")
+        if FileManager.default.fileExists(atPath: directModelc.path) {
+            possibleUrls.insert(directModelc, at: 0)
+        }
+
         guard let modelURL = possibleUrls.first else {
-            print("[CardDetector] ⚠️ Model CoreML 'cards_yolov8' chưa có trong app bundle.")
+            NSLog("[CardDetector] ⚠️ Model CoreML 'cards_yolov8' chưa có trong app bundle.")
             return
         }
 
@@ -1393,9 +1405,9 @@ public class CardDetector: NSObject, ObservableObject {
             let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
             self.visionModel = try VNCoreMLModel(for: mlModel)
             DispatchQueue.main.async { self.isModelLoaded = true }
-            print("[CardDetector] 🚀 Đã nạp thành công CoreML Model lên Apple Neural Engine!")
+            NSLog("[CardDetector] 🚀 Đã nạp thành công CoreML Model lên Apple Neural Engine: %@", modelURL.lastPathComponent)
         } catch {
-            print("[CardDetector] ❌ Lỗi load CoreML model: \(error)")
+            NSLog("[CardDetector] ❌ Lỗi load CoreML model: %@", error.localizedDescription)
         }
     }
 
@@ -1421,15 +1433,15 @@ public class CardDetector: NSObject, ObservableObject {
 
             let request = VNCoreMLRequest(model: visionModel) { [weak self] req, err in
                 if let err = err {
-                    print("[CardDetector] ❌ Vision Error: \(err.localizedDescription)")
+                    NSLog("[CardDetector] ❌ Vision Error: %@", err.localizedDescription)
                     return
                 }
                 guard let results = req.results, !results.isEmpty else { return }
 
                 if let objectObs = results as? [VNRecognizedObjectObservation] {
-                    self?.handleDetections(objectObs)
+                    self?.handleDetections(objectObs, pixelBuffer: pixelBuffer, roiRect: roiRect)
                 } else if let featureObs = results as? [VNCoreMLFeatureValueObservation] {
-                    self?.handleFeatureObservations(featureObs)
+                    self?.handleFeatureObservations(featureObs, pixelBuffer: pixelBuffer, roiRect: roiRect)
                 }
             }
             request.imageCropAndScaleOption = .scaleFill
@@ -1440,21 +1452,17 @@ public class CardDetector: NSObject, ObservableObject {
         }
     }
 
-    private func handleDetections(_ observations: [VNRecognizedObjectObservation]) {
+    private func handleDetections(_ observations: [VNRecognizedObjectObservation], pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
         guard let best = observations.max(by: { $0.confidence < $1.confidence }),
               let label = best.labels.first,
-              label.confidence >= 0.40 else { return }
+              label.confidence >= 0.35 else { return }
 
         let cardCode = label.identifier
         let conf = Int(Float(label.confidence * 100.0).rounded())
-        print("[CardDetector] 🎯 ANE phát hiện bài: \(cardCode) (\(conf)%)")
-
-        DispatchQueue.main.async {
-            RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)
-        }
+        processCardCandidate(cardCode: cardCode, conf: conf, pixelBuffer: pixelBuffer, roiRect: roiRect)
     }
 
-    private func handleFeatureObservations(_ features: [VNCoreMLFeatureValueObservation]) {
+    private func handleFeatureObservations(_ features: [VNCoreMLFeatureValueObservation], pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
         for feat in features {
             if feat.featureName == "confidence", let multiArray = feat.featureValue.multiArrayValue {
                 let count = multiArray.count
@@ -1469,7 +1477,7 @@ public class CardDetector: NSObject, ObservableObject {
                         maxIdx = i
                     }
                 }
-                if maxConf >= 0.40 && maxIdx >= 0 {
+                if maxConf >= 0.35 && maxIdx >= 0 {
                     let cardNames = [
                         "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S",
                         "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S",
@@ -1481,12 +1489,129 @@ public class CardDetector: NSObject, ObservableObject {
                     ]
                     let cardCode = (maxIdx < cardNames.count) ? cardNames[maxIdx] : "\(maxIdx)"
                     let conf = Int((maxConf * 100.0).rounded())
-                    print("[CardDetector] 🎯 ANE Feature phát hiện bài: \(cardCode) (\(conf)%)")
-                    DispatchQueue.main.async {
-                        RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)
-                    }
+                    processCardCandidate(cardCode: cardCode, conf: conf, pixelBuffer: pixelBuffer, roiRect: roiRect)
                 }
             }
         }
+    }
+
+    private func processCardCandidate(cardCode: String, conf: Int, pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
+        let (base64Image, sharpness) = extractCroppedImageAndSharpness(from: pixelBuffer, roiRect: roiRect)
+        let now = Date().timeIntervalSince1970
+        let isSameCard = (cardCode == lastDetectedCard && (now - lastDetectedTime) < 2.5)
+
+        if !isSameCard {
+            // Lá bài MỚI!
+            lastDetectedCard = cardCode
+            lastDetectedSharpness = sharpness
+            lastDetectedTime = now
+
+            NSLog("[CardDetector] 🎯 ANE phát hiện bài MỚI: %@ (%d%%) | Nét=%.1f | Ảnh=%@", cardCode, conf, sharpness, base64Image != nil ? "CÓ" : "KHÔNG")
+            DispatchQueue.main.async {
+                RoiSyncManager.shared.notifyCardDetected(
+                    cardCode: cardCode,
+                    conf: conf,
+                    sharpness: sharpness,
+                    imageBase64: base64Image,
+                    updateFrameOnly: false
+                )
+            }
+        } else if sharpness > (lastDetectedSharpness + 15.0) {
+            // Cùng lá bài nhưng tìm thấy frame NÉT HƠN! Tự động nâng cấp ảnh nét nhất lên Web
+            let oldSharp = lastDetectedSharpness
+            lastDetectedSharpness = sharpness
+            lastDetectedTime = now
+
+            NSLog("[CardDetector] ✨ NÂNG CẤP ẢNH NÉT NHẤT cho: %@ | Nét mới=%.1f (cũ=%.1f)", cardCode, sharpness, oldSharp)
+            DispatchQueue.main.async {
+                RoiSyncManager.shared.notifyCardDetected(
+                    cardCode: cardCode,
+                    conf: conf,
+                    sharpness: sharpness,
+                    imageBase64: base64Image,
+                    updateFrameOnly: true
+                )
+            }
+        }
+    }
+
+    /// Trích xuất ảnh cropped trong ô đỏ và tính toán chỉ số độ nét (Laplacian Variance)
+    private func extractCroppedImageAndSharpness(from pixelBuffer: CVPixelBuffer, roiRect: CGRect) -> (base64: String?, sharpness: Double) {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let extent = ciImage.extent
+        let bufW = extent.width
+        let bufH = extent.height
+
+        guard bufW > 10, bufH > 10 else { return (nil, 100.0) }
+
+        let cropX = max(0, min(bufW, roiRect.origin.x * bufW))
+        let cropY = max(0, min(bufH, roiRect.origin.y * bufH))
+        let cropW = max(20, min(bufW - cropX, roiRect.size.width * bufW))
+        let cropH = max(20, min(bufH - cropY, roiRect.size.height * bufH))
+        let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
+
+        guard let cgImage = ciContext.createCGImage(ciImage, from: cropPixelRect) else {
+            return (nil, 100.0)
+        }
+
+        let sharpness = computeSharpness(from: cgImage)
+
+        // Nén ảnh JPEG nhỏ gọn (max dimension 320) để gửi tức thì qua mạng
+        let uiImage = UIImage(cgImage: cgImage)
+        let maxDim: CGFloat = 320.0
+        let scale = min(maxDim / max(uiImage.size.width, 1), maxDim / max(uiImage.size.height, 1), 1.0)
+        let newSize = CGSize(width: max(1, uiImage.size.width * scale), height: max(1, uiImage.size.height * scale))
+
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let resized = renderer.image { _ in
+            uiImage.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+
+        if let jpegData = resized.jpegData(compressionQuality: 0.8) {
+            let b64 = "data:image/jpeg;base64," + jpegData.base64EncodedString()
+            return (b64, sharpness)
+        }
+        return (nil, sharpness)
+    }
+
+    /// Tính toán độ nét bằng phương sai Laplacian trên lưới điểm ảnh
+    private func computeSharpness(from cgImage: CGImage) -> Double {
+        let width = 64
+        let height = 64
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        let colorSpace = CGColorSpaceCreateDeviceGray()
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return 100.0 }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var sum: Double = 0.0
+        var sumSq: Double = 0.0
+        var count: Double = 0.0
+
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let center = Double(pixels[y * width + x])
+                let up = Double(pixels[(y - 1) * width + x])
+                let down = Double(pixels[(y + 1) * width + x])
+                let left = Double(pixels[y * width + (x - 1)])
+                let right = Double(pixels[y * width + (x + 1)])
+                let lap = 4.0 * center - (up + down + left + right)
+                sum += lap
+                sumSq += lap * lap
+                count += 1.0
+            }
+        }
+        guard count > 0 else { return 100.0 }
+        let mean = sum / count
+        let variance = (sumSq / count) - (mean * mean)
+        return round(variance * 10.0) / 10.0
     }
 }

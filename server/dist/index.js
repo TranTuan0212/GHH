@@ -70,6 +70,39 @@ server.on('upgrade', (request, socket, head) => {
         // Socket.io tự xử lý upgrade của nó
     }
 });
+function parseCardMeta(cardCode) {
+    const code = (cardCode || '').toUpperCase().trim();
+    const suitChar = code.slice(-1);
+    const rank = code.slice(0, -1);
+    const suitMap = {
+        'H': { display: 'Cơ', name: 'Cơ' },
+        'D': { display: 'Rô', name: 'Rô' },
+        'C': { display: 'Tép', name: 'Tép' },
+        'S': { display: 'Bích', name: 'Bích' },
+    };
+    const suit = suitMap[suitChar] || { display: suitChar, name: suitChar };
+    const rankNameMap = {
+        'A': 'Át',
+        'K': 'K',
+        'Q': 'Q',
+        'J': 'J',
+        '10': '10',
+        '9': '9',
+        '8': '8',
+        '7': '7',
+        '6': '6',
+        '5': '5',
+        '4': '4',
+        '3': '3',
+        '2': '2'
+    };
+    const rankName = rankNameMap[rank] || rank;
+    return {
+        code: code,
+        display: `${rank} ${suit.display}`,
+        fullName: `${rankName} ${suit.name}`
+    };
+}
 roiWss.on('connection', (ws) => {
     roiWsClients.add(ws);
     console.log('[WebSocket] iOS Client connected to /ws/roi');
@@ -81,11 +114,27 @@ roiWss.on('connection', (ws) => {
         try {
             const msg = JSON.parse(raw.toString());
             if (msg.type === 'card_detected_from_ios' && msg.data) {
-                console.log(`[WebSocket] 🎯 iPhone On-Device AI phát hiện bài: ${msg.data.cardValue} (${Math.round(msg.data.confidence * 100)}%)`);
+                const cardCode = msg.data.cardValue;
+                const conf = typeof msg.data.confidence === 'number' ? msg.data.confidence : 0.95;
+                const sharpness = typeof msg.data.sharpness === 'number' ? msg.data.sharpness : 280;
+                const image = msg.data.image || '';
+                const updateFrameOnly = Boolean(msg.data.updateFrameOnly);
+                const cardMeta = parseCardMeta(cardCode);
+                console.log(`[WebSocket] 🎯 iPhone On-Device AI phát hiện: ${cardMeta.display} (${Math.round(conf * 100)}%) | Nét=${sharpness} | updateOnly=${updateFrameOnly} | Có ảnh=${image ? 'YES' : 'NO'}`);
+                const payload = {
+                    card: cardMeta,
+                    allCards: [cardMeta],
+                    confidence: conf,
+                    sharpness: sharpness,
+                    image: image,
+                    updateFrameOnly: updateFrameOnly,
+                    timestamp: new Date().toLocaleTimeString('vi-VN'),
+                    roomId: msg.roomId || 'default'
+                };
                 const targetRoom = msg.roomId ? `room_${msg.roomId}` : 'room_default';
-                io.to(targetRoom).emit('card_detected', msg.data);
-                io.emit('card_detected', msg.data);
-                broadcastRoiWs({ type: 'card_detected', data: msg.data });
+                io.to(targetRoom).emit('card_detected', payload);
+                io.emit('card_detected', payload);
+                broadcastRoiWs({ type: 'card_detected', data: payload });
             }
         }
         catch (e) { }
