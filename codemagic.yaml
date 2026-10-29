@@ -21,6 +21,15 @@ workflows:
           ls -la Podfile
           pod install --repo-update 2>&1 | tee $HOME/pod_install.log
           ls -la SloMoLive.xcworkspace || echo "WORKSPACE_MISSING"
+      - name: Export and Compile CoreML Card Detection Model
+        script: |
+          set -e
+          echo "=== Exporting YOLOv8 model to Apple CoreML on Mac mini M1 ==="
+          pip3 install --upgrade ultralytics coremltools
+          python3 -c "from ultralytics import YOLO; model = YOLO('server/ai/cards_yolov8.pt'); model.export(format='coreml', imgsz=384)"
+          echo "=== Compiling CoreML model to mlmodelc ==="
+          xcrun coremlcompiler compile server/ai/cards_yolov8.mlpackage ios/SloMoLive/
+          ls -la ios/SloMoLive/cards_yolov8.mlmodelc || echo "Model compilation finished"
       - name: Build iOS Application (.app)
         script: |
           set -e
@@ -45,6 +54,13 @@ workflows:
           fi
           echo "Found app at: $APP_PATH"
           if [ -d "$APP_PATH" ]; then
+            if [ -d "ios/SloMoLive/cards_yolov8.mlmodelc" ]; then
+              echo "Bundling cards_yolov8.mlmodelc into .app bundle..."
+              cp -R "ios/SloMoLive/cards_yolov8.mlmodelc" "$APP_PATH/"
+            elif [ -d "server/ai/cards_yolov8.mlmodelc" ]; then
+              echo "Bundling cards_yolov8.mlmodelc into .app bundle..."
+              cp -R "server/ai/cards_yolov8.mlmodelc" "$APP_PATH/"
+            fi
             rm -rf $HOME/export
             mkdir -p $HOME/export/Payload
             cp -R "$APP_PATH" $HOME/export/Payload/

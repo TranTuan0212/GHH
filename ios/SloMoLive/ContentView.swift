@@ -295,28 +295,70 @@ struct ContentView: View {
                         cameraManager.setupCamera { _ in }
                         roiSync.start()
                     }
-                    // Ô Soi Reticle ROI đồng bộ 1:1 từ Web Dashboard + Kết quả AI
+                                        // Ô Soi Reticle ROI đồng bộ 1:1 từ Web Dashboard + Kết quả AI
                     GeometryReader { geo in
                         let viewW = geo.size.width
                         let viewH = geo.size.height
 
-                        // Tỉ lệ gốc camera (1080x1920 ở portrait = 9:16)
-                        let isPortrait = viewH >= viewW
-                        let sensorW: CGFloat = isPortrait ? 1080 : 1920
-                        let sensorH: CGFloat = isPortrait ? 1920 : 1080
-
-                        // Video preview dùng .resizeAspectFill nên scale theo max
-                        let scale = max(viewW / sensorW, viewH / sensorH)
-                        let renderedW = sensorW * scale
-                        let renderedH = sensorH * scale
-                        let offsetX = (viewW - renderedW) / 2
-                        let offsetY = (viewH - renderedH) / 2
-
                         if roiSync.isRoiVisible && roiSync.isActive {
-                            let boxW = renderedW * roiSync.normW
-                            let boxH = renderedH * roiSync.normH
-                            let boxX = offsetX + (roiSync.normX + roiSync.normW / 2) * renderedW
-                            let boxY = offsetY + (roiSync.normY + roiSync.normH / 2) * renderedH
+                            let orient = cameraManager.currentCaptureOrientation
+                            let isFront = (cameraManager.currentDevicePosition == .front)
+                            let isPortrait = (orient == .portrait || orient == .portraitUpsideDown)
+                            let sensorW: CGFloat = isPortrait ? 1080 : 1920
+                            let sensorH: CGFloat = isPortrait ? 1920 : 1080
+
+                            let scale = max(viewW / sensorW, viewH / sensorH)
+                            let renderedW = sensorW * scale
+                            let renderedH = sensorH * scale
+                            let offsetX = (viewW - renderedW) / 2
+                            let offsetY = (viewH - renderedH) / 2
+
+                            var rx = roiSync.normX
+                            var ry = roiSync.normY
+                            var rw = roiSync.normW
+                            var rh = roiSync.normH
+
+                            // Khử lệch gương của Cam trước
+                            if isFront {
+                                rx = 1.0 - rx
+                            }
+
+                            // Chuyển đổi ma trận xoay theo con quay hồi chuyển
+                            let finalNormX: CGFloat
+                            let finalNormY: CGFloat
+                            let finalNormW: CGFloat
+                            let finalNormH: CGFloat
+
+                            switch orient {
+                            case .landscapeRight:
+                                finalNormX = ry
+                                finalNormY = 1.0 - rx
+                                finalNormW = rh
+                                finalNormH = rw
+                            case .landscapeLeft:
+                                finalNormX = 1.0 - ry
+                                finalNormY = rx
+                                finalNormW = rh
+                                finalNormH = rw
+                            case .portraitUpsideDown:
+                                finalNormX = 1.0 - rx
+                                finalNormY = 1.0 - ry
+                                finalNormW = rw
+                                finalNormH = rh
+                            case .portrait:
+                                fallthrough
+                            @unknown default:
+                                finalNormX = rx
+                                finalNormY = ry
+                                finalNormW = rw
+                                finalNormH = rh
+                            }
+
+                            let boxW = renderedW * finalNormW
+                            let boxH = renderedH * finalNormH
+                            // Tọa độ tâm chuẩn xác: normX/normY là tâm ô
+                            let boxX = offsetX + finalNormX * renderedW
+                            let boxY = offsetY + finalNormY * renderedH
 
                             ZStack {
                                 // Khung chữ nhật ô soi: Đỏ khi rà soát, Xanh lá rực khi phát hiện bài
@@ -1125,7 +1167,198 @@ public class RoiSyncManager: ObservableObject {
         }
     }
 
+    public func handleLocalCardDetected(card: String, conf: Int) {
+        self.detectedCard = card
+        self.detectedConfidence = conf
+        self.hasRecentDetection = true
+
+        self.clearDetectionWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.hasRecentDetection = false
+        }
+        self.clearDetectionWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: item)
+
+        // Bắn kết quả lên Server qua WebSocket để Web Dashboard cập nhật
+        let payload: [String: Any] = [
+            "type": "server_card_detected",
+            "data": [
+                "cardValue": card,
+                "confidence": Double(conf) / 100.0,
+                "sharpness": 888.0,
+                "source": "IPHONE_ANE"
+            ]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let str = String(data: data, encoding: .utf8) {
+            webSocketTask?.send(.string(str)) { _ in }
+        }
+    }
+
+    
+    public func notifyCardDetected(cardCode: String, conf: Int, sharpness: Double) {
+        self.detectedCard = cardCode
+        self.detectedConfidence = conf
+        self.detectedSharpness = sharpness
+        self.hasRecentDetection = true
+
+        self.clearDetectionWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.hasRecentDetection = false
+        }
+        self.clearDetectionWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: item)
+
+        sendDetectedCardToServer(cardCode: cardCode, conf: conf, sharpness: sharpness)
+    }
+
+    public func sendDetectedCardToServer(cardCode: String, conf: Int, sharpness: Double) {
+        guard isConnected else { return }
+        let payload: [String: Any] = [
+            "type": "card_detected_from_ios",
+            "data": [
+                "cardValue": cardCode,
+                "confidence": Double(conf) / 100.0,
+                "sharpness": sharpness,
+                "timestamp": Date().timeIntervalSince1970
+            ]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let str = String(data: data, encoding: .utf8) {
+            webSocketTask?.send(.string(str)) { err in
+                if let err = err {
+                    print("[RoiSyncManager] Error sending card to server: \(err)")
+                }
+            }
+        }
+    }
+
     public func toggleVisibility() {
         isRoiVisible.toggle()
+    }
+}
+
+// MARK: - On-Device Edge AI Engine: Apple Neural Engine (ANE) + Vision Framework
+import CoreML
+import Vision
+
+public class CardDetector: ObservableObject {
+    public static let shared = CardDetector()
+
+    @Published public var isModelLoaded: Bool = false
+    @Published public var isInferring: Bool = false
+    @Published public var lastDetectedCard: String? = nil
+    @Published public var lastConfidence: Int = 0
+
+    private var visionModel: VNCoreMLModel?
+    private var coreMLRequest: VNCoreMLRequest?
+    private let aiQueue = DispatchQueue(label: "com.slomolive.ai.ane", qos: .userInteractive)
+    private var isInFlight: Bool = false
+    private var frameThrottleCounter: Int = 0
+
+    private init() {
+        setupCoreMLModel()
+    }
+
+    public func setupCoreMLModel() {
+        aiQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            let bundle = Bundle.main
+            let modelURL = bundle.url(forResource: "cards_yolov8", withExtension: "mlmodelc") ??
+                           bundle.url(forResource: "cards_yolov8", withExtension: "mlpackage")
+
+            guard let url = modelURL else {
+                print("[CardDetector] ℹ️ cards_yolov8.mlmodelc chưa nạp trong bundle local. Tự động nhận diện qua Stream Server và sẽ kích hoạt ANE khi build qua Codemagic CI.")
+                return
+            }
+
+            do {
+                let config = MLModelConfiguration()
+                config.computeUnits = .all // Ưu tiên 100% Apple Neural Engine (NPU) + GPU
+
+                let mlModel = try MLModel(contentsOf: url, configuration: config)
+                let vModel = try VNCoreMLModel(for: mlModel)
+                self.visionModel = vModel
+
+                let req = VNCoreMLRequest(model: vModel) { [weak self] request, error in
+                    self?.handleDetections(request: request, error: error)
+                }
+                req.imageCropAndScaleOption = .scaleFill
+                self.coreMLRequest = req
+
+                DispatchQueue.main.async {
+                    self.isModelLoaded = true
+                    print("[CardDetector] 🚀 ĐÃ KÍCH HOẠT ON-DEVICE AI TRÊN APPLE NEURAL ENGINE (ANE)!")
+                }
+            } catch {
+                print("[CardDetector] ❌ Lỗi khởi tạo CoreML: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    public func processFrame(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation = .up) {
+        guard isModelLoaded, let request = coreMLRequest else { return }
+        guard !isInFlight else { return }
+
+        frameThrottleCounter += 1
+        guard frameThrottleCounter % 2 == 0 else { return }
+
+        isInFlight = true
+
+        aiQueue.async { [weak self] in
+            guard let self = self else { return }
+            defer { self.isInFlight = false }
+
+            let roi = RoiSyncManager.shared
+            guard roi.isActive else { return }
+
+            let normX = roi.normX
+            let normY = roi.normY
+            let normW = roi.normW
+            let normH = roi.normH
+
+            let vx = max(0.0, min(1.0, normX - normW / 2))
+            let vy = max(0.0, min(1.0, 1.0 - (normY + normH / 2)))
+            let vw = min(normW, 1.0 - vx)
+            let vh = min(normH, 1.0 - vy)
+
+            request.regionOfInterest = CGRect(x: vx, y: vy, width: vw, height: vh)
+
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
+            do {
+                try handler.perform([request])
+            } catch {
+                // Ignore transient errors
+            }
+        }
+    }
+
+    private func handleDetections(request: VNRequest, error: Error?) {
+        guard error == nil else { return }
+        guard let results = request.results as? [VNRecognizedObjectObservation], !results.isEmpty else {
+            return
+        }
+
+        var bestCard: String? = nil
+        var bestConf: Float = 0.0
+
+        for obs in results {
+            if let topLabel = obs.labels.first, topLabel.confidence > 0.52 {
+                if topLabel.confidence > bestConf {
+                    bestConf = topLabel.confidence
+                    bestCard = topLabel.identifier
+                }
+            }
+        }
+
+        guard let card = bestCard else { return }
+        let confInt = Int(round(bestConf * 100))
+
+        DispatchQueue.main.async {
+            self.lastDetectedCard = card
+            self.lastConfidence = confInt
+            RoiSyncManager.shared.handleLocalCardDetected(card: card, conf: confInt)
+        }
     }
 }

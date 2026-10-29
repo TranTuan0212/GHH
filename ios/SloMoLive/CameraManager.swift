@@ -1,3 +1,5 @@
+import Vision
+import CoreML
 import Foundation
 import AVFoundation
 import LFLiveKit
@@ -1248,6 +1250,26 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
             // from background threads" và truy cập thread-safe.
+            // Chạy On-Device AI trực tiếp trên CVPixelBuffer gốc không nén
+            if RoiSyncManager.shared.isActive {
+                let orientationProp: CGImagePropertyOrientation = {
+                    switch self.currentCaptureOrientation {
+                    case .landscapeRight: return .up
+                    case .landscapeLeft: return .down
+                    case .portraitUpsideDown: return .left
+                    default: return .right
+                    }
+                }()
+                CardDetector.shared.processFrame(
+                    pixelBuffer: pixelBuffer,
+                    normX: RoiSyncManager.shared.normX,
+                    normY: RoiSyncManager.shared.normY,
+                    normW: RoiSyncManager.shared.normW,
+                    normH: RoiSyncManager.shared.normH,
+                    orientation: orientationProp
+                )
+            }
+
             guard isStreamingAtomic else { return }
 
             // Log console mỗi 240 frames (~2s ở 120fps) — không cập nhật UI để tiết kiệm CPU.
@@ -1336,6 +1358,92 @@ extension CameraManager: LFLiveSessionDelegate {
             self.isConnecting = false
             self.isStreaming = false
             self.errorMessage = "Lỗi RTMP socket [\(errorCode)]: \(msg ?? "không rõ")"
+        }
+    }
+}
+
+
+// MARK: - On-Device Edge AI Card Detector (Apple Neural Engine + Vision)
+public class CardDetector: NSObject, ObservableObject {
+    public static let shared = CardDetector()
+
+    private var visionModel: VNCoreMLModel?
+    private var isBusy = false
+    private let queue = DispatchQueue(label: "com.slomolive.ai.vision", qos: .userInitiated)
+    private var lastInferenceTime: Double = 0.0
+
+    @Published public var isModelLoaded: Bool = false
+
+    public override init() {
+        super.init()
+        loadModel()
+    }
+
+    public func loadModel() {
+        let possibleUrls = [
+            Bundle.main.url(forResource: "cards_yolov8", withExtension: "mlmodelc"),
+            Bundle.main.url(forResource: "cards_yolov8", withExtension: "mlpackage")
+        ].compactMap { $0 }
+
+        guard let modelURL = possibleUrls.first else {
+            print("[CardDetector] ⚠️ Model CoreML 'cards_yolov8' chưa có trong app bundle.")
+            return
+        }
+
+        do {
+            let config = MLModelConfiguration()
+            config.computeUnits = .all // Tận dụng tối đa Apple Neural Engine (NPU)
+            let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
+            self.visionModel = try VNCoreMLModel(for: mlModel)
+            DispatchQueue.main.async { self.isModelLoaded = true }
+            print("[CardDetector] 🚀 Đã nạp thành công CoreML Model lên Apple Neural Engine!")
+        } catch {
+            print("[CardDetector] ❌ Lỗi load CoreML model: \(error)")
+        }
+    }
+
+    public func processFrame(pixelBuffer: CVPixelBuffer, normX: CGFloat, normY: CGFloat, normW: CGFloat, normH: CGFloat, orientation: CGImagePropertyOrientation) {
+        guard let visionModel = self.visionModel, !isBusy else { return }
+
+        let now = CACurrentMediaTime()
+        // Giới hạn 30fps AI scan (~33ms/lần) để máy cực mát và siêu tiết kiệm pin
+        guard (now - lastInferenceTime) >= 0.033 else { return }
+        lastInferenceTime = now
+        isBusy = true
+
+        // Vision framework: (0,0) nằm ở BOTTOM-LEFT
+        let vx = max(0.0, min(1.0, normX - normW / 2.0))
+        let vy = max(0.0, min(1.0, 1.0 - (normY + normH / 2.0)))
+        let vw = max(0.05, min(1.0 - vx, normW))
+        let vh = max(0.05, min(1.0 - vy, normH))
+        let roiRect = CGRect(x: vx, y: vy, width: vw, height: vh)
+
+        queue.async { [weak self] in
+            defer { self?.isBusy = false }
+            guard let self = self else { return }
+
+            let request = VNCoreMLRequest(model: visionModel) { [weak self] req, err in
+                guard err == nil, let results = req.results as? [VNRecognizedObjectObservation], !results.isEmpty else { return }
+                self?.handleDetections(results)
+            }
+            request.imageCropAndScaleOption = .scaleFill
+            request.regionOfInterest = roiRect
+
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
+            try? handler.perform([request])
+        }
+    }
+
+    private func handleDetections(_ observations: [VNRecognizedObjectObservation]) {
+        guard let best = observations.max(by: { $0.confidence < $1.confidence }),
+              let label = best.labels.first,
+              label.confidence >= 0.45 else { return }
+
+        let cardCode = label.identifier
+        let conf = Int(round(label.confidence * 100))
+
+        DispatchQueue.main.async {
+            RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)
         }
     }
 }

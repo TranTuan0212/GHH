@@ -72,6 +72,19 @@ roiWss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'roi', data: latestReticleRoi }));
     }
     catch (e) { }
+    ws.on('message', (raw) => {
+        try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'card_detected_from_ios' && msg.data) {
+                console.log(`[WebSocket] 🎯 iPhone On-Device AI phát hiện bài: ${msg.data.cardValue} (${Math.round(msg.data.confidence * 100)}%)`);
+                const targetRoom = msg.roomId ? `room_${msg.roomId}` : 'room_default';
+                io.to(targetRoom).emit('card_detected', msg.data);
+                io.emit('card_detected', msg.data);
+                broadcastRoiWs({ type: 'card_detected', data: msg.data });
+            }
+        }
+        catch (e) { }
+    });
     ws.on('close', () => {
         roiWsClients.delete(ws);
         console.log('[WebSocket] iOS Client disconnected from /ws/roi');
