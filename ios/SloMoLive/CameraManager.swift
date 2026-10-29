@@ -1,3 +1,5 @@
+import ImageIO
+import QuartzCore
 import Vision
 import CoreML
 import Foundation
@@ -1412,10 +1414,10 @@ public class CardDetector: NSObject, ObservableObject {
         isBusy = true
 
         // Vision framework: (0,0) nằm ở BOTTOM-LEFT
-        let vx = max(0.0, min(1.0, normX - normW / 2.0))
-        let vy = max(0.0, min(1.0, 1.0 - (normY + normH / 2.0)))
-        let vw = max(0.05, min(1.0 - vx, normW))
-        let vh = max(0.05, min(1.0 - vy, normH))
+        let vx = max(CGFloat(0.0), min(CGFloat(1.0), normX - normW / 2.0))
+        let vy = max(CGFloat(0.0), min(CGFloat(1.0), CGFloat(1.0) - (normY + normH / 2.0)))
+        let vw = max(CGFloat(0.05), min(CGFloat(1.0) - vx, normW))
+        let vh = max(CGFloat(0.05), min(CGFloat(1.0) - vy, normH))
         let roiRect = CGRect(x: vx, y: vy, width: vw, height: vh)
 
         queue.async { [weak self] in
@@ -1440,7 +1442,7 @@ public class CardDetector: NSObject, ObservableObject {
               label.confidence >= 0.45 else { return }
 
         let cardCode = label.identifier
-        let conf = Int(round(label.confidence * 100))
+        let conf = Int((label.confidence * 100).rounded())
 
         DispatchQueue.main.async {
             RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)
