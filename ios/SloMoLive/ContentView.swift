@@ -275,7 +275,7 @@ struct ContentView: View {
                 // Live Stream Camera Preview View
                 ZStack {
                     CameraPreviewView(session: cameraManager.session, onTapToFocus: { viewPoint, devicePoint in
-                        cameraManager.focus(at: devicePoint, shouldLock: true)
+                        cameraManager.focus(at: devicePoint, shouldLock: false)
                         focusPoint = viewPoint
                         showFocusBox = true
                         focusBoxPulse = true

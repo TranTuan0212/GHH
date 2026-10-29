@@ -32,9 +32,14 @@ interface HlsSession {
 export const hlsSessions: Map<string, HlsSession> = new Map();
 
 let streamEndedHandler: ((streamKey: string) => void) | undefined;
+let streamStartedHandler: ((stream: any) => void) | undefined;
 
 export function setStreamEndedHandler(handler: (streamKey: string) => void): void {
   streamEndedHandler = handler;
+}
+
+export function setStreamStartedHandler(handler: (stream: any) => void): void {
+  streamStartedHandler = handler;
 }
 
 // Map streamKey -> pending disconnect timer (Grace Period 20s cho mạng 4G/5G)
@@ -141,13 +146,12 @@ export function resetReplaySession(streamKey: string): boolean {
   const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
 
   const ffmpegArgs = [
-    '-fflags', '+nobuffer+flush_packets',
+    '-fflags', '+nobuffer',
     '-rtsp_transport', 'tcp',
     '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
     '-c:v', 'copy',
     '-bsf:v', 'h264_mp4toannexb',
     '-an',
-    '-flush_packets', '1',
     '-f', 'hls',
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
@@ -191,13 +195,12 @@ export function startHlsSession(streamKey: string): void {
   const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
 
   const ffmpegArgs = [
-    '-fflags', '+nobuffer+flush_packets',
+    '-fflags', '+nobuffer',
     '-rtsp_transport', 'tcp',
     '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
     '-c:v', 'copy',
     '-bsf:v', 'h264_mp4toannexb',
     '-an',
-    '-flush_packets', '1',
     '-f', 'hls',
     '-hls_time', String(HLS_SEGMENT_SECONDS),
     '-hls_list_size', String(hlsListSize),
@@ -277,12 +280,14 @@ function startMediaMtxWatcher(): void {
 
         // Tự động kích hoạt trạng thái LIVE trong DB
         let activeStream = db.getStreams().find(s => s.streamKey === streamKey && s.status === 'LIVE');
+        let newlyActivated = false;
         if (!activeStream) {
           const anyStream = db.getStreams().find(s => s.streamKey === streamKey);
           if (anyStream) {
             anyStream.status = 'LIVE';
             anyStream.endedAt = undefined;
             activeStream = anyStream;
+            newlyActivated = true;
             console.log(`[MediaServer] 🔄 MediaMTX tái kích hoạt phiên LIVE cho streamKey: ${streamKey}`);
           } else if (streamKey.startsWith('live_usr-')) {
             const match = streamKey.match(/^live_(usr-[^_]+)/);
@@ -294,12 +299,13 @@ function startMediaMtxWatcher(): void {
               username: user ? user.username : 'iPhone User',
               streamKey,
               status: 'LIVE',
-              hlsPlaylistUrl: `http://192.145.3.102:4000/live/${streamKey}/index.m3u8`,
+              hlsPlaylistUrl: `/live/${streamKey}/index.m3u8`,
               vodUrl: '',
               startedAt: new Date().toISOString()
             };
             db.getStreams().unshift(newStream);
             activeStream = newStream;
+            newlyActivated = true;
             console.log(`[MediaServer] ⚡ Tự động cấp phép phiên LIVE mới qua MediaMTX: ${streamKey}`);
           }
         }
@@ -311,6 +317,11 @@ function startMediaMtxWatcher(): void {
 
         if (!isProcAlive) {
           startHlsSession(streamKey);
+          newlyActivated = true;
+        }
+
+        if (newlyActivated && activeStream) {
+          streamStartedHandler?.(activeStream);
         }
       }
 

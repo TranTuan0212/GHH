@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.hlsSessions = void 0;
 exports.setStreamEndedHandler = setStreamEndedHandler;
+exports.setStreamStartedHandler = setStreamStartedHandler;
 exports.cleanupStreamSession = cleanupStreamSession;
 exports.stopFfmpegOnly = stopFfmpegOnly;
 exports.resetReplaySession = resetReplaySession;
@@ -36,8 +37,12 @@ const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10
 const HLS_SEGMENT_SECONDS = 0.5;
 exports.hlsSessions = new Map();
 let streamEndedHandler;
+let streamStartedHandler;
 function setStreamEndedHandler(handler) {
     streamEndedHandler = handler;
+}
+function setStreamStartedHandler(handler) {
+    streamStartedHandler = handler;
 }
 // Map streamKey -> pending disconnect timer (Grace Period 20s cho mạng 4G/5G)
 const pendingDisconnects = new Map();
@@ -154,13 +159,12 @@ function resetReplaySession(streamKey) {
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
-        '-fflags', '+nobuffer+flush_packets',
+        '-fflags', '+nobuffer',
         '-rtsp_transport', 'tcp',
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb',
         '-an',
-        '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
@@ -199,13 +203,12 @@ function startHlsSession(streamKey) {
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
     const ffmpegArgs = [
-        '-fflags', '+nobuffer+flush_packets',
+        '-fflags', '+nobuffer',
         '-rtsp_transport', 'tcp',
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb',
         '-an',
-        '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
@@ -279,12 +282,14 @@ function startMediaMtxWatcher() {
                 }
                 // Tự động kích hoạt trạng thái LIVE trong DB
                 let activeStream = db_1.db.getStreams().find(s => s.streamKey === streamKey && s.status === 'LIVE');
+                let newlyActivated = false;
                 if (!activeStream) {
                     const anyStream = db_1.db.getStreams().find(s => s.streamKey === streamKey);
                     if (anyStream) {
                         anyStream.status = 'LIVE';
                         anyStream.endedAt = undefined;
                         activeStream = anyStream;
+                        newlyActivated = true;
                         console.log(`[MediaServer] 🔄 MediaMTX tái kích hoạt phiên LIVE cho streamKey: ${streamKey}`);
                     }
                     else if (streamKey.startsWith('live_usr-')) {
@@ -297,12 +302,13 @@ function startMediaMtxWatcher() {
                             username: user ? user.username : 'iPhone User',
                             streamKey,
                             status: 'LIVE',
-                            hlsPlaylistUrl: `http://192.145.3.102:4000/live/${streamKey}/index.m3u8`,
+                            hlsPlaylistUrl: `/live/${streamKey}/index.m3u8`,
                             vodUrl: '',
                             startedAt: new Date().toISOString()
                         };
                         db_1.db.getStreams().unshift(newStream);
                         activeStream = newStream;
+                        newlyActivated = true;
                         console.log(`[MediaServer] ⚡ Tự động cấp phép phiên LIVE mới qua MediaMTX: ${streamKey}`);
                     }
                 }
@@ -312,6 +318,10 @@ function startMediaMtxWatcher() {
                     existingSession.ffmpegProcesses[0].exitCode === null && !existingSession.ffmpegProcesses[0].killed;
                 if (!isProcAlive) {
                     startHlsSession(streamKey);
+                    newlyActivated = true;
+                }
+                if (newlyActivated && activeStream) {
+                    streamStartedHandler?.(activeStream);
                 }
             }
             // Xử lý các stream bị ngắt kết nối

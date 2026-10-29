@@ -358,7 +358,7 @@ public class CameraManager: NSObject, ObservableObject {
         //   để bấm Replay ăn ngay tức khắc tại mép Live không bị trễ nhịp.
         // - Target Bitrate: 6.0 Mbps (Peak 7.5 Mbps, Floor 4.5 Mbps): mỗi segment 0.5s chỉ ~350KB giúp đẩy qua 4G
         //   và tải qua Cloudflare Tunnel trong ~120ms (nhanh gấp 4 lần thời gian thực) mà vẫn giữ độ nét căng Full HD.
-        let targetBitrate: UInt = 6_000_000
+        let targetBitrate: UInt = 10_000_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -367,9 +367,9 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 7_500_000
+        videoCfg.videoMaxBitRate = 12_500_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 4_500_000
+        videoCfg.videoMinBitRate = 6_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
@@ -692,7 +692,7 @@ public class CameraManager: NSObject, ObservableObject {
                 if videoDevice.isFocusModeSupported(.continuousAutoFocus) {
                     videoDevice.focusMode = .continuousAutoFocus
                     if videoDevice.isAutoFocusRangeRestrictionSupported {
-                        videoDevice.autoFocusRangeRestriction = .none
+                        videoDevice.autoFocusRangeRestriction = .near
                     }
                     videoDevice.isSubjectAreaChangeMonitoringEnabled = true
                     DispatchQueue.main.async {
@@ -928,7 +928,7 @@ public class CameraManager: NSObject, ObservableObject {
                         newDevice.focusMode = .continuousAutoFocus
                     }
                     if newDevice.isAutoFocusRangeRestrictionSupported {
-                        newDevice.autoFocusRangeRestriction = .none
+                        newDevice.autoFocusRangeRestriction = .near
                     }
                     // Cấu hình phơi sáng tối ưu theo vị trí camera (cam trước vs cam sau)
                     self.applyExposureSettings(device: newDevice)
@@ -967,7 +967,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     /// Lấy nét tại điểm chạm và KHÓA CỨNG tiêu cự mặt bàn (ngăn hiện tượng đảo nét khi tay người chia bài đưa vào)
-    public func focus(at devicePoint: CGPoint, shouldLock: Bool = true) {
+    public func focus(at devicePoint: CGPoint, shouldLock: Bool = false) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
             do {
@@ -1093,7 +1093,7 @@ public class CameraManager: NSObject, ObservableObject {
                     device.focusMode = .continuousAutoFocus
                 }
                 if device.isAutoFocusRangeRestrictionSupported {
-                    device.autoFocusRangeRestriction = .none
+                    device.autoFocusRangeRestriction = .near
                 }
                 self.applyExposureSettings(device: device)
                 if device.isSubjectAreaChangeMonitoringEnabled {

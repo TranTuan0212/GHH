@@ -12,7 +12,7 @@ import { streamRouter, setSocketServer } from './routes/stream';
 import { aiRouter } from './routes/ai';
 import { licenseRouter } from './routes/license';
 import { db } from './db';
-import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession } from './mediaServer';
+import { startNativeMediaServer, setStreamEndedHandler, setStreamStartedHandler, resetReplaySession } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
 
 const app = express();
@@ -81,6 +81,12 @@ io.use((socket, next) => {
 });
 
 setSocketServer(io);
+setStreamStartedHandler((startedSession) => {
+  if (!startedSession) return;
+  io.to(`room_${startedSession.userId}`).emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
+  io.to('room_admin').emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
+  io.emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
+});
 setStreamEndedHandler((streamKey) => {
   let ended = db.endStreamSessionByStreamKey(streamKey);
   if (!ended) {
@@ -89,6 +95,7 @@ setStreamEndedHandler((streamKey) => {
   if (!ended) return;
   io.to(`room_${ended.userId}`).emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
   io.to('room_admin').emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
+  io.emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
 });
 
 const PORT = parseInt(process.env.PORT || '4000');
@@ -593,10 +600,24 @@ io.on('connection', (socket) => {
     io.emit('reticle_roi_updated', data);
   });
 
+  socket.on('scan_exact_frame', (data) => {
+    io.emit('scan_exact_frame_request', data);
+  });
+
+  socket.on('reset_session_ram', (data) => {
+    io.emit('reset_session_ram', data);
+  });
+
   socket.on('server_card_detected', (data) => {
     const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
     io.to(targetRoom).emit('card_detected', data);
     io.emit('card_detected', data);
+  });
+
+  socket.on('ai_debug_crop', (data) => {
+    const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
+    io.to(targetRoom).emit('ai_debug_crop', data);
+    io.emit('ai_debug_crop', data);
   });
 
   socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string; source?: 'APP' | 'WEB' }) => {
@@ -613,6 +634,10 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('cards_cleared', (data) => {
+    io.emit('cards_cleared', data || {});
+  });
+
   socket.on('clear_cards', (data) => {
     if (!user) return;
     const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
@@ -620,6 +645,7 @@ io.on('connection', (socket) => {
 
     db.clearCardEntries(targetRoomId);
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
+    io.emit('cards_cleared', { roomId: targetRoomId });
   });
 
   socket.on('finish_round', (data) => {
@@ -650,6 +676,7 @@ io.on('connection', (socket) => {
     const ts = Date.now();
     io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
+    io.emit('cards_cleared', { roomId: targetRoomId });
   });
 
   socket.on('disconnect', () => {

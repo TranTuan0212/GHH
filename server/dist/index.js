@@ -78,6 +78,13 @@ io.use((socket, next) => {
     }
 });
 (0, stream_1.setSocketServer)(io);
+(0, mediaServer_1.setStreamStartedHandler)((startedSession) => {
+    if (!startedSession)
+        return;
+    io.to(`room_${startedSession.userId}`).emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
+    io.to('room_admin').emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
+    io.emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
+});
 (0, mediaServer_1.setStreamEndedHandler)((streamKey) => {
     let ended = db_1.db.endStreamSessionByStreamKey(streamKey);
     if (!ended) {
@@ -87,6 +94,7 @@ io.use((socket, next) => {
         return;
     io.to(`room_${ended.userId}`).emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
     io.to('room_admin').emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
+    io.emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
 });
 const PORT = parseInt(process.env.PORT || '4000');
 app.use((0, cors_1.default)());
@@ -553,10 +561,21 @@ io.on('connection', (socket) => {
     socket.on('set_reticle_roi', (data) => {
         io.emit('reticle_roi_updated', data);
     });
+    socket.on('scan_exact_frame', (data) => {
+        io.emit('scan_exact_frame_request', data);
+    });
+    socket.on('reset_session_ram', (data) => {
+        io.emit('reset_session_ram', data);
+    });
     socket.on('server_card_detected', (data) => {
         const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
         io.to(targetRoom).emit('card_detected', data);
         io.emit('card_detected', data);
+    });
+    socket.on('ai_debug_crop', (data) => {
+        const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
+        io.to(targetRoom).emit('ai_debug_crop', data);
+        io.emit('ai_debug_crop', data);
     });
     socket.on('live_remote_card', (data) => {
         if (!user)
@@ -572,6 +591,9 @@ io.on('connection', (socket) => {
             timestamp: Date.now()
         });
     });
+    socket.on('cards_cleared', (data) => {
+        io.emit('cards_cleared', data || {});
+    });
     socket.on('clear_cards', (data) => {
         if (!user)
             return;
@@ -580,6 +602,7 @@ io.on('connection', (socket) => {
             return;
         db_1.db.clearCardEntries(targetRoomId);
         io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
+        io.emit('cards_cleared', { roomId: targetRoomId });
     });
     socket.on('finish_round', (data) => {
         if (!user)
@@ -608,6 +631,7 @@ io.on('connection', (socket) => {
         const ts = Date.now();
         io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
         io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
+        io.emit('cards_cleared', { roomId: targetRoomId });
     });
     socket.on('disconnect', () => {
         const roomId = socket._viewerRoomId;

@@ -82,23 +82,27 @@ function formatCardItem(raw: string): { rank: string; symbol: string; isRed: boo
   return { rank: s, symbol: '', isRed: false, full: s };
 }
 
-// Hàm phát tiếng beep ngắn thông báo đã bắt được bài
+// Lazy singleton AudioContext để không bao giờ làm đứng main thread khi bắt bài
+let globalAudioCtx: AudioContext | null = null;
 function playBeepSound() {
   try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    if (!globalAudioCtx) {
+      globalAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (globalAudioCtx.state === 'suspended') {
+      globalAudioCtx.resume().catch(() => {});
+    }
+    const osc = globalAudioCtx.createOscillator();
+    const gain = globalAudioCtx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime); // Note A5
-    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+    osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime);
+    gain.gain.setValueAtTime(0.12, globalAudioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, globalAudioCtx.currentTime + 0.12);
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(globalAudioCtx.destination);
     osc.start();
-    osc.stop(audioCtx.currentTime + 0.12);
-  } catch {
-    // AudioContext blocked by browser policy
-  }
+    osc.stop(globalAudioCtx.currentTime + 0.12);
+  } catch {}
 }
 
 export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
@@ -141,30 +145,41 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   }, [isFillMode]);
 
 
-  // Kích thước khung ngắm AI (Dài x Rộng)
-  const [reticleSize, setReticleSize] = useState<{ width: number; height: number }>(() => {
-    const saved = localStorage.getItem('mode2_reticle_size');
-    return saved ? JSON.parse(saved) : { width: 220, height: 280 };
+  // Tọa độ chuẩn hóa của Khung ngắm AI (gắn chết theo Video Frame gốc 0.0 - 1.0)
+  const [normRoi, setNormRoi] = useState<{ normX: number; normY: number; normW: number; normH: number }>(() => {
+    const saved = localStorage.getItem('mode2_norm_roi');
+    if (saved) {
+      try {
+        const p = JSON.parse(saved);
+        if (typeof p.normX === 'number' && typeof p.normY === 'number') {
+          return {
+            normX: p.normX,
+            normY: p.normY,
+            normW: p.normW || 0.28,
+            normH: p.normH || 0.35
+          };
+        }
+      } catch {}
+    }
+    return { normX: 0.50, normY: 0.52, normW: 0.28, normH: 0.35 };
   });
-
-  // Tọa độ Khung ngắm AI đỏ (bám chuột hoặc ghim)
-  const [reticlePos, setReticlePos] = useState<{ x: number; y: number }>({ x: 120, y: 80 });
-  const [isReticleLocked, setIsReticleLocked] = useState<boolean>(false);
   const [isReticleActive, setIsReticleActive] = useState<boolean>(true);
 
   // Trạng thái nhận diện AI
-  const [aiStatus, setAiStatus] = useState<string>('Đang quét trong khung...');
+  const [aiStatus, setAiStatus] = useState<string>('Đang quét 120fps trong khung...');
   const [lastDetectedCard, setLastDetectedCard] = useState<string | null>(null);
   const [capturedHistory, setCapturedHistory] = useState<Array<{
     image: string;
     cardName: string;
     confidence: number;
+    sharpness?: number;
     timestamp: string;
   }>>([]);
   const [capturedFrame, setCapturedFrame] = useState<{
     image: string;
     cardName: string;
     confidence: number;
+    sharpness?: number;
     timestamp: string;
   } | null>(null);
   const [isAiFlashing, setIsAiFlashing] = useState<boolean>(false);
@@ -172,7 +187,13 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Refs video (Cơ chế Kép: Live WebRTC 0 delay + HLS Replay 120fps) & canvas
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
+  const clientCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const aiCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [lastScanRtt, setLastScanRtt] = useState<number>(0);
+  const scanReqTimeRef = useRef<number>(0);
   const replayVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [hasVideoSignal, setHasVideoSignal] = useState<boolean>(false);
+  const [hasWebRtcSignal, setHasWebRtcSignal] = useState<boolean>(false);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -193,8 +214,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Trạng thái điều khiển video: Live vs Tua lại
   const [isLive, setIsLive] = useState<boolean>(true);
-  const [seekTime, setSeekTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
+  const [seekPercent, setSeekPercent] = useState<number>(100); // 100% = Live
+  const [dvrWindow, setDvrWindow] = useState<{ start: number; end: number; duration: number }>({ start: 0, end: 0, duration: 0 });
+  const isSeekingRef = useRef<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(true);
 
   // Lật & Xoay khung hình
@@ -233,6 +255,30 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Hiển thị thanh chỉnh kích thước khung ngắm
   const [showSizeControls, setShowSizeControls] = useState<boolean>(false);
+  // Xem ảnh trích xuất phóng to 1:1 gốc
+  const [zoomImage, setZoomImage] = useState<string | null>(null);
+
+  // Màn hình Soi Live RAM Crop trực tiếp từ Server 120fps (4 Kênh song song)
+  const [debugCrop, setDebugCrop] = useState<{
+    image: string;
+    cropBox: number[];
+    cropSize: string;
+    detectedCard: string;
+    bestConf: number;
+    sharpness?: number;
+    sourceFps?: number;
+    scanFps?: number;
+    isDetected: boolean;
+    channels?: {
+      id: number;
+      seq: number;
+      sharpness: number;
+      card: string;
+      conf: number;
+      mode?: string;
+    }[];
+  } | null>(null);
+  const [showDebugMonitor, setShowDebugMonitor] = useState<boolean>(true);
 
   // Modal Card Picker để chỉnh sửa thủ công nếu cần
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -260,8 +306,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   }, [cardsPerPlayer]);
 
   useEffect(() => {
-    localStorage.setItem('mode2_reticle_size', JSON.stringify(reticleSize));
-  }, [reticleSize]);
+    localStorage.setItem('mode2_norm_roi', JSON.stringify(normRoi));
+  }, [normRoi]);
 
   useEffect(() => {
     localStorage.setItem('mode2_histories', JSON.stringify(roundHistories.slice(-20)));
@@ -304,18 +350,26 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     return bestDoor;
   }, [evaluations, doorCards, playerCount, cardsPerPlayer]);
 
-  // Ghi nhận lá bài vào Cửa theo vòng (Round-Robin)
+  // Ghi nhận lá bài vào Cửa theo vòng (Round-Robin) — Chống trùng bài 100% trong cùng ván
   const addCardToActiveDoor = useCallback((cardCode: string) => {
-    if (!nextTarget) return;
+    if (!nextTarget) return false;
 
+    let added = false;
     setDoorCards((prev) => {
+      // Kiểm tra nếu lá bài này đã được chia vào bất kỳ cửa nào trong ván hiện tại thì lọc bỏ, không chia trùng
+      const alreadyDealt = Object.values(prev).some((cards) => Array.isArray(cards) && cards.includes(cardCode));
+      if (alreadyDealt) return prev;
+
       const current = prev[nextTarget.door] || [];
       if (current.length >= cardsPerPlayer) return prev;
+      added = true;
       return {
         ...prev,
         [nextTarget.door]: [...current, cardCode]
       };
     });
+
+    if (!added) return false;
 
     playBeepSound();
     setIsAiFlashing(true);
@@ -330,6 +384,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         sequenceOrder: Date.now()
       });
     }
+    return true;
   }, [nextTarget, cardsPerPlayer, socket, roomId]);
 
   // Hoàn tác lá bài vừa nhận gần nhất
@@ -385,28 +440,301 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     if (onFinishRound) onFinishRound();
   };
 
-  // Xử lý di chuyển chuột trên Video để Khung ngắm bám theo
-  const handleVideoMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (isReticleLocked || !videoContainerRef.current) return;
-    const rect = videoContainerRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+  // XONG PHIÊN: Xóa sạch bàn chơi, lịch sử ảnh, và giải phóng bộ đệm RAM để test lại từ đầu
+  const handleResetSession = useCallback(() => {
+    setDoorCards({});
+    setCapturedHistory([]);
+    setCapturedFrame(null);
+    setDebugCrop(null);
+    prevThumbRef.current = null;
+    if (socket && roomId) {
+      socket.emit('reset_session_ram', { roomId });
+      socket.emit('cards_cleared', { roomId });
+    }
+  }, [socket, roomId]);
 
-    // Đặt tâm khung ngắm ngay tại con trỏ chuột
-    const newX = Math.max(0, Math.min(rect.width - reticleSize.width, mouseX - reticleSize.width / 2));
-    const newY = Math.max(0, Math.min(rect.height - reticleSize.height, mouseY - reticleSize.height / 2));
+  // 1. Tính toán vùng hiển thị thực tế của Video bên trong container (loại bỏ viền đen)
+  const getRenderedVideoRect = useCallback(() => {
+    const container = videoContainerRef.current;
+    if (!container) return { x: 0, y: 0, width: 800, height: 450 };
+    const cw = container.clientWidth || 800;
+    const ch = container.clientHeight || 450;
+    const isRotated = rotation === 90 || rotation === 270;
+    const vidRatio = isRotated ? (1080 / 1920) : (1920 / 1080);
+    const cRatio = cw / ch;
 
-    setReticlePos({ x: newX, y: newY });
+    let renderW = cw;
+    let renderH = ch;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (isFillMode) {
+      if (cRatio > vidRatio) {
+        renderW = cw;
+        renderH = cw / vidRatio;
+        offsetY = (ch - renderH) / 2;
+      } else {
+        renderH = ch;
+        renderW = ch * vidRatio;
+        offsetX = (cw - renderW) / 2;
+      }
+    } else {
+      if (cRatio > vidRatio) {
+        renderH = ch;
+        renderW = ch * vidRatio;
+        offsetX = (cw - renderW) / 2;
+      } else {
+        renderW = cw;
+        renderH = cw / vidRatio;
+        offsetY = (ch - renderH) / 2;
+      }
+    }
+
+    return { x: offsetX, y: offsetY, width: renderW, height: renderH };
+  }, [rotation, isFillMode]);
+
+  // BỘ ĐỆM FRAME 120 FPS & ĐỒNG BỘ NATIVE VIDEO FRAME CALLBACK (CÓ MOTION GATE & DUAL 120FPS VIEW)
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const motionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const prevThumbRef = useRef<Uint8ClampedArray | null>(null);
+  const isAiBusyRef = useRef<boolean>(false);
+  const lastAiSendTimeRef = useRef<number>(0);
+  const lastScannedTimeRef = useRef<number>(-1);
+  const latestAiDetectionRef = useRef<{ cropBox?: number[]; detectedCard?: string; bestConf?: number; time: number } | null>(null);
+
+  const renderFrame120Fps = useCallback((forcedScan: boolean = false) => {
+    const video = (isLive && hasWebRtcSignal) ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current);
+    if (!video || video.readyState < 2) return;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    const curTime = video.currentTime || 0;
+    const isRotated = rotation === 90 || rotation === 270;
+    const orientedW = isRotated ? vh : vw;
+    const orientedH = isRotated ? vw : vh;
+
+    const cropW = Math.max(80, Math.round(normRoi.normW * orientedW));
+    const cropH = Math.max(80, Math.round(normRoi.normH * orientedH));
+    const cropX = Math.max(0, Math.min(orientedW - cropW, Math.round(normRoi.normX * orientedW - cropW / 2)));
+    const cropY = Math.max(0, Math.min(orientedH - cropH, Math.round(normRoi.normY * orientedH - cropH / 2)));
+
+    // Tái sử dụng offscreen canvas duy nhất để tránh cấp phát bộ nhớ & GC rác gây giật lag
+    if (!offscreenCanvasRef.current) {
+      offscreenCanvasRef.current = document.createElement('canvas');
+    }
+    const offCanvas = offscreenCanvasRef.current;
+    if (offCanvas.width !== orientedW || offCanvas.height !== orientedH) {
+      offCanvas.width = orientedW;
+      offCanvas.height = orientedH;
+    }
+    const oCtx = offCanvas.getContext('2d');
+    if (!oCtx) return;
+
+    oCtx.imageSmoothingEnabled = false;
+    oCtx.save();
+    oCtx.translate(orientedW / 2, orientedH / 2);
+    if (rotation !== 0) {
+      oCtx.rotate((rotation * Math.PI) / 180);
+    }
+    if (isFlipped) {
+      oCtx.scale(-1, 1);
+    }
+    oCtx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
+    oCtx.restore();
+
+    const now = performance.now();
+
+    // 1. Vẽ Khung 1 [Client Live ROI] mượt mà 120 FPS không rớt 1 frame nào
+    if (clientCanvasRef.current) {
+      const cCan = clientCanvasRef.current;
+      if (cCan.width !== cropW || cCan.height !== cropH) {
+        cCan.width = cropW;
+        cCan.height = cropH;
+      }
+      const ctx1 = cCan.getContext('2d');
+      if (ctx1) {
+        ctx1.imageSmoothingEnabled = false;
+        ctx1.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+      }
+    }
+
+    // 2. Vẽ Khung 2 [Server AI View] mượt mà 120 FPS nguyên bản + vẽ đè Bounding Box AI
+    if (aiCanvasRef.current) {
+      const aCan = aiCanvasRef.current;
+      if (aCan.width !== cropW || aCan.height !== cropH) {
+        aCan.width = cropW;
+        aCan.height = cropH;
+      }
+      const aCtx = aCan.getContext('2d');
+      if (aCtx) {
+        aCtx.imageSmoothingEnabled = false;
+        aCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+        const curAi = latestAiDetectionRef.current;
+        if (curAi && (now - curAi.time < 500)) {
+          if (curAi.cropBox && curAi.cropBox.length === 4) {
+            const [bx1, by1, bx2, by2] = curAi.cropBox;
+            aCtx.strokeStyle = '#10b981';
+            aCtx.lineWidth = 3;
+            aCtx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
+          }
+          if (curAi.detectedCard && (curAi.bestConf || 0) > 35) {
+            aCtx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            aCtx.fillRect(2, 2, 140, 22);
+            aCtx.fillStyle = '#34d399';
+            aCtx.font = 'bold 12px monospace';
+            aCtx.fillText(`${curAi.detectedCard} (${curAi.bestConf}%)`, 6, 17);
+          }
+        }
+      }
+    }
+
+    // 3. Đo nhanh biến thiên chuyển động (Motion Check) trên Canvas thu nhỏ 32x32 (<0.05ms)
+    let hasMotion = false;
+    if (clientCanvasRef.current) {
+      if (!motionCanvasRef.current) {
+        motionCanvasRef.current = document.createElement('canvas');
+        motionCanvasRef.current.width = 32;
+        motionCanvasRef.current.height = 32;
+      }
+      const mCtx = motionCanvasRef.current.getContext('2d', { willReadFrequently: true });
+      if (mCtx) {
+        mCtx.drawImage(clientCanvasRef.current, 0, 0, 32, 32);
+        const imgData = mCtx.getImageData(0, 0, 32, 32).data;
+        if (prevThumbRef.current && prevThumbRef.current.length === imgData.length) {
+          let diffSum = 0;
+          const prev = prevThumbRef.current;
+          for (let i = 0; i < imgData.length; i += 4) {
+            diffSum += Math.abs(imgData[i] - prev[i]) + Math.abs(imgData[i + 1] - prev[i + 1]) + Math.abs(imgData[i + 2] - prev[i + 2]);
+          }
+          const avgDiff = diffSum / (32 * 32 * 3);
+          if (avgDiff > 4.0) {
+            hasMotion = true;
+          }
+        } else {
+          hasMotion = true;
+        }
+        prevThumbRef.current = new Uint8ClampedArray(imgData);
+      }
+    }
+
+    // 4. Gửi ảnh tới AI Worker: Tách sang microtask để 0% ảnh hưởng đến nhịp render 120 FPS (hết đứng hình!)
+    const timeSinceLastAi = now - lastAiSendTimeRef.current;
+    const shouldSendAi = forcedScan || (!isAiBusyRef.current && (hasMotion ? timeSinceLastAi >= 20 : timeSinceLastAi >= 400));
+
+    if (shouldSendAi && socket) {
+      isAiBusyRef.current = true;
+      lastAiSendTimeRef.current = now;
+      scanReqTimeRef.current = now;
+
+      if (!captureCanvasRef.current) {
+        captureCanvasRef.current = document.createElement('canvas');
+      }
+      const capCan = captureCanvasRef.current;
+      if (capCan.width !== cropW || capCan.height !== cropH) {
+        capCan.width = cropW;
+        capCan.height = cropH;
+      }
+      const capCtx = capCan.getContext('2d');
+      if (capCtx) {
+        capCtx.imageSmoothingEnabled = false;
+        capCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+        setTimeout(() => {
+          try {
+            const cropBase64 = capCan.toDataURL('image/png');
+            const timeStr = `${Math.floor(curTime / 60)}:${(curTime % 60).toFixed(2).padStart(5, '0')}`;
+            socket.emit('scan_exact_frame', {
+              imageBase64: cropBase64,
+              currentTime: curTime,
+              timeStr,
+              roomId: roomId || 'default'
+            });
+          } catch {
+            isAiBusyRef.current = false;
+          }
+        }, 0);
+      }
+
+      setTimeout(() => {
+        isAiBusyRef.current = false;
+      }, 180);
+    }
+  }, [isLive, hasWebRtcSignal, rotation, isFlipped, normRoi, socket, roomId]);
+
+  const scanCurrentFrameFromVideo = useCallback(async (forced: boolean = false) => {
+    renderFrame120Fps(forced);
+  }, [renderFrame120Fps]);
+
+  // Xử lý kéo thả Ô đỏ trực tiếp trên Video
+  const handleReticleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const rect = getRenderedVideoRect();
+    const startNormX = normRoi.normX;
+    const startNormY = normRoi.normY;
+
+    const onMove = (moveEv: MouseEvent | TouchEvent) => {
+      const curX = 'touches' in moveEv ? moveEv.touches[0].clientX : (moveEv as MouseEvent).clientX;
+      const curY = 'touches' in moveEv ? moveEv.touches[0].clientY : (moveEv as MouseEvent).clientY;
+      const dx = curX - clientX;
+      const dy = curY - clientY;
+      const newNormX = Math.max(0.06, Math.min(0.94, startNormX + dx / rect.width));
+      const newNormY = Math.max(0.06, Math.min(0.94, startNormY + dy / rect.height));
+      setNormRoi((prev) => ({ ...prev, normX: newNormX, normY: newNormY }));
+    };
+
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchend', onEnd);
   };
 
-  // Click vào Video để Ghim / Nhả ghim vị trí khung ngắm
-  const handleVideoClick = () => {
-    setIsReticleLocked((prev) => !prev);
+  // Xử lý co giãn kích thước Ô đỏ
+  const handleReticleResize = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const rect = getRenderedVideoRect();
+    const startNormW = normRoi.normW;
+    const startNormH = normRoi.normH;
+
+    const onMove = (moveEv: MouseEvent | TouchEvent) => {
+      const curX = 'touches' in moveEv ? moveEv.touches[0].clientX : (moveEv as MouseEvent).clientX;
+      const curY = 'touches' in moveEv ? moveEv.touches[0].clientY : (moveEv as MouseEvent).clientY;
+      const dw = curX - clientX;
+      const dh = curY - clientY;
+      const newNormW = Math.max(0.08, Math.min(0.85, startNormW + dw / rect.width));
+      const newNormH = Math.max(0.08, Math.min(0.85, startNormH + dh / rect.height));
+      setNormRoi((prev) => ({ ...prev, normW: newNormW, normH: newNormH }));
+    };
+
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchend', onEnd);
   };
 
   const hlsRef = useRef<Hls | null>(null);
-  const [hasVideoSignal, setHasVideoSignal] = useState<boolean>(false);
-  const [hasWebRtcSignal, setHasWebRtcSignal] = useState<boolean>(false);
+
 
   // Quản lý phiên Stream (Đồng bộ từ props và tự động thăm dò luồng mới khi iPhone phát lại)
   const [activeStreamSession, setActiveStreamSession] = useState<StreamSession | null>(stream);
@@ -437,24 +765,26 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
   }, [socket]);
 
-  // ĐỒNG BỘ TỌA ĐỘ KHUNG ĐỎ (ROI) LÊN SERVER ĐỂ SERVER TỰ CẮT LUỒNG 120FPS
+  // ĐỒNG BỘ TỌA ĐỘ KHUNG ĐỎ (ROI) LÊN SERVER
   useEffect(() => {
     if (!socket || !isReticleActive) return;
-    const container = videoContainerRef.current;
-    const rect = container ? container.getBoundingClientRect() : { width: 1000, height: 580 };
+    const rw = Math.round(normRoi.normW * 100);
+    const rh = Math.round(normRoi.normH * 100);
+    const rx = Math.round(normRoi.normX * 100);
+    const ry = Math.round(normRoi.normY * 100);
+    setAiStatus(`📐 Đã áp dụng cỡ ô soi: ${rw}% x ${rh}% (Tâm ${rx}%, ${ry}%)`);
+
     socket.emit('set_reticle_roi', {
-      x: reticlePos.x,
-      y: reticlePos.y,
-      w: reticleSize.width,
-      h: reticleSize.height,
-      containerW: rect.width || 1000,
-      containerH: rect.height || 580,
+      normX: normRoi.normX,
+      normY: normRoi.normY,
+      normW: normRoi.normW,
+      normH: normRoi.normH,
       rotation,
       isFlipped,
       isActive: isReticleActive,
       roomId: roomId || 'default'
     });
-  }, [socket, reticlePos, reticleSize, rotation, isFlipped, isReticleActive, roomId]);
+  }, [socket, normRoi, rotation, isFlipped, isReticleActive, roomId]);
 
   // NHẬN DIỆN TỪ SERVER-SIDE AI WORKER (120FPS NATIVE DIRECT STREAM)
   useEffect(() => {
@@ -466,23 +796,57 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       sharpness?: number;
       image?: string;
       timestamp?: string;
+      updateFrameOnly?: boolean;
     }) => {
       if (!data?.card) return;
       const best = data.card;
       const conf = data.confidence || best.confidence || 0.95;
-      
+      const sharp = data.sharpness || 0;
+
       setLastDetectedCard(best.display || best.code);
-      setAiStatus(`🎯 Server AI bắt dính: ${best.fullName || best.display} (${Math.round(conf * 100)}%)`);
-      
+      setAiStatus(`🎯 120fps bắt dính: ${best.fullName || best.display} (${Math.round(conf * 100)}% | Độ nét ${sharp})`);
+
+      const cardTitle = (best.display || best.code) + ' ' + (best.fullName || '');
       const frameData = {
         image: data.image || '',
-        cardName: (best.display || best.code) + ' ' + (best.fullName || ''),
+        cardName: cardTitle,
         confidence: Math.round(conf * 100),
+        sharpness: sharp,
         timestamp: data.timestamp || new Date().toLocaleTimeString('vi-VN')
       };
-      setCapturedFrame(frameData);
-      setCapturedHistory((prev) => [frameData, ...prev.slice(0, 4)]);
 
+      if (data.updateFrameOnly) {
+        // Cập nhật lại đúng lá bài đó bằng bức ảnh 120fps sắc nét hơn mà không chia trùng bài vào Cửa!
+        setCapturedFrame((prev) => (!prev || sharp >= (prev.sharpness || 0) ? frameData : prev));
+        setCapturedHistory((prev) => {
+          const idx = prev.findIndex((item) => item.cardName === cardTitle);
+          if (idx !== -1) {
+            if (sharp >= (prev[idx].sharpness || 0)) {
+              const next = [...prev];
+              next[idx] = frameData;
+              return next;
+            }
+            return prev;
+          }
+          return prev.length > 0 ? [frameData, ...prev.slice(1)] : [frameData];
+        });
+        return;
+      }
+
+      setCapturedFrame(frameData);
+      setCapturedHistory((prev) => {
+        const existingIdx = prev.findIndex((item) => item.cardName === cardTitle);
+        if (existingIdx !== -1) {
+          // Nếu lá bài này đã có trong danh sách gần đây, chỉ giữ bức ảnh NÉT HƠN và không nhân đôi
+          if (sharp >= (prev[existingIdx].sharpness || 0)) {
+            const next = [...prev];
+            next[existingIdx] = frameData;
+            return next;
+          }
+          return prev;
+        }
+        return [frameData, ...prev.slice(0, 8)];
+      });
       addCardToActiveDoor(best.code);
     };
 
@@ -491,6 +855,50 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       socket.off('card_detected', handleServerCardDetected);
     };
   }, [socket, addCardToActiveDoor]);
+
+  // NHẬN LUỒNG SOI LIVE RAM CROP TRỰC TIẾP TỪ SERVER AI
+  useEffect(() => {
+    if (!socket) return;
+    const handleDebugCrop = (data: any) => {
+      if (data && data.image) {
+        isAiBusyRef.current = false;
+        if (scanReqTimeRef.current > 0) {
+          setLastScanRtt(Math.round(performance.now() - scanReqTimeRef.current));
+        }
+        setDebugCrop(data);
+
+        // Vẽ trực tiếp lên Khung 2 [Server AI View] có vẽ Bounding Box
+        if (aiCanvasRef.current) {
+          const aCan = aiCanvasRef.current;
+          const aCtx = aCan.getContext('2d');
+          const img = new Image();
+          img.onload = () => {
+            if (aCan.width !== img.width || aCan.height !== img.height) {
+              aCan.width = img.width;
+              aCan.height = img.height;
+            }
+            if (aCtx) {
+              aCtx.drawImage(img, 0, 0);
+              if (data.cropBox && data.cropBox.length === 4) {
+                const [bx1, by1, bx2, by2] = data.cropBox;
+                if (bx2 > bx1 && by2 > by1) {
+                  aCtx.strokeStyle = '#10b981';
+                  aCtx.lineWidth = 3;
+                  aCtx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
+                }
+              }
+            }
+          };
+          img.src = data.image;
+        }
+      }
+    };
+
+    socket.on('ai_debug_crop', handleDebugCrop);
+    return () => {
+      socket.off('ai_debug_crop', handleDebugCrop);
+    };
+  }, [socket]);
 
   // Tự động kiểm tra luồng mới mỗi 2s liên tục (chuyển đổi luồng tức thì không cần F5)
   useEffect(() => {
@@ -555,7 +963,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     setHasWebRtcSignal(false);
 
     const connectWebRtc = async () => {
-      for (let attempt = 1; !cancelled; attempt++) {
+      for (let attempt = 1; !cancelled && attempt <= 25; attempt++) {
         try {
           if (peerRef.current) {
             peerRef.current.close();
@@ -582,10 +990,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             if (cancelled || !streams[0] || !liveVideoRef.current) return;
             receivedTrack = true;
             liveVideoRef.current.srcObject = streams[0];
+            liveVideoRef.current.playbackRate = 1.0;
             liveVideoRef.current.play().catch(() => {});
+            if (replayVideoRef.current && !replayVideoRef.current.paused) {
+              replayVideoRef.current.pause();
+            }
             setHasVideoSignal(true);
             setHasWebRtcSignal(true);
-            console.log('[Mode2] WebRTC Live đã nhận video track thành công (Zero Delay)!');
+            console.log('[Mode2] WebRTC Live đã nhận video track thành công (Zero-Playout-Delay Mode)!');
 
             const vTrack = streams[0].getVideoTracks()[0];
             if (vTrack) {
@@ -659,8 +1071,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             peerRef.current = null;
           }
           if (cancelled) break;
-          // FFmpeg/MediaMTX đang khởi tạo -> Chờ 400ms và thử lại
-          await new Promise((r) => setTimeout(r, 400));
+          // Chờ MediaMTX nhận RTMP từ iPhone -> Giãn cách 1.2s tránh làm nghẽn MediaMTX
+          await new Promise((r) => setTimeout(r, attempt <= 3 ? 1000 : 1500));
         }
       }
     };
@@ -693,7 +1105,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     (async () => {
       let activeHlsUrl = replayUrl;
       // Đợi playlist sẵn sàng (thử cả replay và live)
-      for (let i = 0; i < 30 && !isCancelled; i++) {
+      for (let i = 0; i < 20 && !isCancelled; i++) {
         try {
           const resReplay = await fetch(replayUrl, { method: 'HEAD', cache: 'no-store' });
           if (resReplay.ok) {
@@ -706,7 +1118,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             break;
           }
         } catch {}
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 1200));
       }
       if (isCancelled) return;
 
@@ -728,8 +1140,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           nudgeMaxRetry: 5,
           highBufferWatchdogPeriod: 0,
           liveSyncDuration: 1.5,
-          liveMaxLatencyDuration: Infinity,
-          maxLiveSyncPlaybackRate: 1.0
+          liveMaxLatencyDuration: 3.5,
+          maxLiveSyncPlaybackRate: 1.15
         });
 
         hlsRef.current = hls;
@@ -738,7 +1150,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (!hasVideoSignal) setHasVideoSignal(true);
-          video.play().catch(() => {});
+          if (!hasWebRtcSignal) {
+            video.play().catch(() => {});
+          }
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -753,7 +1167,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = activeHlsUrl;
         if (!hasVideoSignal) setHasVideoSignal(true);
-        video.play().catch(() => {});
+        if (!hasWebRtcSignal) {
+          video.play().catch(() => {});
+        }
       }
     })();
 
@@ -766,217 +1182,137 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
   }, [activeStreamSession?.streamKey, activeStreamSession?.hlsPlaylistUrl]);
 
-  // Kéo handle góc dưới-phải để resize khung ngắm thủ công
-  const handleReticleResizeMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startW = reticleSize.width;
-    const startH = reticleSize.height;
 
-    const onMouseMove = (moveEv: MouseEvent) => {
-      const dw = moveEv.clientX - startX;
-      const dh = moveEv.clientY - startY;
-      setReticleSize({
-        width: Math.max(100, Math.min(450, startW + dw)),
-        height: Math.max(120, Math.min(500, startH + dh))
-      });
-    };
 
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  // VÒNG LẶP AI QUÉT REAL-TIME SIÊU TỐC (~35 FPS PIPELINING) - BẮT TRỌN MỌI CÚ LƯỚT BÀI
+  // ĐỒNG BỘ TRẠNG THÁI SERVER AI & ÉP LUỒNG LIVE BÁM SÁT THỜI GIAN THỰC 1:1 (CHỐNG TRỄ SLO-MO)
   useEffect(() => {
     if (!isReticleActive) return;
+    // Giữ tham chiếu hợp lệ
+    void canvasRef.current;
+    void lastDetectedCodeRef.current;
+    void lastDetectionTimeRef.current;
 
-    let isCancelled = false;
-    let inFlightCount = 0;
-    let lastDispatchTime = 0;
-    let rafId: number | null = null;
-
-    const processFrameRealtime = () => {
-      if (isCancelled || !isReticleActive) return;
-
-      const now = Date.now();
-      // Nhịp quét siêu tốc 33ms (~30 lần/giây): mượt mà tuyệt đối, 0% nghẽn CPU
-      if (now - lastDispatchTime < 33 || inFlightCount >= 1) {
-        rafId = requestAnimationFrame(processFrameRealtime);
-        return;
+    if (isLive && hasWebRtcSignal) {
+      if (replayVideoRef.current && !replayVideoRef.current.paused) {
+        replayVideoRef.current.pause();
       }
-
-      const liveVideo = liveVideoRef.current;
-      const replayVideo = replayVideoRef.current;
-      const container = videoContainerRef.current;
-
-      const activeVideo = (isLive && hasWebRtcSignal && liveVideo && liveVideo.videoWidth > 0 && !liveVideo.paused)
-        ? liveVideo
-        : ((replayVideo && replayVideo.videoWidth > 0 && !replayVideo.paused)
-          ? replayVideo
-          : (liveVideo || replayVideo));
-
-      if (!activeVideo || !container || activeVideo.videoWidth === 0 || activeVideo.paused || activeVideo.ended) {
-        rafId = requestAnimationFrame(processFrameRealtime);
-        return;
+      if (liveVideoRef.current && liveVideoRef.current.paused) {
+        liveVideoRef.current.play().catch(() => {});
       }
+    } else if (replayVideoRef.current && replayVideoRef.current.paused) {
+      replayVideoRef.current.play().catch(() => {});
+    }
 
-      const containerRect = container.getBoundingClientRect();
-      const W = containerRect.width;
-      const H = containerRect.height;
-      if (W === 0 || H === 0) {
-        rafId = requestAnimationFrame(processFrameRealtime);
-        return;
+    setAiStatus('⚡ AI đang quét bám sát từng frame trực tiếp 120 FPS...');
+
+    // Đồng bộ từng khung hình theo chuẩn requestVideoFrameCallback (120 FPS native)
+    let active = true;
+    let rVfcId: number | null = null;
+    let animId: number | null = null;
+
+    const frameLoop = () => {
+      if (!active) return;
+      renderFrame120Fps(false);
+
+      const curVid = (isLive && hasWebRtcSignal) ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current);
+      if (curVid && 'requestVideoFrameCallback' in curVid) {
+        rVfcId = (curVid as any).requestVideoFrameCallback(frameLoop);
+      } else {
+        animId = requestAnimationFrame(frameLoop);
       }
-
-      // Hàm chụp cắt ảnh CHÍNH XÁC 100% theo khung đỏ người dùng đã đặt (không padding thừa)
-      const captureCrop = (videoEl: HTMLVideoElement): string | null => {
-        if (!videoEl || videoEl.videoWidth === 0 || videoEl.paused || videoEl.ended) return null;
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement('canvas');
-        }
-        const canvas = canvasRef.current;
-        // Cắt đúng 100% NATIVE 1080p Resolution từ video gốc (KHÔNG NÉN CO NHỎ)
-        const vw = videoEl.videoWidth;
-        const vh = videoEl.videoHeight;
-        if (vw === 0 || vh === 0) return null;
-
-        let renderW = W;
-        let renderH = H;
-        const containerRatio = W / H;
-        const videoRatio = vw / vh;
-        if (videoRatio > containerRatio) {
-          renderW = W;
-          renderH = W / videoRatio;
-        } else {
-          renderH = H;
-          renderW = H * videoRatio;
-        }
-
-        // Tỷ lệ pixel thực tế từ video 1080p gốc (Native 1080p)
-        const nativeScale = vw / renderW;
-        const targetW = Math.max(160, Math.round(reticleSize.width * nativeScale));
-        const targetH = Math.max(160, Math.round(reticleSize.height * nativeScale));
-
-        if (canvas.width !== targetW || canvas.height !== targetH) {
-          canvas.width = targetW;
-          canvas.height = targetH;
-        }
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) return null;
-
-        ctx.clearRect(0, 0, targetW, targetH);
-        ctx.save();
-
-        // Scale 1:1 theo đúng điểm ảnh thực tế của video 1080p
-        const s = nativeScale;
-        ctx.scale(s, s);
-        ctx.translate(-reticlePos.x, -reticlePos.y);
-        ctx.translate(W / 2, H / 2);
-
-        if (rotation === 90 || rotation === 270) {
-          ctx.rotate((rotation * Math.PI) / 180);
-        } else if (rotation === 180) {
-          ctx.rotate(Math.PI);
-        }
-        if (isFlipped) {
-          ctx.scale(-1, 1);
-        }
-
-        ctx.drawImage(videoEl, -renderW / 2, -renderH / 2, renderW, renderH);
-        ctx.restore();
-
-        return canvas.toDataURL('image/jpeg', 0.80);
-      };
-
-      const dataUrl = captureCrop(activeVideo);
-      if (!dataUrl) {
-        rafId = requestAnimationFrame(processFrameRealtime);
-        return;
-      }
-
-      // Xử lý khi AI nhận diện được quân bài (Ngưỡng nhạy chuẩn 0.25 - Ăn ngay tức thì)
-      const handleCardMatch = (best: any, sourceImg: string) => {
-        const tNow = Date.now();
-        const conf = best.confidence || 0;
-
-        if (conf < 0.25) return;
-
-        const isSameCard = best.code === lastDetectedCodeRef.current;
-        const timeDiff = tNow - lastDetectionTimeRef.current;
-
-        // Bắt dính tức thì: Cooldown 350ms cho cùng 1 lá, hoặc ăn ngay lập tức nếu khác lá
-        if ((!isSameCard || timeDiff > 350) && conf >= 0.25) {
-          lastDetectionTimeRef.current = tNow;
-          lastDetectedCodeRef.current = best.code;
-          addCardToActiveDoor(best.code);
-          setAiStatus('⚡ Bắt dính: ' + best.fullName + ' (' + Math.round(conf * 100) + '%)');
-          setLastDetectedCard(best.display);
-          setIsAiFlashing(true);
-          setTimeout(() => setIsAiFlashing(false), 250);
-
-          // Hiển thị frame ảnh bắt được lên góc phải HUD
-          const newCap = {
-            image: sourceImg,
-            cardName: best.display + ' ' + best.fullName,
-            confidence: Math.round(conf * 100),
-            timestamp: new Date().toLocaleTimeString('vi-VN')
-          };
-          setCapturedFrame(newCap);
-          setCapturedHistory((prev) => [newCap, ...prev.slice(0, 4)]);
-        } else {
-          setAiStatus('Đang thấy: ' + best.fullName + ' (' + Math.round(conf * 100) + '%)');
-        }
-      };
-
-      lastDispatchTime = now;
-      inFlightCount++;
-
-      // Server-Side AI Worker đang tự động crop và xử lý trực tiếp từ luồng 120fps trên server.
-      // Trình duyệt chỉ chạy nhịp kiểm tra nhẹ (fallback nếu server worker đang bận)
-      setAiStatus('⚡ Server AI 120fps đang quét trực tiếp trên luồng gốc...');
-      inFlightCount = 0;
-
-      rafId = requestAnimationFrame(processFrameRealtime);
     };
 
-    rafId = requestAnimationFrame(processFrameRealtime);
+    const initialVid = (isLive && hasWebRtcSignal) ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current);
+    if (initialVid && 'requestVideoFrameCallback' in initialVid) {
+      rVfcId = (initialVid as any).requestVideoFrameCallback(frameLoop);
+    } else {
+      animId = requestAnimationFrame(frameLoop);
+    }
+
+    const syncInterval = setInterval(() => {
+      if (!isLive) return;
+      if (hasWebRtcSignal && liveVideoRef.current) {
+        const v = liveVideoRef.current;
+        if (v.paused) v.play().catch(() => {});
+        // TUYỆT ĐỐI KHÔNG gán v.currentTime trên luồng WebRTC srcObject để tránh làm đứng bộ giải mã phần cứng Chrome
+      } else if (!hasWebRtcSignal && replayVideoRef.current) {
+        const rv = replayVideoRef.current;
+        if (rv.buffered && rv.buffered.length > 0) {
+          const bEnd = rv.buffered.end(rv.buffered.length - 1);
+          const lag = bEnd - rv.currentTime;
+          if (lag > 1.2) {
+            rv.currentTime = Math.max(0, bEnd - 0.35);
+            rv.playbackRate = 1.05;
+          } else if (lag > 0.6) {
+            rv.playbackRate = 1.05;
+          } else {
+            rv.playbackRate = 1.0;
+          }
+        }
+      }
+    }, 250);
 
     return () => {
-      isCancelled = true;
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
+      active = false;
+      const v = (isLive && hasWebRtcSignal) ? liveVideoRef.current : (replayVideoRef.current || liveVideoRef.current);
+      if (v && rVfcId !== null && 'cancelVideoFrameCallback' in v) {
+        (v as any).cancelVideoFrameCallback(rVfcId);
       }
+      if (animId !== null) {
+        cancelAnimationFrame(animId);
+      }
+      clearInterval(syncInterval);
     };
-  }, [isReticleActive, reticlePos, reticleSize, confidenceThreshold, isFlipped, rotation, isFillMode, addCardToActiveDoor, isLive, hasWebRtcSignal]);
+  }, [isReticleActive, isLive, hasWebRtcSignal, renderFrame120Fps]);
 
-  // Xử lý tua lại video
+  // Xử lý tua lại video theo chuẩn DVR Sliding Window
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setSeekTime(val);
-    if (replayVideoRef.current) {
-      replayVideoRef.current.currentTime = val;
+    const pct = parseFloat(e.target.value);
+    setSeekPercent(pct);
+    if (pct >= 99) {
+      jumpToLive();
+      return;
     }
     setIsLive(false);
+    const rv = replayVideoRef.current;
+    if (rv) {
+      let s = dvrWindow.start;
+      let dur = dvrWindow.duration;
+      if (rv.seekable && rv.seekable.length > 0) {
+        s = rv.seekable.start(0);
+        const eTime = rv.seekable.end(0);
+        dur = eTime - s;
+      }
+      if (dur > 0) {
+        const targetTime = s + (pct / 100) * dur;
+        if (rv.paused) {
+          rv.play().catch(() => {});
+        }
+        rv.currentTime = targetTime;
+        setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+      }
+    }
+    if (liveVideoRef.current && !liveVideoRef.current.paused) {
+      liveVideoRef.current.pause();
+    }
   };
 
   const jumpToLive = () => {
+    setIsLive(true);
+    setSeekPercent(100);
     if (liveVideoRef.current) {
       liveVideoRef.current.play().catch(() => {});
     }
-    if (replayVideoRef.current && replayVideoRef.current.buffered.length > 0) {
-      const bEnd = replayVideoRef.current.buffered.end(replayVideoRef.current.buffered.length - 1);
-      replayVideoRef.current.currentTime = Math.max(0, bEnd - 0.5);
-      replayVideoRef.current.playbackRate = 1.0;
-      replayVideoRef.current.play().catch(() => {});
+    const rv = replayVideoRef.current;
+    if (rv) {
+      if (rv.seekable && rv.seekable.length > 0) {
+        const bEnd = rv.seekable.end(0);
+        rv.currentTime = Math.max(0, bEnd - 0.5);
+      }
+      rv.playbackRate = 1.0;
+      rv.play().catch(() => {});
     }
     setPlaybackRate(1.0);
-    setIsLive(true);
   };
 
   return (
@@ -1083,13 +1419,602 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Ván mới</span>
           </button>
+
+          {/* Nút Xong Phiên / Xóa Sạch RAM (Màu cam hổ phách) */}
+          <button
+            onClick={handleResetSession}
+            title="Xóa sạch bài trên bàn, lịch sử ảnh chụp và giải phóng bộ đệm RAM để test lại từ đầu"
+            className="px-3.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-black shadow-md shadow-amber-600/40 flex items-center space-x-1 transition active:scale-95 tracking-wide"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Xong phiên</span>
+          </button>
         </div>
       </div>
 
-      {/* 2. HÀNG TRÊN: BẢNG LỊCH SỬ KẾT QUẢ (TRÁI) + MÀN HÌNH LIVE SIÊU NÉT (PHẢI) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
-        {/* CỘT TRÁI (Lg: 5 cột): BẢNG MA TRẬN LỊCH SỬ */}
-        <div className="lg:col-span-5 bg-slate-900/90 border border-slate-700/80 rounded-xl p-2.5 flex flex-col justify-between shadow-lg">
+      {/* 2. HÀNG TRÊN: CHIA ĐÔI 50/50 (TRÁI: MÀN HÌNH LIVE 1080P - PHẢI: SOI RAM CROP 120FPS & LỊCH SỬ KẾT QUẢ) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
+        {/* CỘT TRÁI (Lg: 6 cột - 50%): MÀN HÌNH LIVE VIDEO + KHUNG NGẮM AI ĐỎ */}
+<div className="lg:col-span-6 bg-black rounded-xl border border-slate-700/80 overflow-hidden shadow-2xl relative flex flex-col justify-between">
+          {/* Thanh công cụ trên đầu Video: Độ phân giải, FPS, Lật, Xoay & Cỡ Khung */}
+          <div className="bg-slate-950/85 backdrop-blur px-3 py-1.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 z-20 text-[11px]">
+            {/* Resolution & FPS Tags */}
+            <div className="flex items-center space-x-1.5 font-mono">
+              <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-bold text-[10px]">1080p</span>
+              <span className="px-1.5 py-0.5 rounded bg-emerald-600/90 text-white font-bold text-[10px]">120 fps</span>
+              <span className="text-slate-400 text-[10px]">V105 ISO 1280 1x</span>
+            </div>
+
+            {/* Điều khiển: Cỡ Khung, Lật, Xoay, Sáng & Ghim */}
+            <div className="flex items-center space-x-1.5 text-xs">
+              {/* Nút mở thanh chỉnh kích thước */}
+              <button
+                type="button"
+                onClick={() => setShowSizeControls((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  showSizeControls ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Mở giao diện chỉnh kích thước Dài / Rộng khung ngắm"
+              >
+                <Sliders className="w-3 h-3" />
+                <span>Cỡ Khung</span>
+              </button>
+
+              {/* Nút Lật ngang video */}
+              <button
+                type="button"
+                onClick={() => setIsFlipped((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  isFlipped ? 'bg-cyan-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Lật gương ngang khung hình video"
+              >
+                <ArrowLeftRight className="w-3 h-3" />
+                <span>{isFlipped ? 'Đã Lật ↔' : 'Lật ↔'}</span>
+              </button>
+
+              {/* Nút Xoay 90 độ video */}
+              <button
+                type="button"
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  rotation !== 0 ? 'bg-amber-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Xoay video 90 độ mỗi lần bấm (0 -> 90 -> 180 -> 270)"
+              >
+                <RotateCw className="w-3 h-3" />
+                <span>{rotation !== 0 ? `Xoay ${rotation}°` : 'Xoay ↻'}</span>
+              </button>
+
+              {/* Nút Phóng to tràn khung / Vừa vặn */}
+              <button
+                type="button"
+                onClick={() => setIsFillMode((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  isFillMode ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Bấm để Phóng to lấp đầy màn hình (loại bỏ viền đen) hoặc xem vừa vặn"
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>{isFillMode ? 'Phóng to ⛶' : 'Vừa vặn'}</span>
+              </button>
+
+
+              {/* Nút Đặt lại vị trí trung tâm */}
+              <button
+                type="button"
+                onClick={() => {
+                  setNormRoi({ normX: 0.50, normY: 0.52, normW: 0.28, normH: 0.35 });
+                  setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                }}
+                className="px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 bg-slate-800 text-slate-300 hover:text-white transition"
+                title="Đặt lại khung ngắm vào giữa bàn chia bài (50%)"
+              >
+                <Crosshair className="w-3 h-3 text-red-400" />
+                <span>Về Giữa</span>
+              </button>
+
+              {/* Nút Tăng sáng & Nét */}
+              <button
+                type="button"
+                onClick={() => setIsBrightBoost((prev) => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  isBrightBoost ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-400'
+                }`}
+                title="Tăng sáng & độ tương phản để soi bài rõ nhất"
+              >
+                <Sun className="w-3 h-3" />
+                <span>{isBrightBoost ? 'Sáng (Bật)' : 'Sáng'}</span>
+              </button>
+
+              {/* Nút bật/tắt Soi Crop RAM Server 120fps */}
+              <button
+                onClick={() => setShowDebugMonitor((p) => !p)}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 border transition ${
+                  showDebugMonitor ? 'bg-amber-500/20 text-amber-300 border-amber-500/50' : 'bg-slate-800 text-slate-400 border-slate-700'
+                }`}
+                title="Bật/Tắt màn hình soi trực tiếp luồng crop trong RAM Server 120fps"
+              >
+                <span>📺 Soi RAM {showDebugMonitor ? '(Bật)' : '(Tắt)'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* GIAO DIỆN CHỈNH KÍCH THƯỚC KHUNG NGẮM (THEO % VIDEO FRAME GỐC) */}
+          {showSizeControls && (
+            <div className="bg-slate-900/95 border-b border-slate-700/80 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 z-20 text-xs shadow-md">
+              <div className="flex items-center space-x-3">
+                {/* Chỉnh Rộng */}
+                <div className="flex items-center space-x-1.5 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
+                  <span className="text-slate-400 text-[11px]">Rộng:</span>
+                  <button
+                    onClick={() => {
+                      setNormRoi((s) => ({ ...s, normW: Math.max(0.10, s.normW - 0.03) }));
+                      setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                    }}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >-</button>
+                  <span className="w-10 text-center font-bold text-amber-300 font-mono text-[11px]">{Math.round(normRoi.normW * 100)}%</span>
+                  <button
+                    onClick={() => {
+                      setNormRoi((s) => ({ ...s, normW: Math.min(0.85, s.normW + 0.03) }));
+                      setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                    }}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >+</button>
+                </div>
+
+                {/* Chỉnh Dài */}
+                <div className="flex items-center space-x-1.5 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
+                  <span className="text-slate-400 text-[11px]">Dài:</span>
+                  <button
+                    onClick={() => {
+                      setNormRoi((s) => ({ ...s, normH: Math.max(0.10, s.normH - 0.03) }));
+                      setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                    }}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >-</button>
+                  <span className="w-10 text-center font-bold text-amber-300 font-mono text-[11px]">{Math.round(normRoi.normH * 100)}%</span>
+                  <button
+                    onClick={() => {
+                      setNormRoi((s) => ({ ...s, normH: Math.min(0.85, s.normH + 0.03) }));
+                      setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                    }}
+                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
+                  >+</button>
+                </div>
+              </div>
+
+              {/* Nút Cỡ Mẫu (Presets) */}
+              <div className="flex items-center space-x-1 text-[10px]">
+                <span className="text-slate-400 mr-1">Cỡ mẫu:</span>
+                <button
+                  onClick={() => {
+                    setNormRoi((s) => ({ ...s, normW: 0.20, normH: 0.25 }));
+                    setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                >Nhỏ</button>
+                <button
+                  onClick={() => {
+                    setNormRoi((s) => ({ ...s, normW: 0.28, normH: 0.35 }));
+                    setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white font-bold transition"
+                >Chuẩn</button>
+                <button
+                  onClick={() => {
+                    setNormRoi((s) => ({ ...s, normW: 0.35, normH: 0.42 }));
+                    setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                >Lớn</button>
+                <button
+                  onClick={() => {
+                    setNormRoi((s) => ({ ...s, normW: 0.38, normH: 0.26 }));
+                    setTimeout(() => scanCurrentFrameFromVideo(true), 40);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white transition"
+                >Ngang</button>
+              </div>
+            </div>
+          )}
+
+          {/* VÙNG CHỨA VIDEO & KHUNG NGẮM AI ĐỎ (CỐ ĐỊNH THEO TỶ LỆ VIDEO LIVE GỐC) */}
+          <div
+            ref={videoContainerRef}
+            className="relative w-full h-[360px] sm:h-[420px] md:h-[480px] bg-black overflow-hidden select-none group flex items-center justify-center"
+          >
+            {/* Thẻ 1: Live WebRTC WHEP (Siêu mượt, Độ trễ <0.2s, 0 khựng giật) */}
+            <video
+              ref={liveVideoRef}
+              className={`pointer-events-none transition-transform duration-150 ease-out absolute inset-0 ${
+                isLive && hasWebRtcSignal ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+              } ${isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'}`}
+              style={{
+                transform: `${
+                  (rotation === 90 || rotation === 270)
+                    ? `rotate(${rotation}deg)`
+                    : `rotate(${rotation}deg)`
+                } scaleX(${isFlipped ? -1 : 1})`,
+                transformOrigin: 'center center',
+                imageRendering: 'auto',
+                filter: isBrightBoost ? 'brightness(1.08) contrast(1.06)' : 'none'
+              }}
+              playsInline
+              muted={isMuted}
+              autoPlay
+            />
+
+            {/* Thẻ 2: HLS Replay DVR Master (Tua lại mượt mà từng khung hình 120fps / Fallback Live) */}
+            <video
+              ref={replayVideoRef}
+              className={`pointer-events-none transition-transform duration-150 ease-out absolute inset-0 ${
+                !isLive || !hasWebRtcSignal ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+              } ${isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'}`}
+              style={{
+                transform: `${
+                  (rotation === 90 || rotation === 270)
+                    ? `rotate(${rotation}deg)`
+                    : `rotate(${rotation}deg)`
+                } scaleX(${isFlipped ? -1 : 1})`,
+                transformOrigin: 'center center',
+                imageRendering: 'auto',
+                filter: isBrightBoost ? 'brightness(1.08) contrast(1.06)' : 'none'
+              }}
+              playsInline
+              muted={isMuted}
+              autoPlay
+              onTimeUpdate={() => {
+                const rv = replayVideoRef.current;
+                if (rv && rv.seekable && rv.seekable.length > 0) {
+                  const s = rv.seekable.start(0);
+                  const e = rv.seekable.end(0);
+                  const dur = e - s;
+                  if (dur > 0) {
+                    setDvrWindow({ start: s, end: e, duration: dur });
+                    if (!isLive && !isSeekingRef.current) {
+                      const cur = rv.currentTime;
+                      const pct = Math.max(0, Math.min(100, ((cur - s) / dur) * 100));
+                      setSeekPercent(pct);
+                    }
+                  }
+                }
+              }}
+            />
+
+            {/* Màn hình chờ nếu chưa có tín hiệu video */}
+            {!hasVideoSignal && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-slate-400 space-y-2 pointer-events-none z-10">
+                <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-indigo-400 animate-pulse">
+                  <Radio className="w-5 h-5 animate-pulse text-indigo-400" />
+                </div>
+                <p className="text-xs font-mono text-slate-300">
+                  {activeStreamSession ? 'Đang kết nối luồng Live 120fps...' : 'Đang chờ điện thoại phát trực tiếp...'}
+                </p>
+              </div>
+            )}
+
+            {/* KHUNG NGẮM AI MÀU ĐỎ GẮN CỐ ĐỊNH THEO TỶ LỆ KHUNG HÌNH VIDEO (LƯU NHỚ VĨNH VIỄN) */}
+            {isReticleActive && (() => {
+              const vRect = getRenderedVideoRect();
+              const boxW = Math.max(80, Math.round(normRoi.normW * vRect.width));
+              const boxH = Math.max(80, Math.round(normRoi.normH * vRect.height));
+              const boxX = Math.round(vRect.x + normRoi.normX * vRect.width - boxW / 2);
+              const boxY = Math.round(vRect.y + normRoi.normY * vRect.height - boxH / 2);
+
+              return (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${boxX}px`,
+                    top: `${boxY}px`,
+                    width: `${boxW}px`,
+                    height: `${boxH}px`,
+                    pointerEvents: 'auto'
+                  }}
+                  className={`z-30 border-2 rounded-lg pointer-events-auto transition-colors ${
+                    isAiFlashing
+                      ? 'border-emerald-400 bg-emerald-500/15 shadow-[0_0_25px_rgba(52,211,153,0.9)]'
+                      : 'border-red-500 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.7)]'
+                  }`}
+                >
+                  {/* Header nhãn nổi - KÉO VÀO ĐÂY ĐỂ DI CHUYỂN Ô ĐỎ */}
+                  <div
+                    onMouseDown={handleReticleDragStart}
+                    onTouchStart={handleReticleDragStart}
+                    className="absolute -top-6 left-0 right-0 flex items-center justify-between text-[10px] font-bold text-white bg-black/90 px-2 py-0.5 rounded-t backdrop-blur border-t border-x border-red-500/50 cursor-move whitespace-nowrap shadow select-none"
+                    title="Giữ chuột hoặc chạm kéo thanh này để di chuyển ô đỏ đến đúng vị trí bài"
+                  >
+                    <span className="flex items-center space-x-1">
+                      <span className={`w-1.5 h-1.5 rounded-full ${isAiFlashing ? 'bg-emerald-400' : 'bg-red-500 animate-ping'}`} />
+                      <span>✥ KÉO DI CHUYỂN</span>
+                    </span>
+                    <span className="font-mono text-amber-300 ml-1">
+                      {Math.round(normRoi.normW * 100)}%x{Math.round(normRoi.normH * 100)}%
+                    </span>
+                  </div>
+
+                  {/* Thân ô đỏ - Kéo để di chuyển đến vị trí lá bài */}
+                  <div
+                    onMouseDown={handleReticleDragStart}
+                    onTouchStart={handleReticleDragStart}
+                    className="absolute inset-0 cursor-move"
+                    title="Kéo ô đỏ đến vị trí chia bài"
+                  />
+
+                  {/* Tâm ngắm chữ thập (+) */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-40">
+                    <div className="w-5 h-0.5 bg-red-400" />
+                    <div className="h-5 w-0.5 bg-red-400 absolute" />
+                  </div>
+
+                  {/* Footer thông báo trạng thái nổi BÊN DƯỚI NGOÀI KHUNG (KHÔNG CHE BÀI TRONG KHUNG) */}
+                  <div className="absolute -bottom-6 left-0 right-0 flex items-center justify-between text-[9px] font-bold text-slate-200 bg-black/90 px-2 py-0.5 rounded-b backdrop-blur border-b border-x border-red-500/50 pointer-events-none whitespace-nowrap shadow">
+                    <span className="truncate">{aiStatus}</span>
+                    {lastDetectedCard && (
+                      <span className="font-black text-emerald-400 ml-1">{lastDetectedCard}</span>
+                    )}
+                  </div>
+
+                  {/* Handle kéo góc dưới-phải để tùy chỉnh Dài x Rộng */}
+                  <div
+                    onMouseDown={handleReticleResize}
+                    onTouchStart={handleReticleResize}
+                    className="absolute bottom-0 right-0 w-6 h-6 flex items-end justify-end p-0.5 cursor-nwse-resize z-30"
+                    title="Kéo góc để chỉnh kích thước Dài/Rộng"
+                  >
+                    <div className="w-3 h-3 border-r-2 border-b-2 border-red-400 rounded-br-sm bg-red-500/30" />
+                  </div>
+                </div>
+              );
+            })()}
+            {/* KHUNG HIỂN THỊ ẢNH TRÍCH XUẤT THỰC TẾ CỦA LÁ BÀI RÕ NÉT NHẤT */}
+            {capturedFrame && (
+              <div className="absolute top-2.5 right-2.5 z-30 bg-slate-950/95 border-2 border-emerald-500 rounded-xl p-1.5 shadow-[0_0_25px_rgba(16,185,129,0.5)] backdrop-blur-md flex flex-col items-center pointer-events-auto transition-all animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between w-full px-1 mb-1 text-[10px] font-bold text-emerald-400">
+                  <span className="flex items-center gap-1">📸 Frame bắt được</span>
+                  <span className="text-amber-300 font-mono font-black">{capturedFrame.confidence}%</span>
+                </div>
+                <div 
+                  onClick={() => setZoomImage(capturedFrame.image)}
+                  className="w-24 h-32 sm:w-28 sm:h-36 rounded-lg overflow-hidden bg-black border border-emerald-500/40 flex items-center justify-center relative shadow-inner cursor-pointer hover:border-emerald-400 transition"
+                  title="Nhấp để xem ảnh 1080p gốc 1:1"
+                >
+                  <img
+                    src={capturedFrame.image}
+                    alt={capturedFrame.cardName}
+                    className="w-full h-full object-contain"
+                    style={{ imageRendering: '-webkit-optimize-contrast' }}
+                  />
+                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black via-black/85 to-transparent p-1 text-center">
+                    <span className="text-[11px] font-black text-white">{capturedFrame.cardName}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between w-full px-1 mt-1 text-[9px] text-slate-400 font-mono">
+                  <span>{capturedFrame.timestamp}</span>
+                  <span className="text-emerald-400 font-bold">1080p@120fps {capturedFrame.sharpness ? `• Nét ${capturedFrame.sharpness}` : ''}</span>
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* THANH ĐIỀU KHIỂN VIDEO DƯỚI: TUA LẠI, TỐC ĐỘ & VỀ LIVE (KHÔNG PIP) */}
+          <div className="bg-slate-950/90 px-3 py-1.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2.5 text-xs z-20">
+            {/* Nút Nhảy về LIVE trực tiếp */}
+            <button
+              onClick={jumpToLive}
+              className={`px-3 py-1 rounded-full font-black text-[11px] tracking-wider uppercase transition flex items-center space-x-1.5 shadow ${
+                isLive
+                  ? 'bg-red-600 text-white shadow-red-600/40'
+                  : 'bg-slate-800 text-slate-300 hover:bg-red-600 hover:text-white animate-pulse'
+              }`}
+              title="Nhấn để quay lại xem phát trực tiếp tức thì"
+            >
+              <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-white' : 'bg-red-400 animate-ping'}`} />
+              <span>LIVE</span>
+            </button>
+
+            {/* Thanh Timeline Tua lại (Scrubbing Seekbar) */}
+            <div className="flex-1 min-w-[150px] flex items-center space-x-2">
+              <span className="text-[10px] text-slate-400 font-mono">Tua:</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={0.5}
+                value={isLive ? 100 : seekPercent}
+                onChange={handleSeekChange}
+                className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
+              />
+              <span className="text-[10px] text-slate-300 font-mono whitespace-nowrap min-w-[65px] text-right">
+                {isLive || seekPercent >= 99
+                  ? '🔴 LIVE'
+                  : `${(-((100 - seekPercent) / 100) * (dvrWindow.duration || 30)).toFixed(1)}s`}
+              </span>
+            </div>
+
+            {/* Tốc độ phát lại (Playback Speed) */}
+            <div className="flex items-center space-x-1 bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800 font-mono text-[10px]">
+              <span className="text-slate-400 mr-0.5">Tốc độ:</span>
+              {[1.0, 0.5, 0.25, 0.125].map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  onClick={() => {
+                    setPlaybackRate(rate);
+                    if (replayVideoRef.current) {
+                      replayVideoRef.current.playbackRate = rate;
+                    }
+                    if (liveVideoRef.current) {
+                      liveVideoRef.current.playbackRate = rate;
+                    }
+                  }}
+                  className={`px-1.5 py-0.5 rounded font-bold transition ${
+                    playbackRate === rate
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title={`Tốc độ ${rate}x`}
+                >
+                  {rate === 1.0 ? '1x' : `${rate}x`}
+                </button>
+              ))}
+            </div>
+
+            {/* Tắt/bật âm thanh */}
+            <button
+              onClick={() => setIsMuted((m) => !m)}
+              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+              title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng'}
+            >
+              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* CỘT PHẢI (Lg: 6 cột - 50%): KHUNG SOI LIVE RAM CROP 120FPS + BẢNG LỊCH SỬ KẾT QUẢ */}
+        <div className="lg:col-span-6 flex flex-col gap-3">
+          {/* MỤC 1: KHUNG SOI LIVE RAM CROP 120FPS TRỰC TIẾP TRONG BỘ NHỚ RAM */}
+          <div className="bg-slate-900/90 border border-amber-500/50 rounded-xl p-3 shadow-xl backdrop-blur flex flex-col">
+            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800 text-xs">
+              <span className="font-bold text-slate-200 flex items-center space-x-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-amber-400 font-bold uppercase tracking-wider text-[11px]">Luồng Soi Trực Tiếp RAM Crop 120fps (Server AI)</span>
+              </span>
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-amber-300 font-mono border border-slate-700">Ngưỡng: ≥54% (4 Kênh Xoay Vòng)</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${debugCrop ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-slate-800 text-slate-500'}`}>
+                  {debugCrop ? `4 KÊNH • Quét ${debugCrop.scanFps || 120}fps` : 'Chờ luồng'}
+                </span>
+              </div>
+            </div>
+
+            {/* Nội dung luồng soi RAM: 2 MÀN HÌNH SONG SONG (SIDE-BY-SIDE DUAL MONITOR) */}
+            <div className="flex flex-col gap-3 bg-slate-950/90 p-3 rounded-xl border border-amber-500/30">
+              {/* HÀNG 2 KHUNG SOI DEBUG SONG SONG CẠNH NHAU */}
+              <div className="grid grid-cols-2 gap-3 items-center">
+                {/* KHUNG 1: CLIENT LIVE CROP (ẢNH THÔ MẮT NGƯỜI NHÌN THẤY TRONG Ô ĐỎ) */}
+                <div className="flex flex-col space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-300 font-mono">
+                    <span className="flex items-center space-x-1 text-cyan-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                      <span>① CLIENT LIVE ROI</span>
+                    </span>
+                    <span className="text-slate-400 font-normal">0-Delay (Thô)</span>
+                  </div>
+                  <div
+                    onClick={() => {
+                      if (clientCanvasRef.current) {
+                        setZoomImage(clientCanvasRef.current.toDataURL('image/jpeg', 0.95));
+                      }
+                    }}
+                    className="w-full h-44 sm:h-52 bg-black rounded-lg overflow-hidden border-2 border-cyan-500/60 relative flex items-center justify-center cursor-pointer group hover:border-cyan-400 transition shadow-[0_0_15px_rgba(6,182,212,0.2)]"
+                    title="Nhấp để phóng to ảnh Client Crop thô 1:1"
+                  >
+                    <canvas
+                      ref={clientCanvasRef}
+                      className="w-full h-full object-contain"
+                    />
+                    <div className="absolute top-1.5 right-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-cyan-300 border border-cyan-500/40">
+                      LIVE • {isLive ? '120fps' : 'Replay'}
+                    </div>
+                    <div className="absolute bottom-1.5 left-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-slate-300">
+                      {Math.round(normRoi.normW * 100)}%x{Math.round(normRoi.normH * 100)}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* KHUNG 2: SERVER AI DETECTION (ẢNH AI NHẬN DIỆN CÓ HỘP BẮT BÀI & GÓC XOAY) */}
+                <div className="flex flex-col space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-300 font-mono">
+                    <span className="flex items-center space-x-1 text-emerald-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>② SERVER AI VIEW</span>
+                    </span>
+                    <span className="text-amber-300 font-mono">
+                      {lastScanRtt > 0 ? `${lastScanRtt}ms RTT` : 'Direct ONNX'}
+                    </span>
+                  </div>
+                  <div
+                    onClick={() => {
+                      if (aiCanvasRef.current) {
+                        setZoomImage(aiCanvasRef.current.toDataURL('image/jpeg', 0.95));
+                      } else if (debugCrop?.image) {
+                        setZoomImage(debugCrop.image);
+                      }
+                    }}
+                    className="w-full h-44 sm:h-52 bg-black rounded-lg overflow-hidden border-2 border-emerald-500/60 relative flex items-center justify-center cursor-pointer group hover:border-emerald-400 transition shadow-[0_0_15px_rgba(16,185,129,0.2)]"
+                    title="Nhấp để phóng to ảnh AI nhận diện"
+                  >
+                    <canvas
+                      ref={aiCanvasRef}
+                      className="w-full h-full object-contain"
+                    />
+                    <div className="absolute top-1.5 right-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-emerald-300 border border-emerald-500/40">
+                      {debugCrop ? `${debugCrop?.bestConf || 0}%` : 'Chờ AI'}
+                    </div>
+                    <div className="absolute bottom-1.5 left-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-slate-300">
+                      Nét: {debugCrop?.sharpness || 0}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Thông tin chi tiết + Bảng 4 Kênh AI */}
+              <div className="w-full flex flex-col justify-between space-y-2 py-1">
+                  <div>
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">AI Nhận Diện Trong Khung (Tổng Hợp 4 Kênh):</span>
+                    <div className="mt-0.5 flex items-baseline space-x-2">
+                      <span className={`text-xl sm:text-2xl font-black font-mono tracking-tight ${debugCrop?.isDetected ? 'text-emerald-400' : 'text-amber-300'}`}>
+                        {(debugCrop?.detectedCard || 'Đang quét 4 kênh đa góc...')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Lưới trạng thái trực tiếp của 4 Kênh AI bốc 4 Frame khác nhau */}
+                  {debugCrop?.channels && debugCrop?.channels.length > 0 && (
+                    <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                      {debugCrop?.channels.map((ch) => (
+                        <div
+                          key={ch.id}
+                          className={`px-2 py-1 rounded border flex items-center justify-between ${
+                            ch.conf >= 54
+                              ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300'
+                              : 'bg-slate-900/90 border-slate-800 text-slate-300'
+                          }`}
+                        >
+                          <span className="font-bold text-amber-400">
+                            K#{ch.id} <span className="text-indigo-300 font-normal">{ch.mode || ''}</span>{' '}
+                            <span className="text-slate-500 font-normal">(F#{ch.seq})</span>
+                          </span>
+                          <span className={ch.conf >= 54 ? 'font-bold text-emerald-400' : 'text-slate-400'}>
+                            {ch.card !== 'Trống' ? ch.card : `Nét ${ch.sharpness}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="space-y-1 text-xs font-mono bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Độ tin cậy / Độ nét:</span>
+                      <span className={`font-bold ${(debugCrop?.bestConf || 0) >= 54 ? 'text-emerald-400 text-sm' : 'text-slate-300'}`}>
+                        {debugCrop?.bestConf || 0}% • Nét: {debugCrop?.sharpness ?? 0}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Chất lượng:</span>
+                      <span className="text-emerald-400 font-bold">0-Delay WebRTC WHEP • 4 Kênh Đa Góc</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          {/* MỤC 2: BẢNG LỊCH SỬ KẾT QUẢ CÁC VÁN */}
+          <div className="flex-1 bg-slate-900/90 border border-slate-700/80 rounded-xl p-2.5 flex flex-col justify-between shadow-lg">
           <div>
             <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs">
               <span className="font-bold text-slate-200 flex items-center space-x-1.5">
@@ -1166,376 +2091,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           </div>
         </div>
 
-        {/* CỘT PHẢI (Lg: 7 cột): MÀN HÌNH LIVE VIDEO + KHUNG NGẮM AI ĐỎ (THEO ẢNH) */}
-        <div className="lg:col-span-7 bg-black rounded-xl border border-slate-700/80 overflow-hidden shadow-2xl relative flex flex-col justify-between">
-          {/* Thanh công cụ trên đầu Video: Độ phân giải, FPS, Lật, Xoay & Cỡ Khung */}
-          <div className="bg-slate-950/85 backdrop-blur px-3 py-1.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 z-20 text-[11px]">
-            {/* Resolution & FPS Tags */}
-            <div className="flex items-center space-x-1.5 font-mono">
-              <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-bold text-[10px]">1080p</span>
-              <span className="px-1.5 py-0.5 rounded bg-emerald-600/90 text-white font-bold text-[10px]">60 fps</span>
-              <span className="text-slate-400 text-[10px]">V105 ISO 1280 1x</span>
-            </div>
-
-            {/* Điều khiển: Cỡ Khung, Lật, Xoay, Sáng & Ghim */}
-            <div className="flex items-center space-x-1.5 text-xs">
-              {/* Nút mở thanh chỉnh kích thước */}
-              <button
-                type="button"
-                onClick={() => setShowSizeControls((prev) => !prev)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
-                  showSizeControls ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
-                }`}
-                title="Mở giao diện chỉnh kích thước Dài / Rộng khung ngắm"
-              >
-                <Sliders className="w-3 h-3" />
-                <span>Cỡ Khung</span>
-              </button>
-
-              {/* Nút Lật ngang video */}
-              <button
-                type="button"
-                onClick={() => setIsFlipped((prev) => !prev)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
-                  isFlipped ? 'bg-cyan-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
-                }`}
-                title="Lật gương ngang khung hình video"
-              >
-                <ArrowLeftRight className="w-3 h-3" />
-                <span>{isFlipped ? 'Đã Lật ↔' : 'Lật ↔'}</span>
-              </button>
-
-              {/* Nút Xoay 90 độ video */}
-              <button
-                type="button"
-                onClick={() => setRotation((r) => (r + 90) % 360)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
-                  rotation !== 0 ? 'bg-amber-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
-                }`}
-                title="Xoay video 90 độ mỗi lần bấm (0 -> 90 -> 180 -> 270)"
-              >
-                <RotateCw className="w-3 h-3" />
-                <span>{rotation !== 0 ? `Xoay ${rotation}°` : 'Xoay ↻'}</span>
-              </button>
-
-              {/* Nút Phóng to tràn khung / Vừa vặn */}
-              <button
-                type="button"
-                onClick={() => setIsFillMode((prev) => !prev)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
-                  isFillMode ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-300 hover:text-white'
-                }`}
-                title="Bấm để Phóng to lấp đầy màn hình (loại bỏ viền đen) hoặc xem vừa vặn"
-              >
-                <Maximize2 className="w-3 h-3" />
-                <span>{isFillMode ? 'Phóng to ⛶' : 'Vừa vặn'}</span>
-              </button>
-
-
-              {/* Nút Ghim / Bám chuột */}
-              <button
-                type="button"
-                onClick={() => setIsReticleLocked((prev) => !prev)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
-                  isReticleLocked
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-slate-800 text-slate-300 hover:text-white'
-                }`}
-                title="Bấm để Ghim cố định hoặc thả cho bám theo chuột"
-              >
-                {isReticleLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                <span>{isReticleLocked ? 'Đã Ghim' : 'Bám Chuột'}</span>
-              </button>
-
-              {/* Nút Tăng sáng & Nét */}
-              <button
-                type="button"
-                onClick={() => setIsBrightBoost((prev) => !prev)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
-                  isBrightBoost ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-400'
-                }`}
-                title="Tăng sáng & độ tương phản để soi bài rõ nhất"
-              >
-                <Sun className="w-3 h-3" />
-                <span>{isBrightBoost ? 'Sáng (Bật)' : 'Sáng'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* GIAO DIỆN CHỈNH KÍCH THƯỚC KHUNG NGẮM (THAY VÌ CHỈ LĂN CHUỘT) */}
-          {showSizeControls && (
-            <div className="bg-slate-900/95 border-b border-slate-700/80 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 z-20 text-xs shadow-md">
-              <div className="flex items-center space-x-3">
-                {/* Chỉnh Rộng */}
-                <div className="flex items-center space-x-1.5 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[11px]">Rộng:</span>
-                  <button
-                    onClick={() => setReticleSize((s) => ({ ...s, width: Math.max(80, s.width - 20) }))}
-                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
-                  >-</button>
-                  <span className="w-8 text-center font-bold text-amber-300 font-mono text-[11px]">{reticleSize.width}</span>
-                  <button
-                    onClick={() => setReticleSize((s) => ({ ...s, width: Math.min(450, s.width + 20) }))}
-                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
-                  >+</button>
-                </div>
-
-                {/* Chỉnh Dài */}
-                <div className="flex items-center space-x-1.5 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[11px]">Dài:</span>
-                  <button
-                    onClick={() => setReticleSize((s) => ({ ...s, height: Math.max(100, s.height - 20) }))}
-                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
-                  >-</button>
-                  <span className="w-8 text-center font-bold text-amber-300 font-mono text-[11px]">{reticleSize.height}</span>
-                  <button
-                    onClick={() => setReticleSize((s) => ({ ...s, height: Math.min(500, s.height + 20) }))}
-                    className="w-4 h-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold flex items-center justify-center text-xs active:scale-95"
-                  >+</button>
-                </div>
-              </div>
-
-              {/* Nút Cỡ Mẫu (Presets) */}
-              <div className="flex items-center space-x-1 text-[10px]">
-                <span className="text-slate-400 mr-1">Cỡ mẫu:</span>
-                <button
-                  onClick={() => setReticleSize({ width: 150, height: 200 })}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                >Nhỏ (150x200)</button>
-                <button
-                  onClick={() => setReticleSize({ width: 220, height: 280 })}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white font-bold transition"
-                >Chuẩn (220x280)</button>
-                <button
-                  onClick={() => setReticleSize({ width: 280, height: 360 })}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                >Lớn (280x360)</button>
-                <button
-                  onClick={() => setReticleSize({ width: 320, height: 220 })}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white transition"
-                >Ngang (320x220)</button>
-              </div>
-            </div>
-          )}
-
-          {/* VÙNG CHỨA VIDEO & KHUNG NGẮM AI ĐỎ (TỰ ĐỘNG PHÓNG TO & THÍCH ỨNG TỶ LỆ) */}
-          <div
-            ref={videoContainerRef}
-            onMouseMove={handleVideoMouseMove}
-            onClick={handleVideoClick}
-            className="relative w-full h-[460px] sm:h-[520px] md:h-[580px] bg-black overflow-hidden select-none cursor-crosshair group flex items-center justify-center"
-            title="Rê chuột để di chuyển khung ngắm, Click để Ghim/Thả cố định"
-          >
-            {/* Thẻ 1: Live WebRTC WHEP (Siêu mượt, Độ trễ <0.2s, 0 khựng giật) */}
-            <video
-              ref={liveVideoRef}
-              className={`pointer-events-none transition-transform duration-150 ease-out absolute inset-0 ${
-                isLive && hasWebRtcSignal ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
-              } ${isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'}`}
-              style={{
-                transform: `${
-                  (rotation === 90 || rotation === 270)
-                    ? `rotate(${rotation}deg)`
-                    : `rotate(${rotation}deg)`
-                } scaleX(${isFlipped ? -1 : 1})`,
-                transformOrigin: 'center center',
-                imageRendering: 'auto',
-                filter: isBrightBoost ? 'brightness(1.08) contrast(1.06)' : 'none'
-              }}
-              playsInline
-              muted={isMuted}
-              autoPlay
-            />
-
-            {/* Thẻ 2: HLS Replay DVR Master (Tua lại mượt mà từng khung hình 120fps / Fallback Live) */}
-            <video
-              ref={replayVideoRef}
-              className={`pointer-events-none transition-transform duration-150 ease-out absolute inset-0 ${
-                !isLive || !hasWebRtcSignal ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
-              } ${isFillMode ? 'w-full h-full object-cover' : 'w-full h-full object-contain'}`}
-              style={{
-                transform: `${
-                  (rotation === 90 || rotation === 270)
-                    ? `rotate(${rotation}deg)`
-                    : `rotate(${rotation}deg)`
-                } scaleX(${isFlipped ? -1 : 1})`,
-                transformOrigin: 'center center',
-                imageRendering: 'auto',
-                filter: isBrightBoost ? 'brightness(1.08) contrast(1.06)' : 'none'
-              }}
-              playsInline
-              muted={isMuted}
-              autoPlay
-              onTimeUpdate={() => {
-                if (replayVideoRef.current && !isLive) {
-                  setSeekTime(replayVideoRef.current.currentTime);
-                  setDuration(replayVideoRef.current.duration || 0);
-                }
-              }}
-            />
-
-            {/* Màn hình chờ nếu chưa có tín hiệu video */}
-            {!hasVideoSignal && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-slate-400 space-y-2 pointer-events-none z-10">
-                <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-indigo-400 animate-pulse">
-                  <Radio className="w-5 h-5 animate-pulse text-indigo-400" />
-                </div>
-                <p className="text-xs font-mono text-slate-300">
-                  {activeStreamSession ? 'Đang kết nối luồng Live 120fps...' : 'Đang chờ điện thoại phát trực tiếp...'}
-                </p>
-              </div>
-            )}
-
-            {/* KHUNG NGẮM AI MÀU ĐỎ (DYNAMIC TARGET BOUNDING BOX - LUÔN NẰM TRÊN MẶT VIDEO VỚI Z-30) */}
-            {isReticleActive && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: `${reticlePos.x}px`,
-                  top: `${reticlePos.y}px`,
-                  width: `${reticleSize.width}px`,
-                  height: `${reticleSize.height}px`,
-                  pointerEvents: 'auto',
-                  transition: isReticleLocked ? 'none' : 'width 0.05s, height 0.05s'
-                }}
-                className={`z-30 border-2 rounded-lg pointer-events-auto transition-colors ${
-                  isAiFlashing
-                    ? 'border-emerald-400 bg-emerald-500/15 shadow-[0_0_25px_rgba(52,211,153,0.9)]'
-                    : 'border-red-500 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.7)]'
-                }`}
-              >
-                {/* Header nhãn nổi BÊN NGOÀI KHUNG (KHÔNG CHE BÀI TRONG KHUNG) */}
-                <div className="absolute -top-6 left-0 right-0 flex items-center justify-between text-[10px] font-bold text-white bg-black/85 px-2 py-0.5 rounded-t backdrop-blur border-t border-x border-red-500/50 pointer-events-none whitespace-nowrap shadow">
-                  <span className="flex items-center space-x-1">
-                    <span className={`w-1.5 h-1.5 rounded-full ${isAiFlashing ? 'bg-emerald-400' : 'bg-red-500 animate-ping'}`} />
-                    <span>{isReticleLocked ? '🔒 ĐÃ GHIM' : '🎯 BÁM CHUỘT'}</span>
-                  </span>
-                  <span className="font-mono text-amber-300 ml-1">
-                    {reticleSize.width}x{reticleSize.height}
-                  </span>
-                </div>
-
-                {/* Tâm ngắm chữ thập (+) */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-40">
-                  <div className="w-5 h-0.5 bg-red-400" />
-                  <div className="h-5 w-0.5 bg-red-400 absolute" />
-                </div>
-
-                {/* Footer thông báo trạng thái nổi BÊN DƯỚI NGOÀI KHUNG (KHÔNG CHE BÀI TRONG KHUNG) */}
-                <div className="absolute -bottom-6 left-0 right-0 flex items-center justify-between text-[9px] font-bold text-slate-200 bg-black/90 px-2 py-0.5 rounded-b backdrop-blur border-b border-x border-red-500/50 pointer-events-none whitespace-nowrap shadow">
-                  <span className="truncate">{aiStatus}</span>
-                  {lastDetectedCard && (
-                    <span className="font-black text-emerald-400 ml-1">{lastDetectedCard}</span>
-                  )}
-                </div>
-
-                {/* Handle kéo góc dưới-phải để tùy chỉnh Dài x Rộng */}
-                <div
-                  onMouseDown={handleReticleResizeMouseDown}
-                  className="absolute bottom-0 right-0 w-5 h-5 flex items-end justify-end p-0.5 cursor-nwse-resize z-30"
-                  title="Kéo góc để chỉnh kích thước Dài/Rộng"
-                >
-                  <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-red-400 rounded-br-sm" />
-                </div>
-              </div>
-            )}
-
-            {/* KHUNG HIỂN THỊ ẢNH TRÍCH XUẤT THỰC TẾ CỦA LÁ BÀI RÕ NÉT NHẤT */}
-            {capturedFrame && (
-              <div className="absolute top-2.5 right-2.5 z-30 bg-slate-950/95 border-2 border-emerald-500 rounded-xl p-1.5 shadow-[0_0_25px_rgba(16,185,129,0.5)] backdrop-blur-md flex flex-col items-center pointer-events-auto transition-all animate-in fade-in zoom-in-95 duration-200">
-                <div className="flex items-center justify-between w-full px-1 mb-1 text-[10px] font-bold text-emerald-400">
-                  <span className="flex items-center gap-1">📸 Frame bắt được</span>
-                  <span className="text-amber-300 font-mono font-black">{capturedFrame.confidence}%</span>
-                </div>
-                <div className="w-24 h-32 sm:w-28 sm:h-36 rounded-lg overflow-hidden bg-black border border-emerald-500/40 flex items-center justify-center relative shadow-inner">
-                  <img
-                    src={capturedFrame.image}
-                    alt={capturedFrame.cardName}
-                    className="w-full h-full object-contain"
-                  />
-                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black via-black/85 to-transparent p-1 text-center">
-                    <span className="text-[11px] font-black text-white">{capturedFrame.cardName}</span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between w-full px-1 mt-1 text-[9px] text-slate-400 font-mono">
-                  <span>{capturedFrame.timestamp}</span>
-                  <span className="text-emerald-400 font-bold">HD 400px</span>
-                </div>
-              </div>
-            )}
-
-          </div>
-
-          {/* THANH ĐIỀU KHIỂN VIDEO DƯỚI: TUA LẠI, TỐC ĐỘ & VỀ LIVE (KHÔNG PIP) */}
-          <div className="bg-slate-950/90 px-3 py-1.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2.5 text-xs z-20">
-            {/* Nút Nhảy về LIVE trực tiếp */}
-            <button
-              onClick={jumpToLive}
-              className={`px-3 py-1 rounded-full font-black text-[11px] tracking-wider uppercase transition flex items-center space-x-1.5 shadow ${
-                isLive
-                  ? 'bg-red-600 text-white shadow-red-600/40'
-                  : 'bg-slate-800 text-slate-300 hover:bg-red-600 hover:text-white animate-pulse'
-              }`}
-              title="Nhấn để quay lại xem phát trực tiếp tức thì"
-            >
-              <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-white' : 'bg-red-400 animate-ping'}`} />
-              <span>LIVE</span>
-            </button>
-
-            {/* Thanh Timeline Tua lại (Scrubbing Seekbar) */}
-            <div className="flex-1 min-w-[150px] flex items-center space-x-2">
-              <span className="text-[10px] text-slate-400 font-mono">Tua:</span>
-              <input
-                type="range"
-                min={0}
-                max={duration || 100}
-                step={0.1}
-                value={seekTime}
-                onChange={handleSeekChange}
-                className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
-              />
-              <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap">
-                {Math.floor(seekTime)}s / {Math.floor(duration)}s
-              </span>
-            </div>
-
-            {/* Tốc độ phát lại (Playback Speed) */}
-            <div className="flex items-center space-x-1 bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800 font-mono text-[10px]">
-              <span className="text-slate-400 mr-0.5">Tốc độ:</span>
-              {[1.0, 0.5, 0.25, 0.125].map((rate) => (
-                <button
-                  key={rate}
-                  type="button"
-                  onClick={() => {
-                    setPlaybackRate(rate);
-                    if (replayVideoRef.current) {
-                      replayVideoRef.current.playbackRate = rate;
-                    }
-                    if (liveVideoRef.current) {
-                      liveVideoRef.current.playbackRate = rate;
-                    }
-                  }}
-                  className={`px-1.5 py-0.5 rounded font-bold transition ${
-                    playbackRate === rate
-                      ? 'bg-indigo-600 text-white shadow'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title={`Tốc độ ${rate}x`}
-                >
-                  {rate === 1.0 ? '1x' : `${rate}x`}
-                </button>
-              ))}
-            </div>
-
-            {/* Tắt/bật âm thanh */}
-            <button
-              onClick={() => setIsMuted((m) => !m)}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
-              title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng'}
-            >
-              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-            </button>
-          </div>
         </div>
       </div>
 
@@ -1555,19 +2110,33 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           <div className="flex flex-wrap items-center gap-3">
             {/* Ảnh frame hiện tại to rõ nét nhất */}
             <div className="flex items-center space-x-3 bg-slate-950 p-2 rounded-xl border border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-              <div className="w-20 h-28 sm:w-24 sm:h-32 bg-black rounded-lg overflow-hidden border border-emerald-500/40 relative flex items-center justify-center">
-                <img src={capturedFrame.image} alt={capturedFrame.cardName} className="w-full h-full object-contain" />
+              <div 
+                onClick={() => setZoomImage(capturedFrame.image)}
+                className="w-20 h-28 sm:w-24 sm:h-32 bg-black rounded-lg overflow-hidden border border-emerald-500/40 relative flex items-center justify-center cursor-pointer hover:border-emerald-400 transition"
+                title="Nhấp để xem ảnh 1080p gốc 1:1"
+              >
+                <img 
+                  src={capturedFrame.image} 
+                  alt={capturedFrame.cardName} 
+                  className="w-full h-full object-contain" 
+                  style={{ imageRendering: '-webkit-optimize-contrast' }}
+                />
               </div>
               <div className="flex flex-col justify-center space-y-1">
-                <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Vừa Bắt Dính</span>
+                <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Frame Nét Nhất Chọn Từ 120fps</span>
                 <span className="text-xl sm:text-2xl font-black text-white tracking-wide">{capturedFrame.cardName}</span>
                 <div className="flex items-center space-x-2 text-[11px] font-mono">
                   <span className="bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded font-bold border border-emerald-800">
                     {capturedFrame.confidence}% Độ tin cậy
                   </span>
+                  {capturedFrame.sharpness ? (
+                    <span className="bg-amber-950/80 text-amber-300 px-2 py-0.5 rounded font-bold border border-amber-700/60">
+                      Độ nét: {capturedFrame.sharpness}
+                    </span>
+                  ) : null}
                   <span className="text-slate-400">{capturedFrame.timestamp}</span>
                 </div>
-                <span className="text-[10px] text-slate-500 font-mono">Chuẩn 1080p Native Pixel</span>
+                <span className="text-[10px] text-emerald-400/90 font-mono">Chuẩn 1080p @ 120fps Native Pixel</span>
               </div>
             </div>
 
@@ -1699,6 +2268,32 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           })}
         </div>
       </div>
+
+      {/* POPUP XEM ẢNH TRÍCH XUẤT 1080P GỐC 1:1 KHÔNG BỊ NHÒE */}
+      {zoomImage && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4 backdrop-blur-sm cursor-pointer"
+          onClick={() => setZoomImage(null)}
+        >
+          <div className="relative max-w-4xl max-h-[85vh] bg-slate-950 border-2 border-emerald-500 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(16,185,129,0.4)] p-2">
+            <div className="flex items-center justify-between pb-2 px-2 text-xs font-bold text-emerald-400 border-b border-slate-800">
+              <span>🎯 Ảnh Cắt Trong Khung Đỏ (1080p Native Pixel-Perfect)</span>
+              <button 
+                onClick={() => setZoomImage(null)}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-white font-mono"
+              >✕ Đóng</button>
+            </div>
+            <div className="p-2 flex items-center justify-center overflow-auto max-h-[75vh]">
+              <img 
+                src={zoomImage} 
+                alt="Zoom Native" 
+                className="max-w-full max-h-[70vh] object-contain rounded-lg border border-slate-800" 
+                style={{ imageRendering: '-webkit-optimize-contrast' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* POPUP CHỌN BÀI THỦ CÔNG (KHI CLICK VÀO Ô ĐỂ SỬA) */}
       <CardPickerPopup
