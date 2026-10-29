@@ -806,7 +806,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       setLastDetectedCard(best.display || best.code);
       setAiStatus(`🎯 120fps bắt dính: ${best.fullName || best.display} (${Math.round(conf * 100)}% | Độ nét ${sharp})`);
 
-      const cardTitle = (best.display || best.code) + ' ' + (best.fullName || '');
+      const cardTitle = best.display || best.fullName || best.code;
       const frameData = {
         image: data.image || '',
         cardName: cardTitle,

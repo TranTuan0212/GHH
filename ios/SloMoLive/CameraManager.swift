@@ -1371,10 +1371,20 @@ public class CardDetector: NSObject, ObservableObject {
     private var lastInferenceTime: Double = 0.0
     private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
 
-    // Theo dõi lá bài gần nhất để chọn bức ảnh rõ nét nhất (Best Frame Selection)
-    private var lastDetectedCard: String = ""
-    private var lastDetectedSharpness: Double = 0.0
-    private var lastDetectedTime: TimeInterval = 0.0
+    private struct FrameDetection {
+        let cardCode: String
+        let confidence: Float
+        let sharpness: Double
+        let base64Image: String?
+        let timestamp: TimeInterval
+    }
+
+    // Cửa sổ trượt 4-5 frame để bầu chọn chính xác tuyệt đối ở 120fps
+    private var frameHistory: [FrameDetection] = []
+    private let historyMaxFrames = 5
+    private var lastConfirmedCard: String = ""
+    private var lastConfirmedSharpness: Double = 0.0
+    private var lastConfirmedTime: TimeInterval = 0.0
 
     @Published public var isModelLoaded: Bool = false
 
@@ -1415,8 +1425,8 @@ public class CardDetector: NSObject, ObservableObject {
         guard let visionModel = self.visionModel, !isBusy else { return }
 
         let now = CACurrentMediaTime()
-        // Giới hạn 30fps AI scan (~33ms/lần) để máy cực mát và siêu tiết kiệm pin
-        guard (now - lastInferenceTime) >= 0.033 else { return }
+        // Tần suất quét 60-80fps (~15ms/lần) để tích lũy 4-5 frame trong 50ms cho chuyển động 120fps
+        guard (now - lastInferenceTime) >= 0.015 else { return }
         lastInferenceTime = now
         isBusy = true
 
@@ -1498,37 +1508,95 @@ public class CardDetector: NSObject, ObservableObject {
     private func processCardCandidate(cardCode: String, conf: Int, pixelBuffer: CVPixelBuffer, roiRect: CGRect) {
         let (base64Image, sharpness) = extractCroppedImageAndSharpness(from: pixelBuffer, roiRect: roiRect)
         let now = Date().timeIntervalSince1970
-        let isSameCard = (cardCode == lastDetectedCard && (now - lastDetectedTime) < 2.5)
+        let confFloat = Float(conf) / 100.0
+
+        let detection = FrameDetection(
+            cardCode: cardCode,
+            confidence: confFloat,
+            sharpness: sharpness,
+            base64Image: base64Image,
+            timestamp: now
+        )
+
+        frameHistory.append(detection)
+        if frameHistory.count > historyMaxFrames {
+            frameHistory.removeFirst()
+        }
+
+        // Lọc bỏ frame quá cũ (> 0.45s) để thích ứng tốc độ chia bài siêu nhanh của dealer
+        frameHistory.removeAll { (now - $0.timestamp) > 0.45 }
+
+        // Cần ít nhất 3 frame trong chuỗi 4-5 frame để hoàn tất bầu chọn
+        guard frameHistory.count >= 3 else { return }
+
+        // Bầu chọn có trọng số: Score = Confidence * (Sharpness / 100.0)
+        var counts: [String: Int] = [:]
+        var scores: [String: Double] = [:]
+        var bestFrameByCode: [String: FrameDetection] = [:]
+        var totalScore: Double = 0.0
+
+        for item in frameHistory {
+            counts[item.cardCode, default: 0] += 1
+            let s = Double(item.confidence) * max(1.0, item.sharpness / 100.0)
+            scores[item.cardCode, default: 0.0] += s
+            totalScore += s
+
+            if let existing = bestFrameByCode[item.cardCode] {
+                if item.sharpness > existing.sharpness {
+                    bestFrameByCode[item.cardCode] = item
+                }
+            } else {
+                bestFrameByCode[item.cardCode] = item
+            }
+        }
+
+        guard let (winnerCode, winnerScore) = scores.max(by: { $0.value < $1.value }),
+              let winnerCount = counts[winnerCode],
+              let bestWinner = bestFrameByCode[winnerCode] else { return }
+
+        // Điều kiện chốt:
+        // 1. Phải xuất hiện trong ít nhất 3 frame (hoặc chiếm >= 60% số frame trong window)
+        // 2. Điểm số trọng số chiếm đa số áp đảo (>= 60% tổng điểm)
+        guard winnerCount >= 3, (totalScore > 0 && winnerScore / totalScore >= 0.60) else {
+            return
+        }
+
+        let isSameCard = (winnerCode == lastConfirmedCard && (now - lastConfirmedTime) < 2.5)
 
         if !isSameCard {
-            // Lá bài MỚI!
-            lastDetectedCard = cardCode
-            lastDetectedSharpness = sharpness
-            lastDetectedTime = now
+            // Chốt LÁ BÀI MỚI bằng đồng thuận 120fps!
+            lastConfirmedCard = winnerCode
+            lastConfirmedSharpness = bestWinner.sharpness
+            lastConfirmedTime = now
 
-            NSLog("[CardDetector] 🎯 ANE phát hiện bài MỚI: %@ (%d%%) | Nét=%.1f | Ảnh=%@", cardCode, conf, sharpness, base64Image != nil ? "CÓ" : "KHÔNG")
+            let confPercent = Int((bestWinner.confidence * 100.0).rounded())
+            NSLog("[CardDetector] 🎯 120fps CHỐT BÀI MỚI (Đồng thuận %d/%d frames): %@ (%d%%) | Nét=%.1f | Ảnh=%@",
+                  winnerCount, frameHistory.count, winnerCode, confPercent, bestWinner.sharpness, bestWinner.base64Image != nil ? "CÓ" : "KHÔNG")
+
             DispatchQueue.main.async {
                 RoiSyncManager.shared.notifyCardDetected(
-                    cardCode: cardCode,
-                    conf: conf,
-                    sharpness: sharpness,
-                    imageBase64: base64Image,
+                    cardCode: winnerCode,
+                    conf: confPercent,
+                    sharpness: bestWinner.sharpness,
+                    imageBase64: bestWinner.base64Image,
                     updateFrameOnly: false
                 )
             }
-        } else if sharpness > (lastDetectedSharpness + 15.0) {
-            // Cùng lá bài nhưng tìm thấy frame NÉT HƠN! Tự động nâng cấp ảnh nét nhất lên Web
-            let oldSharp = lastDetectedSharpness
-            lastDetectedSharpness = sharpness
-            lastDetectedTime = now
+        } else if bestWinner.sharpness > (lastConfirmedSharpness + 15.0) {
+            // Cùng lá bài nhưng tìm thấy frame NÉT HƠN NỮA! Nâng cấp ảnh nét nhất
+            let oldSharp = lastConfirmedSharpness
+            lastConfirmedSharpness = bestWinner.sharpness
+            lastConfirmedTime = now
 
-            NSLog("[CardDetector] ✨ NÂNG CẤP ẢNH NÉT NHẤT cho: %@ | Nét mới=%.1f (cũ=%.1f)", cardCode, sharpness, oldSharp)
+            let confPercent = Int((bestWinner.confidence * 100.0).rounded())
+            NSLog("[CardDetector] ✨ 120fps NÂNG CẤP ẢNH NÉT NHẤT cho %@ | Nét mới=%.1f (cũ=%.1f)", winnerCode, bestWinner.sharpness, oldSharp)
+
             DispatchQueue.main.async {
                 RoiSyncManager.shared.notifyCardDetected(
-                    cardCode: cardCode,
-                    conf: conf,
-                    sharpness: sharpness,
-                    imageBase64: base64Image,
+                    cardCode: winnerCode,
+                    conf: confPercent,
+                    sharpness: bestWinner.sharpness,
+                    imageBase64: bestWinner.base64Image,
                     updateFrameOnly: true
                 )
             }
