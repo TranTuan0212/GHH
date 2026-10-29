@@ -13,7 +13,6 @@ public class NetworkManager: ObservableObject {
     @Published public var serverURL: String = defaultServerURL {
         didSet {
             UserDefaults.standard.set(serverURL, forKey: "saved_server_url")
-            RoiSyncManager.shared.connect()
         }
     }
     @Published public var isAuthenticated = false

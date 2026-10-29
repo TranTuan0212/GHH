@@ -15,7 +15,6 @@ class VideoPreviewView: UIView {
 
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
-    var orientation: AVCaptureVideoOrientation = .portrait
     var onTapToFocus: ((CGPoint, CGPoint) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
@@ -27,9 +26,6 @@ struct CameraPreviewView: UIViewRepresentable {
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        if let conn = view.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
-            conn.videoOrientation = orientation
-        }
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
@@ -41,11 +37,6 @@ struct CameraPreviewView: UIViewRepresentable {
     func updateUIView(_ uiView: VideoPreviewView, context: Context) {
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
-        }
-        if let conn = uiView.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
-            if conn.videoOrientation != orientation {
-                conn.videoOrientation = orientation
-            }
         }
         context.coordinator.parent = self
     }
@@ -286,7 +277,7 @@ struct ContentView: View {
             } else {
                 // Live Stream Camera Preview View
                 ZStack {
-                    CameraPreviewView(session: cameraManager.session, orientation: cameraManager.currentCaptureOrientation, onTapToFocus: { viewPoint, devicePoint in
+                    CameraPreviewView(session: cameraManager.session, onTapToFocus: { viewPoint, devicePoint in
                         cameraManager.focus(at: devicePoint, shouldLock: false)
                         focusPoint = viewPoint
                         showFocusBox = true
