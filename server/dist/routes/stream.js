@@ -7,6 +7,7 @@ const db_1 = require("../db");
 const auth_1 = require("./auth");
 const mediaServer_1 = require("../mediaServer");
 const network_1 = require("../utils/network");
+const index_1 = require("../index");
 exports.streamRouter = (0, express_1.Router)();
 let globalIo = null;
 function setSocketServer(io) {
@@ -57,7 +58,8 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
         message: 'Khởi tạo luồng Live Stream 240fps thành công.',
         stream: newStream,
         rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
-        streamKey
+        streamKey,
+        roi: (0, index_1.getLatestReticleRoi)()
     });
 });
 // POST /api/stream/end — stop ffmpeg nhưng GIỮ LẠI file replay để người xem có thể tua

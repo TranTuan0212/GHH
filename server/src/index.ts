@@ -32,13 +32,17 @@ process.on('uncaughtException', (err: any) => {
 const roiWss = new WebSocketServer({ noServer: true });
 const roiWsClients = new Set<WsWebSocket>();
 
-let latestReticleRoi = {
+export let latestReticleRoi = {
   normX: 0.35,
   normY: 0.30,
   normW: 0.30,
   normH: 0.40,
   isActive: true
 };
+
+export function getLatestReticleRoi() {
+  return latestReticleRoi;
+}
 
 function broadcastRoiWs(payload: any) {
   const data = JSON.stringify(payload);

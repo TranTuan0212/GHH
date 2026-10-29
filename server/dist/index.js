@@ -3,6 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.latestReticleRoi = void 0;
+exports.getLatestReticleRoi = getLatestReticleRoi;
 const ws_1 = require("ws");
 require("./env");
 const express_1 = __importDefault(require("express"));
@@ -32,13 +34,16 @@ process.on('uncaughtException', (err) => {
 // Native WebSocket Server cho app iOS đồng bộ ô soi Reticle ROI & kết quả AI
 const roiWss = new ws_1.WebSocketServer({ noServer: true });
 const roiWsClients = new Set();
-let latestReticleRoi = {
+exports.latestReticleRoi = {
     normX: 0.35,
     normY: 0.30,
     normW: 0.30,
     normH: 0.40,
     isActive: true
 };
+function getLatestReticleRoi() {
+    return exports.latestReticleRoi;
+}
 function broadcastRoiWs(payload) {
     const data = JSON.stringify(payload);
     for (const client of roiWsClients) {
@@ -69,7 +74,7 @@ roiWss.on('connection', (ws) => {
     roiWsClients.add(ws);
     console.log('[WebSocket] iOS Client connected to /ws/roi');
     try {
-        ws.send(JSON.stringify({ type: 'roi', data: latestReticleRoi }));
+        ws.send(JSON.stringify({ type: 'roi', data: exports.latestReticleRoi }));
     }
     catch (e) { }
     ws.on('message', (raw) => {
@@ -625,10 +630,10 @@ io.on('connection', (socket) => {
     // --- Server-Side AI Gateway ---
     socket.on('set_reticle_roi', (data) => {
         if (data && typeof data === 'object') {
-            latestReticleRoi = { ...latestReticleRoi, ...data };
+            exports.latestReticleRoi = { ...exports.latestReticleRoi, ...data };
         }
         io.emit('reticle_roi_updated', data);
-        broadcastRoiWs({ type: 'roi', data: latestReticleRoi });
+        broadcastRoiWs({ type: 'roi', data: exports.latestReticleRoi });
     });
     socket.on('scan_exact_frame', (data) => {
         io.emit('scan_exact_frame_request', data);

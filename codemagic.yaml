@@ -26,7 +26,7 @@ workflows:
           set -e
           echo "=== Exporting YOLOv8 model to Apple CoreML on Mac mini M1 ==="
           pip3 install --upgrade ultralytics coremltools
-          python3 -c "from ultralytics import YOLO; model = YOLO('server/ai/cards_yolov8.pt'); model.export(format='coreml', imgsz=384)"
+          python3 -c "from ultralytics import YOLO; model = YOLO('server/ai/cards_yolov8.pt'); model.export(format='coreml', imgsz=384, nms=True)"
           echo "=== Compiling CoreML model to mlmodelc ==="
           xcrun coremlcompiler compile server/ai/cards_yolov8.mlpackage ios/SloMoLive/
           ls -la ios/SloMoLive/cards_yolov8.mlmodelc || echo "Model compilation finished"

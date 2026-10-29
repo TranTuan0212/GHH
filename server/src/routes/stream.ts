@@ -3,6 +3,7 @@ import { db, CardEntry, GpsLog, StreamSession } from '../db';
 import { authMiddleware, adminMiddleware, AuthRequest } from './auth';
 import { cleanupStreamSession, stopFfmpegOnly, getCleanupStatus, runCronCleanupOnce } from '../mediaServer';
 import { resolveRtmpHostForClient } from '../utils/network';
+import { getLatestReticleRoi } from '../index';
 
 export const streamRouter = Router();
 
@@ -64,7 +65,8 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
     message: 'Khởi tạo luồng Live Stream 240fps thành công.',
     stream: newStream,
     rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
-    streamKey
+    streamKey,
+    roi: getLatestReticleRoi()
   });
 });
 

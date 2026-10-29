@@ -1440,10 +1440,11 @@ public class CardDetector: NSObject, ObservableObject {
     private func handleDetections(_ observations: [VNRecognizedObjectObservation]) {
         guard let best = observations.max(by: { $0.confidence < $1.confidence }),
               let label = best.labels.first,
-              label.confidence >= 0.45 else { return }
+              label.confidence >= 0.40 else { return }
 
         let cardCode = label.identifier
         let conf = Int(Float(label.confidence * 100.0).rounded())
+        print("[CardDetector] 🎯 ANE phát hiện bài: \(cardCode) (\(conf)%)")
 
         DispatchQueue.main.async {
             RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)

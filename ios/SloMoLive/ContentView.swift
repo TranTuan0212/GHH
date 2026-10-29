@@ -303,11 +303,9 @@ struct ContentView: View {
                         let viewH = geo.size.height
 
                         if roiSync.isRoiVisible && roiSync.isActive {
-                            let orient = cameraManager.currentCaptureOrientation
                             let isFront = (cameraManager.currentDevicePosition == .front)
-                            let isPortrait = (orient == .portrait || orient == .portraitUpsideDown)
-                            let sensorW: CGFloat = isPortrait ? 1080 : 1920
-                            let sensorH: CGFloat = isPortrait ? 1920 : 1080
+                            let sensorW: CGFloat = 1080
+                            let sensorH: CGFloat = 1920
 
                             let scale = max(viewW / sensorW, viewH / sensorH)
                             let renderedW = sensorW * scale
@@ -315,31 +313,17 @@ struct ContentView: View {
                             let offsetX = (viewW - renderedW) / 2
                             let offsetY = (viewH - renderedH) / 2
 
-                            // Khử lệch gương của Cam trước
+                            // Khử lệch gương của Cam trước nếu dùng camera selfie
                             let rx = isFront ? (1.0 - roiSync.normX) : roiSync.normX
                             let ry = roiSync.normY
                             let rw = roiSync.normW
                             let rh = roiSync.normH
 
-                            // Chuyển đổi ma trận xoay theo con quay hồi chuyển
-                            let (finalNormX, finalNormY, finalNormW, finalNormH): (CGFloat, CGFloat, CGFloat, CGFloat) = {
-                                switch orient {
-                                case .landscapeRight:
-                                    return (ry, 1.0 - rx, rh, rw)
-                                case .landscapeLeft:
-                                    return (1.0 - ry, rx, rh, rw)
-                                case .portraitUpsideDown:
-                                    return (1.0 - rx, 1.0 - ry, rw, rh)
-                                default:
-                                    return (rx, ry, rw, rh)
-                                }
-                            }()
-
-                            let boxW = renderedW * finalNormW
-                            let boxH = renderedH * finalNormH
-                            // Tọa độ tâm chuẩn xác: normX/normY là tâm ô
-                            let boxX = offsetX + finalNormX * renderedW
-                            let boxY = offsetY + finalNormY * renderedH
+                            let boxW = renderedW * rw
+                            let boxH = renderedH * rh
+                            // Tọa độ tâm chuẩn xác 1:1 theo video stream
+                            let boxX = offsetX + rx * renderedW
+                            let boxY = offsetY + ry * renderedH
 
                             ZStack {
                                 // Khung chữ nhật ô soi: Đỏ khi rà soát, Xanh lá rực khi phát hiện bài
@@ -1100,11 +1084,7 @@ public class RoiSyncManager: ObservableObject {
             switch type {
             case "roi":
                 if let roiData = json["data"] as? [String: Any] {
-                    if let x = roiData["normX"] as? Double { self.normX = CGFloat(x) }
-                    if let y = roiData["normY"] as? Double { self.normY = CGFloat(y) }
-                    if let w = roiData["normW"] as? Double { self.normW = CGFloat(w) }
-                    if let h = roiData["normH"] as? Double { self.normH = CGFloat(h) }
-                    if let active = roiData["isActive"] as? Bool { self.isActive = active }
+                    self.updateRoi(data: roiData)
                 }
 
             case "card_detected":
@@ -1211,6 +1191,16 @@ public class RoiSyncManager: ObservableObject {
                     print("[RoiSyncManager] Error sending card to server: \(err)")
                 }
             }
+        }
+    }
+
+    public func updateRoi(data: [String: Any]) {
+        DispatchQueue.main.async {
+            if let x = data["normX"] as? Double { self.normX = CGFloat(x) }
+            if let y = data["normY"] as? Double { self.normY = CGFloat(y) }
+            if let w = data["normW"] as? Double { self.normW = CGFloat(w) }
+            if let h = data["normH"] as? Double { self.normH = CGFloat(h) }
+            if let active = data["isActive"] as? Bool { self.isActive = active }
         }
     }
 

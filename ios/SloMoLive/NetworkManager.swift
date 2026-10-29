@@ -333,6 +333,9 @@ public class NetworkManager: ObservableObject {
                 // sẽ báo lỗi "chưa cấu hình RTMP" thay vì mặc định localhost (gây crash qua 5G).
                 self.rtmpIngestUrl = json["rtmpIngestUrl"] as? String
                 self.hlsPlaylistUrl = streamObj["hlsPlaylistUrl"] as? String
+                if let roiObj = json["roi"] as? [String: Any] {
+                    RoiSyncManager.shared.updateRoi(data: roiObj)
+                }
                 completion(true)
             }
         }.resume()
