@@ -315,49 +315,25 @@ struct ContentView: View {
                             let offsetX = (viewW - renderedW) / 2
                             let offsetY = (viewH - renderedH) / 2
 
-                            var rx = roiSync.normX
-                            var ry = roiSync.normY
-                            var rw = roiSync.normW
-                            var rh = roiSync.normH
-
                             // Khử lệch gương của Cam trước
-                            if isFront {
-                                rx = 1.0 - rx
-                            }
+                            let rx = isFront ? (1.0 - roiSync.normX) : roiSync.normX
+                            let ry = roiSync.normY
+                            let rw = roiSync.normW
+                            let rh = roiSync.normH
 
                             // Chuyển đổi ma trận xoay theo con quay hồi chuyển
-                            let finalNormX: CGFloat
-                            let finalNormY: CGFloat
-                            let finalNormW: CGFloat
-                            let finalNormH: CGFloat
-
-                            switch orient {
-                            case .landscapeRight:
-                                finalNormX = ry
-                                finalNormY = 1.0 - rx
-                                finalNormW = rh
-                                finalNormH = rw
-                            case .landscapeLeft:
-                                finalNormX = 1.0 - ry
-                                finalNormY = rx
-                                finalNormW = rh
-                                finalNormH = rw
-                            case .portraitUpsideDown:
-                                finalNormX = 1.0 - rx
-                                finalNormY = 1.0 - ry
-                                finalNormW = rw
-                                finalNormH = rh
-                            case .portrait:
-                                finalNormX = rx
-                                finalNormY = ry
-                                finalNormW = rw
-                                finalNormH = rh
-                            default:
-                                finalNormX = rx
-                                finalNormY = ry
-                                finalNormW = rw
-                                finalNormH = rh
-                            }
+                            let (finalNormX, finalNormY, finalNormW, finalNormH): (CGFloat, CGFloat, CGFloat, CGFloat) = {
+                                switch orient {
+                                case .landscapeRight:
+                                    return (ry, 1.0 - rx, rh, rw)
+                                case .landscapeLeft:
+                                    return (1.0 - ry, rx, rh, rw)
+                                case .portraitUpsideDown:
+                                    return (1.0 - rx, 1.0 - ry, rw, rh)
+                                default:
+                                    return (rx, ry, rw, rh)
+                                }
+                            }()
 
                             let boxW = renderedW * finalNormW
                             let boxH = renderedH * finalNormH
