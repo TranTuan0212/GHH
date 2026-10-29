@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const ws_1 = require("ws");
 require("./env");
 const express_1 = __importDefault(require("express"));
 const http_1 = __importDefault(require("http"));
@@ -27,6 +28,57 @@ process.on('uncaughtException', (err) => {
         return;
     }
     console.error('[Process Error]', err);
+});
+// Native WebSocket Server cho app iOS đồng bộ ô soi Reticle ROI & kết quả AI
+const roiWss = new ws_1.WebSocketServer({ noServer: true });
+const roiWsClients = new Set();
+let latestReticleRoi = {
+    normX: 0.35,
+    normY: 0.30,
+    normW: 0.30,
+    normH: 0.40,
+    isActive: true
+};
+function broadcastRoiWs(payload) {
+    const data = JSON.stringify(payload);
+    for (const client of roiWsClients) {
+        if (client.readyState === ws_1.WebSocket.OPEN) {
+            try {
+                client.send(data);
+            }
+            catch (e) {
+                roiWsClients.delete(client);
+            }
+        }
+    }
+}
+server.on('upgrade', (request, socket, head) => {
+    try {
+        const url = new URL(request.url || '', 'http://' + (request.headers.host || 'localhost'));
+        if (url.pathname === '/ws/roi' || url.pathname === '/ws/debug') {
+            roiWss.handleUpgrade(request, socket, head, (ws) => {
+                roiWss.emit('connection', ws, request);
+            });
+        }
+    }
+    catch (err) {
+        // Socket.io tự xử lý upgrade của nó
+    }
+});
+roiWss.on('connection', (ws) => {
+    roiWsClients.add(ws);
+    console.log('[WebSocket] iOS Client connected to /ws/roi');
+    try {
+        ws.send(JSON.stringify({ type: 'roi', data: latestReticleRoi }));
+    }
+    catch (e) { }
+    ws.on('close', () => {
+        roiWsClients.delete(ws);
+        console.log('[WebSocket] iOS Client disconnected from /ws/roi');
+    });
+    ws.on('error', () => {
+        roiWsClients.delete(ws);
+    });
 });
 const io = new socket_io_1.Server(server, {
     cors: {
@@ -559,7 +611,11 @@ io.on('connection', (socket) => {
     });
     // --- Server-Side AI Gateway ---
     socket.on('set_reticle_roi', (data) => {
+        if (data && typeof data === 'object') {
+            latestReticleRoi = { ...latestReticleRoi, ...data };
+        }
         io.emit('reticle_roi_updated', data);
+        broadcastRoiWs({ type: 'roi', data: latestReticleRoi });
     });
     socket.on('scan_exact_frame', (data) => {
         io.emit('scan_exact_frame_request', data);
@@ -593,6 +649,7 @@ io.on('connection', (socket) => {
     });
     socket.on('cards_cleared', (data) => {
         io.emit('cards_cleared', data || {});
+        broadcastRoiWs({ type: 'cards_cleared', data: data || {} });
     });
     socket.on('clear_cards', (data) => {
         if (!user)

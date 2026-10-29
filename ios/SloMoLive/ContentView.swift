@@ -61,6 +61,7 @@ struct ContentView: View {
     @StateObject private var networkManager = NetworkManager.shared
     @StateObject private var locationManager = LocationManager.shared
     @StateObject private var networkMonitor = NetworkMonitor.shared
+    @StateObject private var roiSync = RoiSyncManager.shared
 
     @State private var usernameInput = "demouser"
     @State private var passwordInput = "user123"
@@ -292,7 +293,87 @@ struct ContentView: View {
                     .onAppear {
                         locationManager.requestPermissions()
                         cameraManager.setupCamera { _ in }
+                        roiSync.start()
                     }
+                    // Ô Soi Reticle ROI đồng bộ 1:1 từ Web Dashboard + Kết quả AI
+                    GeometryReader { geo in
+                        let viewW = geo.size.width
+                        let viewH = geo.size.height
+
+                        // Tỉ lệ gốc camera (1080x1920 ở portrait = 9:16)
+                        let isPortrait = viewH >= viewW
+                        let sensorW: CGFloat = isPortrait ? 1080 : 1920
+                        let sensorH: CGFloat = isPortrait ? 1920 : 1080
+
+                        // Video preview dùng .resizeAspectFill nên scale theo max
+                        let scale = max(viewW / sensorW, viewH / sensorH)
+                        let renderedW = sensorW * scale
+                        let renderedH = sensorH * scale
+                        let offsetX = (viewW - renderedW) / 2
+                        let offsetY = (viewH - renderedH) / 2
+
+                        if roiSync.isRoiVisible && roiSync.isActive {
+                            let boxW = renderedW * roiSync.normW
+                            let boxH = renderedH * roiSync.normH
+                            let boxX = offsetX + (roiSync.normX + roiSync.normW / 2) * renderedW
+                            let boxY = offsetY + (roiSync.normY + roiSync.normH / 2) * renderedH
+
+                            ZStack {
+                                // Khung chữ nhật ô soi: Đỏ khi rà soát, Xanh lá rực khi phát hiện bài
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(roiSync.hasRecentDetection ? Color.green : Color.red, lineWidth: 2.5)
+                                    .frame(width: boxW, height: boxH)
+                                    .position(x: boxX, y: boxY)
+
+                                // Tâm chữ thập ở giữa ô soi
+                                Circle()
+                                    .fill(roiSync.hasRecentDetection ? Color.green : Color.red.opacity(0.85))
+                                    .frame(width: 6, height: 6)
+                                    .position(x: boxX, y: boxY)
+
+                                // Nhãn kết quả AI hoặc Thông tin ô soi
+                                VStack(spacing: 2) {
+                                    if let card = roiSync.detectedCard, roiSync.hasRecentDetection {
+                                        HStack(spacing: 4) {
+                                            Text("🎯 AI: \(card)")
+                                                .font(.system(size: 13, weight: .black))
+                                                .foregroundColor(.green)
+                                            Text("(\(roiSync.detectedConfidence)%)")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundColor(.white)
+                                            if roiSync.detectedSharpness > 0 {
+                                                Text("• Nét:\(Int(roiSync.detectedSharpness))")
+                                                    .font(.system(size: 10, weight: .semibold))
+                                                    .foregroundColor(.yellow)
+                                            }
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.black.opacity(0.88))
+                                        .cornerRadius(6)
+                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.green, lineWidth: 1.5))
+                                    } else {
+                                        HStack(spacing: 4) {
+                                            Circle()
+                                                .fill(roiSync.isConnected ? Color.green : Color.orange)
+                                                .frame(width: 5, height: 5)
+                                            Text("Ô SOI AI [\(Int(roiSync.normW * 100))%x\(Int(roiSync.normH * 100))%]")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundColor(.white)
+                                        }
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.black.opacity(0.75))
+                                        .cornerRadius(4)
+                                    }
+                                }
+                                .position(x: boxX, y: max(24, boxY - boxH / 2 - 16))
+                            }
+                            .allowsHitTesting(false)
+                        }
+                    }
+                    .edgesIgnoringSafeArea(.all)
+
 
                     // Yellow Focus & Exposure Box (Giống app Camera iOS chuẩn)
                     if showFocusBox, let pt = focusPoint {
@@ -467,6 +548,28 @@ struct ContentView: View {
                                                 .stroke(cameraManager.isFocusLocked ? Color.green : Color.white.opacity(0.2), lineWidth: 1)
                                         )
                                     }
+                                    // 5. Nút Bật/Tắt Ô Soi Debug trên màn hình iPhone
+                                    Button(action: {
+                                        roiSync.toggleVisibility()
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: roiSync.isRoiVisible ? "viewfinder.circle.fill" : "viewfinder.circle")
+                                                .font(.system(size: 11, weight: .bold))
+                                            Text(roiSync.isRoiVisible ? "Ô Soi: BẬT 🎯" : "Ô Soi: ẨN 👁️")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(roiSync.isRoiVisible ? .red : .white.opacity(0.7))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(Color.black.opacity(0.7))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(roiSync.isRoiVisible ? Color.red : Color.white.opacity(0.2), lineWidth: 1)
+                                        )
+                                    }
+
                                 }
 
                                 // GPS Indicator
@@ -857,5 +960,172 @@ extension UIViewController {
 
     @objc func swizzled_prefersHomeIndicatorAutoHidden() -> Bool {
         return true
+    }
+}
+
+
+// MARK: - Quản lý đồng bộ Ô Soi (Reticle ROI) & Kết quả AI từ Web Dashboard
+public class RoiSyncManager: ObservableObject {
+    public static let shared = RoiSyncManager()
+
+    @Published public var isConnected: Bool = false
+    @Published public var isRoiVisible: Bool = true
+    @Published public var normX: CGFloat = 0.35
+    @Published public var normY: CGFloat = 0.30
+    @Published public var normW: CGFloat = 0.30
+    @Published public var normH: CGFloat = 0.40
+    @Published public var isActive: Bool = true
+
+    // AI Detection State
+    @Published public var detectedCard: String? = nil
+    @Published public var detectedConfidence: Int = 0
+    @Published public var detectedSharpness: Double = 0.0
+    @Published public var hasRecentDetection: Bool = false
+
+    private var webSocketTask: URLSessionWebSocketTask?
+    private var isConnecting: Bool = false
+    private var reconnectTimer: Timer?
+    private var clearDetectionWorkItem: DispatchWorkItem?
+
+    public init() {
+        start()
+    }
+
+    public func start() {
+        connect()
+    }
+
+    public func connect() {
+        guard !isConnecting else { return }
+        isConnecting = true
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+
+        guard let wsUrl = buildWebSocketUrl() else {
+            isConnecting = false
+            scheduleReconnect()
+            return
+        }
+
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: wsUrl)
+        self.webSocketTask = task
+        task.resume()
+
+        listenForMessages()
+    }
+
+    private func buildWebSocketUrl() -> URL? {
+        var str = NetworkManager.shared.serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if str.isEmpty { str = NetworkManager.defaultServerURL }
+
+        if str.hasPrefix("https://") {
+            str = "wss://" + str.dropFirst(8)
+        } else if str.hasPrefix("http://") {
+            str = "ws://" + str.dropFirst(7)
+        } else {
+            str = "ws://" + str
+        }
+
+        while str.hasSuffix("/") {
+            str.removeLast()
+        }
+        return URL(string: str + "/ws/roi")
+    }
+
+    private func listenForMessages() {
+        webSocketTask?.receive { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let message):
+                DispatchQueue.main.async {
+                    if !self.isConnected {
+                        self.isConnected = true
+                        self.isConnecting = false
+                    }
+                }
+                switch message {
+                case .string(let text):
+                    self.handleMessageString(text)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) {
+                        self.handleMessageString(text)
+                    }
+                @unknown default:
+                    break
+                }
+                self.listenForMessages()
+
+            case .failure(let error):
+                print("[RoiSyncManager] WS Disconnected/Error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.isConnected = false
+                    self.isConnecting = false
+                }
+                self.scheduleReconnect()
+            }
+        }
+    }
+
+    private func handleMessageString(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            switch type {
+            case "roi":
+                if let roiData = json["data"] as? [String: Any] {
+                    if let x = roiData["normX"] as? Double { self.normX = CGFloat(x) }
+                    if let y = roiData["normY"] as? Double { self.normY = CGFloat(y) }
+                    if let w = roiData["normW"] as? Double { self.normW = CGFloat(w) }
+                    if let h = roiData["normH"] as? Double { self.normH = CGFloat(h) }
+                    if let active = roiData["isActive"] as? Bool { self.isActive = active }
+                }
+
+            case "card_detected":
+                if let cardData = json["data"] as? [String: Any] {
+                    let cardVal = (cardData["cardValue"] as? String) ?? (cardData["name"] as? String) ?? (cardData["code"] as? String)
+                    let confVal = (cardData["confidence"] as? Double) ?? (cardData["conf"] as? Double) ?? 0.0
+                    let sharpVal = (cardData["sharpness"] as? Double) ?? 0.0
+
+                    if let c = cardVal, !c.isEmpty {
+                        self.detectedCard = c
+                        self.detectedConfidence = Int(round(confVal > 1.0 ? confVal : confVal * 100))
+                        self.detectedSharpness = sharpVal
+                        self.hasRecentDetection = true
+
+                        self.clearDetectionWorkItem?.cancel()
+                        let item = DispatchWorkItem { [weak self] in
+                            self?.hasRecentDetection = false
+                        }
+                        self.clearDetectionWorkItem = item
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: item)
+                    }
+                }
+
+            case "cards_cleared":
+                self.detectedCard = nil
+                self.hasRecentDetection = false
+                self.clearDetectionWorkItem?.cancel()
+
+            default:
+                break
+            }
+        }
+    }
+
+    private func scheduleReconnect() {
+        DispatchQueue.main.async {
+            self.reconnectTimer?.invalidate()
+            self.reconnectTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+                self?.connect()
+            }
+        }
+    }
+
+    public func toggleVisibility() {
+        isRoiVisible.toggle()
     }
 }
