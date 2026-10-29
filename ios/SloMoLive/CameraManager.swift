@@ -1,5 +1,6 @@
 import ImageIO
 import QuartzCore
+import Combine
 import Vision
 import CoreML
 import Foundation
@@ -1442,7 +1443,7 @@ public class CardDetector: NSObject, ObservableObject {
               label.confidence >= 0.45 else { return }
 
         let cardCode = label.identifier
-        let conf = Int((label.confidence * 100).rounded())
+        let conf = Int(Float(label.confidence * 100.0).rounded())
 
         DispatchQueue.main.async {
             RoiSyncManager.shared.notifyCardDetected(cardCode: cardCode, conf: conf, sharpness: 280.0)

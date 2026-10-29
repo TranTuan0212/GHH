@@ -1,5 +1,7 @@
 import SwiftUI
 import AVFoundation
+import Foundation
+import Combine
 
 class VideoPreviewView: UIView {
     override class var layerClass: AnyClass {
@@ -1134,7 +1136,7 @@ public class RoiSyncManager: ObservableObject {
 
                     if let c = cardVal, !c.isEmpty {
                         self.detectedCard = c
-                        self.detectedConfidence = Int(round(confVal > 1.0 ? confVal : confVal * 100))
+                        self.detectedConfidence = Int((confVal > 1.0 ? confVal : confVal * 100.0).rounded())
                         self.detectedSharpness = sharpVal
                         self.hasRecentDetection = true
 

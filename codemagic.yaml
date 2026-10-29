@@ -44,7 +44,12 @@ workflows:
             -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/xcodebuild.log || {
+              echo "==================== XCODEBUILD COMPILATION ERRORS ===================="
+              grep -C 2 -E "(: error:|fatal error:)" /tmp/xcodebuild.log | head -n 40
+              echo "======================================================================="
+              exit 1
+            }
       - name: Package .app into .ipa file
         script: |
           set -e
