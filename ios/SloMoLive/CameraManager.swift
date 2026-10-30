@@ -1668,42 +1668,6 @@ public class CardDetector: NSObject, ObservableObject {
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
     }
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let extent = ciImage.extent
-        let bufW = extent.width
-        let bufH = extent.height
-
-        guard bufW > 10, bufH > 10 else { return (nil, 100.0) }
-
-        let cropX = max(0, min(bufW, roiRect.origin.x * bufW))
-        let cropY = max(0, min(bufH, roiRect.origin.y * bufH))
-        let cropW = max(20, min(bufW - cropX, roiRect.size.width * bufW))
-        let cropH = max(20, min(bufH - cropY, roiRect.size.height * bufH))
-        let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
-
-        guard let cgImage = ciContext.createCGImage(ciImage, from: cropPixelRect) else {
-            return (nil, 100.0)
-        }
-
-        let sharpness = computeSharpness(from: cgImage)
-
-        // Nén ảnh JPEG nhỏ gọn (max dimension 320) để gửi tức thì qua mạng
-        let uiImage = UIImage(cgImage: cgImage)
-        let maxDim: CGFloat = 320.0
-        let scale = min(maxDim / max(uiImage.size.width, 1), maxDim / max(uiImage.size.height, 1), 1.0)
-        let newSize = CGSize(width: max(1, uiImage.size.width * scale), height: max(1, uiImage.size.height * scale))
-
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let resized = renderer.image { _ in
-            uiImage.draw(in: CGRect(origin: .zero, size: newSize))
-        }
-
-        if let jpegData = resized.jpegData(compressionQuality: 0.8) {
-            let b64 = "data:image/jpeg;base64," + jpegData.base64EncodedString()
-            return (b64, sharpness)
-        }
-        return (nil, sharpness)
-    }
 
     /// Tính toán độ nét bằng phương sai Laplacian trên lưới điểm ảnh
     private func computeSharpness(from cgImage: CGImage) -> Double {
