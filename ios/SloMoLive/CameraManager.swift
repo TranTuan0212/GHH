@@ -1433,6 +1433,7 @@ public class CardDetector: NSObject, ObservableObject {
         let cropY = max(0, min(bufH - cropH, (1.0 - (normY + h / 2.0)) * bufH))
         let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
         let croppedPatch = ciImage.cropped(to: cropPixelRect)
+            .transformed(by: CGAffineTransform(translationX: -cropX, y: -cropY))
 
         // Tọa độ ROI chuẩn của ô đỏ cho snapshot
         let vx = max(CGFloat(0.0), min(CGFloat(1.0), normX - normW / 2.0))
@@ -1450,21 +1451,60 @@ public class CardDetector: NSObject, ObservableObject {
             // Với Cam sau: .up (chuẩn 100%)
             let primaryOrient: CGImagePropertyOrientation = isFront ? .upMirrored : .up
             let primaryHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: primaryOrient, options: [:])
-            var detected = self.evaluateVisionHandler(primaryHandler)
+            var eval = self.evaluateVisionHandler(primaryHandler)
+            var detected = eval.detected
+            var bestLiveCandidate = eval.rawBest
+            var bestAngle = "0°"
 
             // 3. CHỈ XOAY KHI KHÔNG NHẬN DIỆN ĐƯỢC:
             if detected == nil {
                 // Thử góc ngược 180 độ (khi người chia cầm bài chúc đầu vào camera)
                 let secOrient: CGImagePropertyOrientation = isFront ? .downMirrored : .down
                 let secHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: secOrient, options: [:])
-                detected = self.evaluateVisionHandler(secHandler)
+                let secEval = self.evaluateVisionHandler(secHandler)
+                if let secDet = secEval.detected {
+                    detected = secDet
+                    bestLiveCandidate = secDet
+                    bestAngle = "180°"
+                } else if let secRaw = secEval.rawBest, (bestLiveCandidate == nil || secRaw.conf > (bestLiveCandidate?.conf ?? 0)) {
+                    bestLiveCandidate = secRaw
+                    bestAngle = "180°"
+                }
             }
 
             if detected == nil {
-                // Thử góc ngang 90 độ
+                // Thử góc xoay 90 độ
                 let sideOrient: CGImagePropertyOrientation = isFront ? .rightMirrored : .right
                 let sideHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: sideOrient, options: [:])
-                detected = self.evaluateVisionHandler(sideHandler)
+                let sideEval = self.evaluateVisionHandler(sideHandler)
+                if let sideDet = sideEval.detected {
+                    detected = sideDet
+                    bestLiveCandidate = sideDet
+                    bestAngle = "90°"
+                } else if let sideRaw = sideEval.rawBest, (bestLiveCandidate == nil || sideRaw.conf > (bestLiveCandidate?.conf ?? 0)) {
+                    bestLiveCandidate = sideRaw
+                    bestAngle = "90°"
+                }
+            }
+
+            if detected == nil {
+                // Thử góc xoay 270 độ (-90 độ)
+                let leftOrient: CGImagePropertyOrientation = isFront ? .leftMirrored : .left
+                let leftHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: leftOrient, options: [:])
+                let leftEval = self.evaluateVisionHandler(leftHandler)
+                if let leftDet = leftEval.detected {
+                    detected = leftDet
+                    bestLiveCandidate = leftDet
+                    bestAngle = "270°"
+                } else if let leftRaw = leftEval.rawBest, (bestLiveCandidate == nil || leftRaw.conf > (bestLiveCandidate?.conf ?? 0)) {
+                    bestLiveCandidate = leftRaw
+                    bestAngle = "270°"
+                }
+            }
+
+            // Cập nhật Live Debug Scan HUD lên màn hình iOS (nhảy real-time từng frame 120fps)
+            if let cand = bestLiveCandidate {
+                RoiSyncManager.shared.updateLiveScanDebug(card: cand.cardCode, conf: cand.conf, angle: bestAngle)
             }
 
             // 4. Xử lý kết quả nhận diện
@@ -1477,17 +1517,20 @@ public class CardDetector: NSObject, ObservableObject {
     }
 
     /// Đánh giá kết quả từ VNImageRequestHandler trên CoreML
-    private func evaluateVisionHandler(_ handler: VNImageRequestHandler) -> (cardCode: String, conf: Int)? {
-        guard let visionModel = self.visionModel else { return nil }
-        var result: (cardCode: String, conf: Int)? = nil
+    private func evaluateVisionHandler(_ handler: VNImageRequestHandler) -> (detected: (cardCode: String, conf: Int)?, rawBest: (cardCode: String, conf: Int)?) {
+        guard let visionModel = self.visionModel else { return (nil, nil) }
+        var detected: (cardCode: String, conf: Int)? = nil
+        var rawBest: (cardCode: String, conf: Int)? = nil
 
         let request = VNCoreMLRequest(model: visionModel) { req, _ in
             if let objectObs = req.results as? [VNRecognizedObjectObservation], !objectObs.isEmpty {
                 if let best = objectObs.max(by: { $0.confidence < $1.confidence }),
-                   let label = best.labels.first,
-                   label.confidence >= 0.25 {
+                   let label = best.labels.first {
                     let conf = Int((label.confidence * 100.0).rounded())
-                    result = (label.identifier, conf)
+                    rawBest = (label.identifier, conf)
+                    if label.confidence >= 0.22 {
+                        detected = (label.identifier, conf)
+                    }
                 }
             } else if let featureObs = req.results as? [VNCoreMLFeatureValueObservation], !featureObs.isEmpty {
                 for feat in featureObs {
@@ -1504,7 +1547,7 @@ public class CardDetector: NSObject, ObservableObject {
                                 maxIdx = i
                             }
                         }
-                        if maxConf >= 0.25 && maxIdx >= 0 {
+                        if maxIdx >= 0 {
                             let cardNames = [
                                 "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S",
                                 "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S",
@@ -1516,7 +1559,10 @@ public class CardDetector: NSObject, ObservableObject {
                             ]
                             let cardCode = (maxIdx < cardNames.count) ? cardNames[maxIdx] : "\(maxIdx)"
                             let conf = Int((maxConf * 100.0).rounded())
-                            result = (cardCode, conf)
+                            rawBest = (cardCode, conf)
+                            if maxConf >= 0.22 {
+                                detected = (cardCode, conf)
+                            }
                             return
                         }
                     }
@@ -1525,7 +1571,7 @@ public class CardDetector: NSObject, ObservableObject {
         }
         request.imageCropAndScaleOption = .scaleFill
         try? handler.perform([request])
-        return result
+        return (detected, rawBest)
     }
 
     private func checkCardDisappeared() {
@@ -1535,6 +1581,7 @@ public class CardDetector: NSObject, ObservableObject {
             NSLog("[CardDetector] 💨 Lá bài %@ đã BIẾN MẤT khỏi ô đỏ! Sẵn sàng đón lá tiếp theo.", card)
             currentCardInBox = nil
             currentCardBestSharpness = 0.0
+            RoiSyncManager.shared.clearLiveScanDebug()
         }
     }
 

@@ -2464,7 +2464,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                           title="Bấm để phóng to"
                         >
                           {item.image ? (
-                            <img src={item.image} alt={item.code} className="w-full h-full object-cover" />
+                            <img src={item.image} alt={item.code} className="w-full h-full object-contain bg-slate-950" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-[10px] font-bold text-slate-400">
                               {item.code}
@@ -2566,7 +2566,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                             <img
                               src={cardItem.image}
                               alt={cardItem.code}
-                              className="w-full h-full object-cover group-hover:scale-105 transition duration-200"
+                              className="w-full h-full object-contain bg-slate-950/80 group-hover:scale-105 transition duration-200"
                               style={{ imageRendering: '-webkit-optimize-contrast' }}
                             />
                             {/* Huy hiệu Góc trái: Tên lá bài & chất */}

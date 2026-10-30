@@ -375,7 +375,7 @@ struct ContentView: View {
                                     .position(x: boxX, y: boxY)
 
                                 // Nhãn kết quả AI hoặc Thông tin ô soi
-                                VStack(spacing: 2) {
+                                VStack(spacing: 3) {
                                     if let card = roiSync.detectedCard, roiSync.hasRecentDetection {
                                         HStack(spacing: 4) {
                                             Text("🎯 AI: \(card)")
@@ -391,26 +391,28 @@ struct ContentView: View {
                                             }
                                         }
                                         .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
+                                        .padding(.vertical, 3)
                                         .background(Color.black.opacity(0.88))
                                         .cornerRadius(6)
                                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.green, lineWidth: 1.5))
-                                    } else {
-                                        HStack(spacing: 4) {
-                                            Circle()
-                                                .fill(roiSync.isConnected ? Color.green : Color.orange)
-                                                .frame(width: 5, height: 5)
-                                            Text("Ô SOI AI [\(Int(roiSync.normW * 100))%x\(Int(roiSync.normH * 100))%]")
-                                                .font(.system(size: 10, weight: .bold))
-                                                .foregroundColor(.white)
-                                        }
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.black.opacity(0.75))
-                                        .cornerRadius(4)
                                     }
+
+                                    // Real-Time Live Debug HUD (Điểm % nhảy liên tục 120fps cho mọi frame dù % thấp)
+                                    HStack(spacing: 4) {
+                                        Circle()
+                                            .fill(!roiSync.liveDebugScan.isEmpty && roiSync.liveDebugScan != "Đang quét..." ? Color.yellow : Color.orange)
+                                            .frame(width: 5, height: 5)
+                                        Text("🔍 AI Live: \(roiSync.liveDebugScan.isEmpty ? "Đang quét..." : roiSync.liveDebugScan)")
+                                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                                            .foregroundColor(.yellow)
+                                    }
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2.5)
+                                    .background(Color.black.opacity(0.85))
+                                    .cornerRadius(5)
+                                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.yellow.opacity(0.6), lineWidth: 1))
                                 }
-                                .position(x: boxX, y: max(24, boxY - boxH / 2 - 16))
+                                .position(x: boxX, y: max(28, boxY - boxH / 2 - 24))
                             }
                             .allowsHitTesting(false)
                         }
@@ -1024,6 +1026,20 @@ public class RoiSyncManager: ObservableObject {
     @Published public var detectedConfidence: Int = 0
     @Published public var detectedSharpness: Double = 0.0
     @Published public var hasRecentDetection: Bool = false
+    @Published public var liveDebugScan: String = ""
+
+    public func updateLiveScanDebug(card: String, conf: Int, angle: String = "") {
+        DispatchQueue.main.async {
+            let angleStr = angle.isEmpty ? "" : " [\(angle)]"
+            self.liveDebugScan = "\(card) (\(conf)%)\(angleStr)"
+        }
+    }
+
+    public func clearLiveScanDebug() {
+        DispatchQueue.main.async {
+            self.liveDebugScan = ""
+        }
+    }
 
     private var webSocketTask: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
