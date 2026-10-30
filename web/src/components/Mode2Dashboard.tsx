@@ -30,9 +30,11 @@ import {
   Undo2,
   Trash2,
   Clock,
-  Wifi
+  Wifi,
+  Filter
 } from 'lucide-react';
-import { evaluate3Cards, parseCardRank, getRankLabel } from '../utils/cardRules';
+import { parseCardRank, getRankLabel } from '../utils/cardRules';
+import { GameMode, computeAllGroupAnswers, evaluate3Cards as eval3Cards, evaluate2Cards } from './DataGroupingUI';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
 interface Mode2DashboardProps {
@@ -44,9 +46,17 @@ interface Mode2DashboardProps {
   onFinishRound?: () => void;
 }
 
+export interface Mode2CardItem {
+  code: string;
+  image?: string;
+  sharpness?: number;
+  confidence?: number;
+  timestamp?: string;
+}
+
 interface RoundHistory {
   roundNum: number;
-  hands: { [doorIndex: number]: string[] };
+  hands: { [doorIndex: number]: Mode2CardItem[] };
   scores: { [doorIndex: number]: { title: string; points: number } };
   winnerDoor: number;
 }
@@ -113,7 +123,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   user,
   onFinishRound
 }) => {
-  // Cấu hình Bàn chơi (Mặc định 7 Cửa, 3 Lá/Cửa)
+  // Cấu hình Bàn chơi theo Chế độ 1
+  const [gameMode, setGameMode] = useState<GameMode>(() => {
+    return (localStorage.getItem('mode2_game_mode') as GameMode) || '3cards';
+  });
+
   const [playerCount, setPlayerCount] = useState<number>(() => {
     const saved = localStorage.getItem('mode2_player_count');
     return saved ? parseInt(saved, 10) : 7;
@@ -124,8 +138,22 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     return saved ? parseInt(saved, 10) : 3;
   });
 
-  // Trạng thái bài của từng Cửa: { [doorIndex 1..7]: string[] }
-  const [doorCards, setDoorCards] = useState<{ [doorIndex: number]: string[] }>({});
+  // Tự động đồng bộ số lá/cửa theo thể loại bài
+  useEffect(() => {
+    if (gameMode === '2cards') {
+      setCardsPerPlayer(2);
+    } else if (gameMode === 'poker') {
+      setCardsPerPlayer(2);
+    } else if (gameMode === '3cards') {
+      setCardsPerPlayer(3);
+    }
+  }, [gameMode]);
+
+  const [dealStrategy, setDealStrategy] = useState<'roundRobin' | 'sequential'>('roundRobin');
+  const [selectedDoorFilter, setSelectedDoorFilter] = useState<number | 'all'>('all');
+
+  // Trạng thái bài của từng Cửa kèm ảnh snapshot 1080p @ 120fps: { [doorIndex 1..N]: Mode2CardItem[] }
+  const [doorCards, setDoorCards] = useState<{ [doorIndex: number]: Mode2CardItem[] }>({});
   
   // Lịch sử các ván trước
   const [roundHistories, setRoundHistories] = useState<RoundHistory[]>(() => {
@@ -315,81 +343,172 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Tìm cửa và slot tiếp theo đang chờ lá bài
   const nextTarget = useMemo(() => {
-    // Vòng 1: Cửa 1->7 lá 1. Vòng 2: Cửa 1->7 lá 2...
-    for (let round = 0; round < cardsPerPlayer; round++) {
+    if (dealStrategy === 'sequential') {
       for (let door = 1; door <= playerCount; door++) {
         const cards = doorCards[door] || [];
-        if (cards.length === round) {
-          return { door, slot: round };
+        if (cards.length < cardsPerPlayer) {
+          return { door, slot: cards.length };
         }
       }
+      return null;
+    } else {
+      // roundRobin: Lượt 1: Cửa 1..N, Lượt 2: Cửa 1..N...
+      for (let round = 0; round < cardsPerPlayer; round++) {
+        for (let door = 1; door <= playerCount; door++) {
+          const cards = doorCards[door] || [];
+          if (cards.length === round) {
+            return { door, slot: round };
+          }
+        }
+      }
+      return null;
     }
-    return null; // Đã đủ bài cho tất cả các cửa
-  }, [doorCards, playerCount, cardsPerPlayer]);
+  }, [doorCards, playerCount, cardsPerPlayer, dealStrategy]);
 
-  // Đánh giá điểm từng Cửa
+  // Đánh giá điểm từng Cửa theo Chế độ 1
   const evaluations = useMemo(() => {
     const res: { [door: number]: any } = {};
     for (let d = 1; d <= playerCount; d++) {
-      res[d] = evaluate3Cards(doorCards[d] || []);
-    }
-    return res;
-  }, [doorCards, playerCount]);
+      const items = (doorCards[d] || []).map((c) => ({
+        id: `${d}-${c.code}`,
+        streamId: '',
+        userId: '',
+        cardValue: c.code,
+        groupIndex: d,
+        sequenceOrder: 0,
+        createdAt: ''
+      }));
 
-  // Tìm Cửa thắng cuộc trong ván hiện tại
-  const winnerDoor = useMemo(() => {
-    let bestDoor = 0;
-    let maxPoints = -1;
-    for (let d = 1; d <= playerCount; d++) {
-      const ev = evaluations[d];
-      if (ev && ev.points > maxPoints && (doorCards[d] || []).length === cardsPerPlayer) {
-        maxPoints = ev.points;
-        bestDoor = d;
+      if (gameMode === '2cards') {
+        const ev = evaluate2Cards(items);
+        res[d] = {
+          title: ev.label,
+          subText: `${items.length}/${cardsPerPlayer} lá`,
+          points: ev.total,
+          highlightClass: ev.highlightClass
+        };
+      } else {
+        const ev = eval3Cards(items);
+        res[d] = {
+          title: ev.label,
+          subText: `${items.length}/${cardsPerPlayer} lá`,
+          points: ev.score,
+          highlightClass: ev.highlightClass
+        };
       }
     }
-    return bestDoor;
-  }, [evaluations, doorCards, playerCount, cardsPerPlayer]);
+    return res;
+  }, [doorCards, playerCount, gameMode, cardsPerPlayer]);
 
-  // Ghi nhận lá bài vào Cửa theo vòng (Round-Robin) — Chống trùng bài 100% trong cùng ván
-  const addCardToActiveDoor = useCallback((cardCode: string) => {
-    if (!nextTarget) return false;
-
-    let added = false;
-    setDoorCards((prev) => {
-      // Kiểm tra nếu lá bài này đã được chia vào bất kỳ cửa nào trong ván hiện tại thì lọc bỏ, không chia trùng
-      const alreadyDealt = Object.values(prev).some((cards) => Array.isArray(cards) && cards.includes(cardCode));
-      if (alreadyDealt) return prev;
-
-      const current = prev[nextTarget.door] || [];
-      if (current.length >= cardsPerPlayer) return prev;
-      added = true;
-      return {
-        ...prev,
-        [nextTarget.door]: [...current, cardCode]
-      };
-    });
-
-    if (!added) return false;
-
-    playBeepSound();
-    setIsAiFlashing(true);
-    setTimeout(() => setIsAiFlashing(false), 450);
-
-    // Đồng bộ socket nếu có
-    if (socket && roomId) {
-      socket.emit('card_added', {
-        roomId,
-        cardValue: cardCode,
-        groupIndex: nextTarget.door,
-        sequenceOrder: Date.now()
+  // Đối chiếu kết quả & Xếp hạng thắng thua giữa tất cả các Cửa như Chế độ 1
+  const groupAnswersResult = useMemo(() => {
+    const allEntries: any[] = [];
+    for (let d = 1; d <= playerCount; d++) {
+      (doorCards[d] || []).forEach((c, idx) => {
+        allEntries.push({
+          id: `${d}-${c.code}-${idx}`,
+          streamId: '',
+          userId: '',
+          cardValue: c.code,
+          groupIndex: d,
+          sequenceOrder: idx,
+          createdAt: ''
+        });
       });
     }
-    return true;
-  }, [nextTarget, cardsPerPlayer, socket, roomId]);
+    return computeAllGroupAnswers(allEntries, playerCount, gameMode);
+  }, [doorCards, playerCount, gameMode]);
+
+  const winnerDoor = groupAnswersResult.winnerGroupNum || 0;
+
+  // Danh sách các quân bài đã chia theo Cửa để hiển thị ở Khay Soi & Bàn Cược
+  const doorCardImages = useMemo(() => {
+    const list: { doorNum: number; slotIdx: number; item: Mode2CardItem }[] = [];
+    for (let d = 1; d <= playerCount; d++) {
+      if (selectedDoorFilter !== 'all' && selectedDoorFilter !== d) continue;
+      const items = doorCards[d] || [];
+      items.forEach((item, sIdx) => {
+        list.push({ doorNum: d, slotIdx: sIdx, item });
+      });
+    }
+    return list;
+  }, [doorCards, playerCount, selectedDoorFilter]);
+
+  // Ghi nhận lá bài vào Cửa — Chống trùng bài 100% trong cùng ván
+  const addCardToActiveDoor = useCallback(
+    (cardCode: string, image?: string, sharpness?: number, confidence?: number, updateOnly?: boolean) => {
+      if (updateOnly) {
+        setDoorCards((prev) => {
+          const next = { ...prev };
+          for (let d = playerCount; d >= 1; d--) {
+            const list = next[d];
+            if (list && list.length > 0) {
+              const lastIdx = list.length - 1;
+              if (list[lastIdx].code === cardCode) {
+                const updated = [...list];
+                updated[lastIdx] = {
+                  ...updated[lastIdx],
+                  image: image || updated[lastIdx].image,
+                  sharpness: sharpness || updated[lastIdx].sharpness,
+                  confidence: confidence || updated[lastIdx].confidence
+                };
+                next[d] = updated;
+                return next;
+              }
+            }
+          }
+          return prev;
+        });
+        return true;
+      }
+
+      if (!nextTarget) return false;
+
+      let added = false;
+      const newItem: Mode2CardItem = {
+        code: cardCode,
+        image,
+        sharpness,
+        confidence,
+        timestamp: new Date().toLocaleTimeString('vi-VN')
+      };
+
+      setDoorCards((prev) => {
+        const alreadyDealt = Object.values(prev).some((cards) =>
+          Array.isArray(cards) && cards.some((c) => c.code === cardCode)
+        );
+        if (alreadyDealt) return prev;
+
+        const current = prev[nextTarget.door] || [];
+        if (current.length >= cardsPerPlayer) return prev;
+        added = true;
+        return {
+          ...prev,
+          [nextTarget.door]: [...current, newItem]
+        };
+      });
+
+      if (!added) return false;
+
+      playBeepSound();
+      setIsAiFlashing(true);
+      setTimeout(() => setIsAiFlashing(false), 450);
+
+      if (socket && roomId) {
+        socket.emit('card_added', {
+          roomId,
+          cardValue: cardCode,
+          groupIndex: nextTarget.door,
+          sequenceOrder: Date.now()
+        });
+      }
+      return true;
+    },
+    [nextTarget, cardsPerPlayer, playerCount, socket, roomId]
+  );
 
   // Hoàn tác lá bài vừa nhận gần nhất
   const handleUndo = () => {
-    // Tìm lá bài được chia gần nhất
     let lastDoor = -1;
     for (let d = playerCount; d >= 1; d--) {
       const cards = doorCards[d] || [];
@@ -434,6 +553,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     }
 
     setDoorCards({});
+    setCapturedFrame(null);
     if (socket && roomId) {
       socket.emit('cards_cleared', { roomId });
     }
@@ -816,7 +936,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       };
 
       if (data.updateFrameOnly) {
-        // Cập nhật lại đúng lá bài đó bằng bức ảnh 120fps sắc nét hơn mà không chia trùng bài vào Cửa!
+        // Cập nhật lại đúng lá bài đó bằng bức ảnh 120fps sắc nét hơn vào Cửa & Khay soi!
+        addCardToActiveDoor(best.code, data.image, sharp, conf, true);
         setCapturedFrame((prev) => (!prev || sharp >= (prev.sharpness || 0) ? frameData : prev));
         setCapturedHistory((prev) => {
           const idx = prev.findIndex((item) => item.cardName === cardTitle);
@@ -847,7 +968,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         }
         return [frameData, ...prev.slice(0, 8)];
       });
-      addCardToActiveDoor(best.code);
+      addCardToActiveDoor(best.code, data.image, sharp, conf, false);
     };
 
     socket.on('card_detected', handleServerCardDetected);
@@ -1876,142 +1997,190 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
         {/* CỘT PHẢI (Lg: 6 cột - 50%): KHUNG SOI LIVE RAM CROP 120FPS + BẢNG LỊCH SỬ KẾT QUẢ */}
         <div className="lg:col-span-6 flex flex-col gap-3">
-          {/* MỤC 1: KHUNG SOI LIVE RAM CROP 120FPS TRỰC TIẾP TRONG BỘ NHỚ RAM */}
-          <div className="bg-slate-900/90 border border-amber-500/50 rounded-xl p-3 shadow-xl backdrop-blur flex flex-col">
-            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800 text-xs">
-              <span className="font-bold text-slate-200 flex items-center space-x-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-amber-400 font-bold uppercase tracking-wider text-[11px]">Luồng Soi Trực Tiếp RAM Crop 120fps (Server AI)</span>
+          {/* MỤC 1: BẢNG ĐIỀU KHIỂN TRÒ CHƠI & XẾP HẠNG TÍNH ĐIỂM THEO CHẾ ĐỘ 1 */}
+          <div className="bg-slate-900/90 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur flex flex-col space-y-3">
+            {/* Header: Thể loại chơi */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800 text-xs">
+              <span className="font-bold text-slate-200 flex items-center space-x-1.5">
+                <Sliders className="w-4 h-4 text-emerald-400" />
+                <span>Thể Loại Bài & Bàn Cược</span>
               </span>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-amber-300 font-mono border border-slate-700">Ngưỡng: ≥54% (4 Kênh Xoay Vòng)</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${debugCrop ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-slate-800 text-slate-500'}`}>
-                  {debugCrop ? `4 KÊNH • Quét ${debugCrop.scanFps || 120}fps` : 'Chờ luồng'}
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={() => {
+                    setGameMode('3cards');
+                    localStorage.setItem('mode2_game_mode', '3cards');
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+                    gameMode === '3cards'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  3 Lá (Bài Cào)
+                </button>
+                <button
+                  onClick={() => {
+                    setGameMode('2cards');
+                    localStorage.setItem('mode2_game_mode', '2cards');
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+                    gameMode === '2cards'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  2 Lá (Xì Dách)
+                </button>
+                <button
+                  onClick={() => {
+                    setGameMode('poker');
+                    localStorage.setItem('mode2_game_mode', 'poker');
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+                    gameMode === 'poker'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  Poker (4 Chất)
+                </button>
+              </div>
+            </div>
+
+            {/* Chọn Số Cửa & Chế độ chia bài */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center space-x-1.5">
+                <span className="text-slate-400 font-medium">Số Cửa:</span>
+                {[2, 3, 4, 5, 6, 7, 8].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => {
+                      setPlayerCount(n);
+                      localStorage.setItem('mode2_player_count', n.toString());
+                    }}
+                    className={`w-7 h-7 rounded font-bold transition text-xs ${
+                      playerCount === n
+                        ? 'bg-amber-500 text-slate-950 font-black shadow'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center space-x-1 bg-slate-950/70 p-1 rounded-lg border border-slate-800">
+                <button
+                  onClick={() => setDealStrategy('roundRobin')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition ${
+                    dealStrategy === 'roundRobin'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Chia lần lượt mỗi cửa 1 lá xoay vòng"
+                >
+                  Vòng Tròn
+                </button>
+                <button
+                  onClick={() => setDealStrategy('sequential')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition ${
+                    dealStrategy === 'sequential'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Chia xong từng cửa rồi sang cửa kế"
+                >
+                  Từng Cửa
+                </button>
+              </div>
+            </div>
+
+            {/* BẢNG XẾP HẠNG & TÍNH ĐIỂM THẮNG THUA (NHƯ CHẾ ĐỘ 1) */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex flex-col space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-300 flex items-center space-x-1.5">
+                  <Award className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Xếp Hạng & Điểm Số Các Cửa:</span>
                 </span>
-              </div>
-            </div>
-
-            {/* Nội dung luồng soi RAM: 2 MÀN HÌNH SONG SONG (SIDE-BY-SIDE DUAL MONITOR) */}
-            <div className="flex flex-col gap-3 bg-slate-950/90 p-3 rounded-xl border border-amber-500/30">
-              {/* HÀNG 2 KHUNG SOI DEBUG SONG SONG CẠNH NHAU */}
-              <div className="grid grid-cols-2 gap-3 items-center">
-                {/* KHUNG 1: CLIENT LIVE CROP (ẢNH THÔ MẮT NGƯỜI NHÌN THẤY TRONG Ô ĐỎ) */}
-                <div className="flex flex-col space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-300 font-mono">
-                    <span className="flex items-center space-x-1 text-cyan-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      <span>① CLIENT LIVE ROI</span>
-                    </span>
-                    <span className="text-slate-400 font-normal">0-Delay (Thô)</span>
-                  </div>
-                  <div
-                    onClick={() => {
-                      if (clientCanvasRef.current) {
-                        setZoomImage(clientCanvasRef.current.toDataURL('image/jpeg', 0.95));
-                      }
-                    }}
-                    className="w-full h-44 sm:h-52 bg-black rounded-lg overflow-hidden border-2 border-cyan-500/60 relative flex items-center justify-center cursor-pointer group hover:border-cyan-400 transition shadow-[0_0_15px_rgba(6,182,212,0.2)]"
-                    title="Nhấp để phóng to ảnh Client Crop thô 1:1"
-                  >
-                    <canvas
-                      ref={clientCanvasRef}
-                      className="w-full h-full object-contain"
-                    />
-                    <div className="absolute top-1.5 right-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-cyan-300 border border-cyan-500/40">
-                      LIVE • {isLive ? '120fps' : 'Replay'}
-                    </div>
-                    <div className="absolute bottom-1.5 left-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-slate-300">
-                      {Math.round(normRoi.normW * 100)}%x{Math.round(normRoi.normH * 100)}%
-                    </div>
-                  </div>
-                </div>
-
-                {/* KHUNG 2: SERVER AI DETECTION (ẢNH AI NHẬN DIỆN CÓ HỘP BẮT BÀI & GÓC XOAY) */}
-                <div className="flex flex-col space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-300 font-mono">
-                    <span className="flex items-center space-x-1 text-emerald-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <span>② SERVER AI VIEW</span>
-                    </span>
-                    <span className="text-amber-300 font-mono">
-                      {lastScanRtt > 0 ? `${lastScanRtt}ms RTT` : 'Direct ONNX'}
-                    </span>
-                  </div>
-                  <div
-                    onClick={() => {
-                      if (aiCanvasRef.current) {
-                        setZoomImage(aiCanvasRef.current.toDataURL('image/jpeg', 0.95));
-                      } else if (debugCrop?.image) {
-                        setZoomImage(debugCrop.image);
-                      }
-                    }}
-                    className="w-full h-44 sm:h-52 bg-black rounded-lg overflow-hidden border-2 border-emerald-500/60 relative flex items-center justify-center cursor-pointer group hover:border-emerald-400 transition shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-                    title="Nhấp để phóng to ảnh AI nhận diện"
-                  >
-                    <canvas
-                      ref={aiCanvasRef}
-                      className="w-full h-full object-contain"
-                    />
-                    <div className="absolute top-1.5 right-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-emerald-300 border border-emerald-500/40">
-                      {debugCrop ? `${debugCrop?.bestConf || 0}%` : 'Chờ AI'}
-                    </div>
-                    <div className="absolute bottom-1.5 left-1.5 bg-black/85 px-1.5 py-0.5 rounded text-[9px] font-mono text-slate-300">
-                      Nét: {debugCrop?.sharpness || 0}
-                    </div>
-                  </div>
-                </div>
+                {winnerDoor > 0 && (
+                  <span className="text-[11px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/50">
+                    👑 Cửa {winnerDoor} Thắng Nhất
+                  </span>
+                )}
               </div>
 
-              {/* Thông tin chi tiết + Bảng 4 Kênh AI */}
-              <div className="w-full flex flex-col justify-between space-y-2 py-1">
-                  <div>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">AI Nhận Diện Trong Khung (Tổng Hợp 4 Kênh):</span>
-                    <div className="mt-0.5 flex items-baseline space-x-2">
-                      <span className={`text-xl sm:text-2xl font-black font-mono tracking-tight ${debugCrop?.isDetected ? 'text-emerald-400' : 'text-amber-300'}`}>
-                        {(debugCrop?.detectedCard || 'Đang quét 4 kênh đa góc...')}
+              {/* Lưới Điểm Từng Cửa */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-1.5 text-center text-xs">
+                {groupAnswersResult.answers.map((ans) => {
+                  const isWin = ans.groupNum === winnerDoor;
+                  return (
+                    <div
+                      key={ans.groupNum}
+                      className={`p-1.5 rounded-lg border flex flex-col items-center justify-between transition ${
+                        isWin
+                          ? 'bg-amber-950/50 border-amber-400 text-amber-300 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
+                          : 'bg-slate-900 border-slate-800 text-slate-300'
+                      }`}
+                    >
+                      <span className="font-bold text-[11px] flex items-center space-x-1">
+                        <span>Cửa {ans.groupNum}</span>
+                        {isWin && <span>👑</span>}
+                      </span>
+                      <span className={`text-[10px] px-1 py-0.5 rounded font-black mt-1 ${ans.highlightClass || 'bg-slate-800 text-slate-400'}`}>
+                        {ans.label || 'Chờ bài'}
                       </span>
                     </div>
-                  </div>
-
-                  {/* Lưới trạng thái trực tiếp của 4 Kênh AI bốc 4 Frame khác nhau */}
-                  {debugCrop?.channels && debugCrop?.channels.length > 0 && (
-                    <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
-                      {debugCrop?.channels.map((ch) => (
-                        <div
-                          key={ch.id}
-                          className={`px-2 py-1 rounded border flex items-center justify-between ${
-                            ch.conf >= 54
-                              ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300'
-                              : 'bg-slate-900/90 border-slate-800 text-slate-300'
-                          }`}
-                        >
-                          <span className="font-bold text-amber-400">
-                            K#{ch.id} <span className="text-indigo-300 font-normal">{ch.mode || ''}</span>{' '}
-                            <span className="text-slate-500 font-normal">(F#{ch.seq})</span>
-                          </span>
-                          <span className={ch.conf >= 54 ? 'font-bold text-emerald-400' : 'text-slate-400'}>
-                            {ch.card !== 'Trống' ? ch.card : `Nét ${ch.sharpness}`}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="space-y-1 text-xs font-mono bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Độ tin cậy / Độ nét:</span>
-                      <span className={`font-bold ${(debugCrop?.bestConf || 0) >= 54 ? 'text-emerald-400 text-sm' : 'text-slate-300'}`}>
-                        {debugCrop?.bestConf || 0}% • Nét: {debugCrop?.sharpness ?? 0}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Chất lượng:</span>
-                      <span className="text-emerald-400 font-bold">0-Delay WebRTC WHEP • 4 Kênh Đa Góc</span>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
+
+              {groupAnswersResult.leaderboardText && (
+                <div className="text-[11px] font-mono text-emerald-400/90 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/40">
+                  {groupAnswersResult.leaderboardText}
+                </div>
+              )}
             </div>
+
+            {/* Các nút thao tác ván */}
+            <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleNewRound}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center space-x-1 shadow-md shadow-emerald-600/30"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Ván Mới</span>
+                </button>
+                <button
+                  onClick={handleUndo}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center space-x-1"
+                >
+                  <Undo2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Hoàn Tác</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setDoorCards({});
+                    setCapturedFrame(null);
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-red-900/60 text-slate-200 hover:text-red-300 font-bold text-xs flex items-center space-x-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                  <span>Xóa Ván</span>
+                </button>
+              </div>
+
+              {nextTarget && (
+                <div className="text-xs text-slate-300 font-medium flex items-center space-x-1">
+                  <span className="text-slate-400">Lá tiếp theo:</span>
+                  <span className="font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
+                    Cửa {nextTarget.door} (Lá {nextTarget.slot + 1})
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* MỤC 2: BẢNG LỊCH SỬ KẾT QUẢ CÁC VÁN */}
           <div className="flex-1 bg-slate-900/90 border border-slate-700/80 rounded-xl p-2.5 flex flex-col justify-between shadow-lg">
@@ -2094,9 +2263,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         </div>
       </div>
 
-      {/* KHAY SOI FRAME BÀI NÉT NHẤT (1080p @ 120fps Frame Inspector) */}
+      {/* KHAY SOI FRAME BÀI NÉT NHẤT (1080p @ 120fps Frame Inspector) - HỖ TRỢ LỌC THEO CỬA */}
       <div className="bg-slate-900/90 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur">
-        <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs">
+        <div className="flex flex-wrap items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs gap-2">
           <span className="font-bold text-slate-200 flex items-center space-x-1.5">
             <Crosshair className="w-4 h-4 text-emerald-400" />
             <span>Khay Soi Frame Quân Bài Nét Nhất (1080p @ 120fps Native Frame)</span>
@@ -2106,64 +2275,216 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           </span>
         </div>
 
-        {capturedFrame ? (
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Ảnh frame hiện tại to rõ nét nhất */}
-            <div className="flex items-center space-x-3 bg-slate-950 p-2 rounded-xl border border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-              <div 
-                onClick={() => setZoomImage(capturedFrame.image)}
-                className="w-20 h-28 sm:w-24 sm:h-32 bg-black rounded-lg overflow-hidden border border-emerald-500/40 relative flex items-center justify-center cursor-pointer hover:border-emerald-400 transition"
-                title="Nhấp để xem ảnh 1080p gốc 1:1"
+        {/* Thanh lọc xem bài theo Cửa */}
+        <div className="flex flex-wrap items-center gap-1.5 pb-2.5 mb-2.5 border-b border-slate-800 text-xs">
+          <span className="text-slate-400 font-medium mr-1 flex items-center space-x-1">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <span>Xem ảnh theo Cửa:</span>
+          </span>
+          <button
+            onClick={() => setSelectedDoorFilter('all')}
+            className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+              selectedDoorFilter === 'all'
+                ? 'bg-emerald-600 text-white shadow'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            Tất cả ({doorCardImages.length})
+          </button>
+          {Array.from({ length: playerCount }, (_, i) => i + 1).map((d) => {
+            const count = (doorCards[d] || []).length;
+            return (
+              <button
+                key={d}
+                onClick={() => setSelectedDoorFilter(d)}
+                className={`px-2.5 py-1 rounded text-xs font-bold transition flex items-center space-x-1 ${
+                  selectedDoorFilter === d
+                    ? 'bg-amber-500 text-slate-950 font-black shadow'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
               >
-                <img 
-                  src={capturedFrame.image} 
-                  alt={capturedFrame.cardName} 
-                  className="w-full h-full object-contain" 
-                  style={{ imageRendering: '-webkit-optimize-contrast' }}
-                />
-              </div>
-              <div className="flex flex-col justify-center space-y-1">
-                <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Frame Nét Nhất Chọn Từ 120fps</span>
-                <span className="text-xl sm:text-2xl font-black text-white tracking-wide">{capturedFrame.cardName}</span>
-                <div className="flex items-center space-x-2 text-[11px] font-mono">
-                  <span className="bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded font-bold border border-emerald-800">
-                    {capturedFrame.confidence}% Độ tin cậy
+                <span>Cửa {d}</span>
+                {count > 0 && (
+                  <span
+                    className={`text-[10px] px-1 py-0.2 rounded font-mono ${
+                      selectedDoorFilter === d ? 'bg-slate-900 text-amber-300' : 'bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {count}
                   </span>
-                  {capturedFrame.sharpness ? (
-                    <span className="bg-amber-950/80 text-amber-300 px-2 py-0.5 rounded font-bold border border-amber-700/60">
-                      Độ nét: {capturedFrame.sharpness}
-                    </span>
-                  ) : null}
-                  <span className="text-slate-400">{capturedFrame.timestamp}</span>
-                </div>
-                <span className="text-[10px] text-emerald-400/90 font-mono">Chuẩn 1080p @ 120fps Native Pixel</span>
-              </div>
-            </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-            {/* Dải lịch sử 4 lá gần nhất */}
-            {capturedHistory.length > 1 && (
-              <div className="flex-1 min-w-[200px] flex items-center space-x-2 overflow-x-auto py-1">
-                <span className="text-[11px] text-slate-400 font-bold whitespace-nowrap mr-1">Lịch sử:</span>
-                {capturedHistory.slice(1).map((item, idx) => (
-                  <div key={idx} className="flex flex-col items-center bg-slate-950/80 p-1.5 rounded-lg border border-slate-800 flex-shrink-0">
-                    <div className="w-12 h-16 rounded overflow-hidden bg-black border border-slate-700">
-                      <img src={item.image} alt={item.cardName} className="w-full h-full object-contain" />
+        {/* Nội dung Khay Soi khi lọc theo 1 Cửa cụ thể */}
+        {selectedDoorFilter !== 'all' ? (
+          <div>
+            <div className="text-xs font-bold text-amber-400 mb-2 flex items-center space-x-1.5">
+              <span>Hình ảnh 1080p các lá bài thuộc Cửa {selectedDoorFilter}:</span>
+            </div>
+            {doorCardImages.length === 0 ? (
+              <div className="py-6 text-center text-slate-500 text-xs italic">
+                Cửa {selectedDoorFilter} chưa được chia lá bài nào.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {doorCardImages.map(({ doorNum, slotIdx, item }, idx) => {
+                  const cardInfo = formatCardItem(item.code);
+                  return (
+                    <div
+                      key={idx}
+                      className="bg-slate-950 p-2 rounded-xl border border-amber-500/50 shadow-md flex flex-col space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-amber-300">Cửa {doorNum} • Lá {slotIdx + 1}</span>
+                        <span className="text-slate-400 font-mono text-[10px]">{item.timestamp}</span>
+                      </div>
+                      <div
+                        onClick={() => item.image && setZoomImage(item.image)}
+                        className="w-full h-32 bg-black rounded-lg overflow-hidden border border-slate-700 relative flex items-center justify-center cursor-pointer hover:border-amber-400 transition"
+                        title="Bấm để phóng to ảnh 1080p gốc"
+                      >
+                        {item.image ? (
+                          <img
+                            src={item.image}
+                            alt={item.code}
+                            className="w-full h-full object-contain"
+                            style={{ imageRendering: '-webkit-optimize-contrast' }}
+                          />
+                        ) : (
+                          <div className="text-slate-500 text-xs italic">Không có ảnh</div>
+                        )}
+                        <div className="absolute top-1 left-1 bg-black/80 px-1.5 py-0.5 rounded text-xs font-black flex items-center space-x-0.5">
+                          <span className={cardInfo.isRed ? 'text-red-400' : 'text-slate-100'}>{cardInfo.rank}</span>
+                          <span className={cardInfo.isRed ? 'text-red-400' : 'text-slate-100'}>{cardInfo.symbol}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] font-mono">
+                        <span className="text-white font-bold">{item.code}</span>
+                        {item.sharpness ? (
+                          <span className="bg-amber-950 text-amber-300 px-1 py-0.2 rounded border border-amber-800">
+                            Nét: {item.sharpness}
+                          </span>
+                        ) : item.confidence ? (
+                          <span className="bg-emerald-950 text-emerald-300 px-1 py-0.2 rounded border border-emerald-800">
+                            {item.confidence}%
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                    <span className="text-[10px] font-bold text-white mt-0.5">{item.cardName}</span>
-                    <span className="text-[9px] text-slate-400 font-mono">{item.confidence}%</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         ) : (
-          <div className="py-4 text-center text-slate-500 text-xs italic">
-            Chưa có quân bài nào trong khung đỏ. Hãy đưa lá bài vào khung đỏ trên màn hình Live để AI bắt dính frame 1080p sắc nét!
+          /* Khi chọn 'Tất cả': Hiển thị cả Frame nét nhất vừa bắt + Danh sách bài đã chia theo Cửa */
+          <div className="flex flex-col space-y-3">
+            {capturedFrame ? (
+              <div className="flex flex-wrap items-center gap-3 pb-3 border-b border-slate-800/80">
+                {/* Ảnh frame hiện tại to rõ nét nhất */}
+                <div className="flex items-center space-x-3 bg-slate-950 p-2 rounded-xl border border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+                  <div
+                    onClick={() => setZoomImage(capturedFrame.image)}
+                    className="w-20 h-28 sm:w-24 sm:h-32 bg-black rounded-lg overflow-hidden border border-emerald-500/40 relative flex items-center justify-center cursor-pointer hover:border-emerald-400 transition"
+                    title="Nhấp để xem ảnh 1080p gốc 1:1"
+                  >
+                    <img
+                      src={capturedFrame.image}
+                      alt={capturedFrame.cardName}
+                      className="w-full h-full object-contain"
+                      style={{ imageRendering: '-webkit-optimize-contrast' }}
+                    />
+                  </div>
+                  <div className="flex flex-col justify-center space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Frame Nét Nhất Bắt Dính</span>
+                    <span className="text-xl sm:text-2xl font-black text-white tracking-wide">{capturedFrame.cardName}</span>
+                    <div className="flex items-center space-x-2 text-[11px] font-mono">
+                      <span className="bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded font-bold border border-emerald-800">
+                        {capturedFrame.confidence}% Tin cậy
+                      </span>
+                      {capturedFrame.sharpness ? (
+                        <span className="bg-amber-950/80 text-amber-300 px-2 py-0.5 rounded font-bold border border-amber-700/60">
+                          Nét: {capturedFrame.sharpness}
+                        </span>
+                      ) : null}
+                      <span className="text-slate-400">{capturedFrame.timestamp}</span>
+                    </div>
+                    <span className="text-[10px] text-emerald-400/90 font-mono">Chuẩn 1080p @ 120fps Native Pixel</span>
+                  </div>
+                </div>
+
+                {/* Dải lịch sử các frame vừa bắt */}
+                {capturedHistory.length > 1 && (
+                  <div className="flex-1 min-w-[200px] flex items-center space-x-2 overflow-x-auto py-1">
+                    <span className="text-[11px] text-slate-400 font-bold whitespace-nowrap mr-1">Vừa bắt:</span>
+                    {capturedHistory.slice(1, 6).map((item, idx) => (
+                      <div key={idx} className="flex flex-col items-center bg-slate-950/80 p-1.5 rounded-lg border border-slate-800 flex-shrink-0">
+                        <div
+                          onClick={() => setZoomImage(item.image)}
+                          className="w-12 h-16 rounded overflow-hidden bg-black border border-slate-700 cursor-pointer hover:border-emerald-400 transition"
+                        >
+                          <img src={item.image} alt={item.cardName} className="w-full h-full object-contain" />
+                        </div>
+                        <span className="text-[10px] font-bold text-white mt-0.5">{item.cardName}</span>
+                        <span className="text-[9px] text-slate-400 font-mono">{item.confidence}%</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {/* Dải ảnh bài của tất cả các Cửa */}
+            <div>
+              <div className="text-xs font-bold text-slate-300 mb-1.5 flex items-center justify-between">
+                <span>Hình ảnh bài các Cửa ({doorCardImages.length} lá đã chia):</span>
+              </div>
+              {doorCardImages.length === 0 ? (
+                <div className="py-4 text-center text-slate-500 text-xs italic">
+                  Chưa có quân bài nào trong các cửa. Hãy đưa lá bài vào khung đỏ trên màn hình Live để AI chia bài vào cửa!
+                </div>
+              ) : (
+                <div className="flex items-center space-x-2 overflow-x-auto py-1 no-scrollbar">
+                  {doorCardImages.map(({ doorNum, slotIdx, item }, idx) => {
+                    const cardInfo = formatCardItem(item.code);
+                    return (
+                      <div
+                        key={idx}
+                        className="flex flex-col items-center bg-slate-950 p-1.5 rounded-lg border border-slate-800 flex-shrink-0"
+                      >
+                        <span className="text-[9px] font-bold text-amber-400 mb-0.5">
+                          C{doorNum}-L{slotIdx + 1}
+                        </span>
+                        <div
+                          onClick={() => item.image && setZoomImage(item.image)}
+                          className="w-14 h-20 rounded overflow-hidden bg-black border border-slate-700 cursor-pointer hover:border-amber-400 transition"
+                          title="Bấm để phóng to"
+                        >
+                          {item.image ? (
+                            <img src={item.image} alt={item.code} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-[10px] font-bold text-slate-400">
+                              {item.code}
+                            </div>
+                          )}
+                        </div>
+                        <span className={`text-[10px] font-bold mt-0.5 ${cardInfo.isRed ? 'text-red-400' : 'text-slate-100'}`}>
+                          {cardInfo.rank}{cardInfo.symbol}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
 
-      {/* 3. HÀNG DƯỚI: 7 CỬA CHƠI VỚI CÁC Ô CHỨA BÀI VIỀN VÀNG (THEO ẢNH) */}
+      {/* 3. HÀNG DƯỚI: BÀN CƯỢC CÁC CỬA CHƠI KÈM HÌNH ẢNH QUÂN BÀI TRỰC QUAN */}
       <div className="bg-slate-900/90 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur">
         <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-800 text-xs">
           <span className="font-bold text-slate-200 flex items-center space-x-1.5">
@@ -2178,8 +2499,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           )}
         </div>
 
-        {/* Lưới 7 Cửa (Grid 7 Columns) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5 sm:gap-3">
+        {/* Lưới các Cửa (Grid N Columns) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 lg:grid-cols-8 gap-2.5 sm:gap-3">
           {Array.from({ length: playerCount }, (_, i) => i + 1).map((doorNum) => {
             const cards = doorCards[doorNum] || [];
             const evalResult = evaluations[doorNum];
@@ -2212,11 +2533,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   </span>
                 </div>
 
-                {/* CÁC Ô CHỨA LÁ BÀI (VIỀN VÀNG DẠ QUANG ĐÚNG THEO ẢNH) */}
+                {/* CÁC Ô CHỨA LÁ BÀI KÈM HÌNH ẢNH 1080P THEO CỬA */}
                 <div className="space-y-1.5">
                   {Array.from({ length: cardsPerPlayer }, (_, slotIdx) => {
-                    const cardRaw = cards[slotIdx];
-                    const cardInfo = cardRaw ? formatCardItem(cardRaw) : null;
+                    const cardItem = cards[slotIdx];
+                    const cardInfo = cardItem ? formatCardItem(cardItem.code) : null;
                     const isActiveSlot = nextTarget?.door === doorNum && nextTarget?.slot === slotIdx;
 
                     return (
@@ -2224,23 +2545,47 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                         key={slotIdx}
                         onClick={() => {
                           setPickerTarget({
-                            mode: cardRaw ? 'edit' : 'add',
+                            mode: cardItem ? 'edit' : 'add',
                             groupNum: doorNum,
                             slotIndex: slotIdx,
-                            currentValue: cardRaw || ''
+                            currentValue: cardItem?.code || ''
                           });
                           setPickerOpen(true);
                         }}
-                        className={`h-11 sm:h-12 rounded-lg flex items-center justify-center cursor-pointer transition-all border-2 ${
+                        className={`h-16 sm:h-20 rounded-lg flex items-center justify-center cursor-pointer transition-all border-2 relative overflow-hidden group ${
                           isActiveSlot
                             ? 'border-emerald-400 bg-emerald-500/10 ring-2 ring-emerald-400 animate-pulse'
                             : cardInfo
                             ? 'border-yellow-400 bg-yellow-950/20 shadow-md shadow-yellow-500/10 hover:border-yellow-300'
                             : 'border-yellow-500/60 bg-slate-900/60 hover:border-yellow-400/80 border-dashed'
                         }`}
-                        title={cardRaw ? `Lá ${slotIdx + 1}: ${cardRaw} (Nhấn để sửa)` : `Lá ${slotIdx + 1}: Chờ bài`}
+                        title={cardItem ? `Lá ${slotIdx + 1}: ${cardItem.code} (Nhấn để sửa)` : `Lá ${slotIdx + 1}: Chờ bài`}
                       >
-                        {cardInfo ? (
+                        {cardItem?.image ? (
+                          <>
+                            <img
+                              src={cardItem.image}
+                              alt={cardItem.code}
+                              className="w-full h-full object-cover group-hover:scale-105 transition duration-200"
+                              style={{ imageRendering: '-webkit-optimize-contrast' }}
+                            />
+                            {/* Huy hiệu Góc trái: Tên lá bài & chất */}
+                            <div className="absolute top-1 left-1 bg-black/85 px-1.5 py-0.5 rounded text-[11px] font-black flex items-center space-x-0.5 border border-white/10 shadow">
+                              <span className={cardInfo?.isRed ? 'text-red-400' : 'text-slate-100'}>{cardInfo?.rank}</span>
+                              <span className={cardInfo?.isRed ? 'text-red-400' : 'text-slate-100'}>{cardInfo?.symbol}</span>
+                            </div>
+                            {/* Huy hiệu Góc phải: Độ nét / Conf */}
+                            {cardItem.sharpness ? (
+                              <div className="absolute bottom-1 right-1 bg-amber-950/90 text-amber-300 px-1 py-0.2 rounded text-[9px] font-mono border border-amber-600/50 shadow">
+                                Nét: {cardItem.sharpness}
+                              </div>
+                            ) : cardItem.confidence ? (
+                              <div className="absolute bottom-1 right-1 bg-emerald-950/90 text-emerald-300 px-1 py-0.2 rounded text-[9px] font-mono border border-emerald-600/50 shadow">
+                                {cardItem.confidence}%
+                              </div>
+                            ) : null}
+                          </>
+                        ) : cardInfo ? (
                           <div className="flex items-center space-x-1 font-black">
                             <span className={`text-base sm:text-lg font-mono ${cardInfo.isRed ? 'text-red-500' : 'text-slate-100'}`}>
                               {cardInfo.rank}
@@ -2261,7 +2606,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
                 {/* Subtext điểm */}
                 <div className="mt-2 pt-1 border-t border-white/5 text-center text-[10px] text-slate-400 font-medium">
-                  {evalResult?.subText || '0/3 lá'}
+                  {evalResult?.subText || `0/${cardsPerPlayer} lá`}
                 </div>
               </div>
             );
@@ -2304,10 +2649,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         onSelectCard={(val, targetGroup) => {
           setDoorCards((prev) => {
             const current = [...(prev[targetGroup] || [])];
+            const newCardItem: Mode2CardItem = {
+              code: val,
+              timestamp: new Date().toLocaleTimeString('vi-VN')
+            };
             if (pickerTarget.mode === 'edit' && pickerTarget.slotIndex !== undefined) {
-              current[pickerTarget.slotIndex] = val;
+              current[pickerTarget.slotIndex] = {
+                ...current[pickerTarget.slotIndex],
+                code: val
+              };
             } else {
-              current.push(val);
+              current.push(newCardItem);
             }
             return { ...prev, [targetGroup]: current };
           });
