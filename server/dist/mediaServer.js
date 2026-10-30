@@ -34,7 +34,7 @@ const MEDIA_ROOT = path_1.default.join(__dirname, '../media');
 const DVR_WINDOW_SECONDS = parseInt(process.env.DVR_WINDOW_SECONDS || '', 10) || 6 * 60 * 60;
 const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || '', 10) || 30 * 60;
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
-const HLS_SEGMENT_SECONDS = 0.5;
+const HLS_SEGMENT_SECONDS = 1.0;
 exports.hlsSessions = new Map();
 let streamEndedHandler;
 let streamStartedHandler;

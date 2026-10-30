@@ -1276,6 +1276,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           }
         });
 
+        hls.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {
+          if (data?.details) {
+            const total = data.details.totalduration || 0;
+            const start = data.details.fragments[0]?.start || 0;
+            const end = start + total;
+            if (total > 0) {
+              setDvrWindow({ start, end, duration: total });
+            }
+          }
+        });
+
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (data.fatal) {
             if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
