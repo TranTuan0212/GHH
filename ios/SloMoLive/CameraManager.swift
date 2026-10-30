@@ -1413,72 +1413,61 @@ public class CardDetector: NSObject, ObservableObject {
 
     public func processFrame(pixelBuffer: CVPixelBuffer, normX: CGFloat, normY: CGFloat, normW: CGFloat, normH: CGFloat, isFront: Bool) {
         guard let _ = self.visionModel, !isBusy else { return }
-
-        let now = CACurrentMediaTime()
-        // Tần suất quét 60-80fps (~15ms/lần) để tích lũy 4-5 frame trong 50ms cho chuyển động 120fps
-        guard (now - lastInferenceTime) >= 0.015 else { return }
-        lastInferenceTime = now
         isBusy = true
 
-        // 1. Thêm 25% padding an toàn quanh ô đỏ để bắt trọn 4 góc số bài khi xoay chéo 45° hoặc nghiêng phối cảnh 3D
-        let padX = normW * 0.25
-        let padY = normH * 0.25
-        let vx = max(CGFloat(0.0), min(CGFloat(1.0), normX - normW / 2.0 - padX))
-        let vy = max(CGFloat(0.0), min(CGFloat(1.0), CGFloat(1.0) - (normY + normH / 2.0 + padY)))
-        let vw = min(CGFloat(1.0) - vx, normW + padX * 2.0)
-        let vh = min(CGFloat(1.0) - vy, normH + padY * 2.0)
+        // 1. Cắt trực tiếp vùng ô đỏ thành ảnh con (croppedPatch) kèm 20% margin an toàn
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let bufW = ciImage.extent.width
+        let bufH = ciImage.extent.height
+        guard bufW > 50, bufH > 50 else {
+            isBusy = false
+            return
+        }
+
+        let pad = 0.20
+        let w = normW * (1.0 + pad * 2.0)
+        let h = normH * (1.0 + pad * 2.0)
+        let cropW = max(30, min(bufW, w * bufW))
+        let cropH = max(30, min(bufH, h * bufH))
+        let cropX = max(0, min(bufW - cropW, (normX - w / 2.0) * bufW))
+        let cropY = max(0, min(bufH - cropH, (1.0 - (normY + h / 2.0)) * bufH))
+        let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
+        let croppedPatch = ciImage.cropped(to: cropPixelRect)
+
+        // Tọa độ ROI chuẩn của ô đỏ cho snapshot
+        let vx = max(CGFloat(0.0), min(CGFloat(1.0), normX - normW / 2.0))
+        let vy = max(CGFloat(0.0), min(CGFloat(1.0), CGFloat(1.0) - (normY + normH / 2.0)))
+        let vw = min(CGFloat(1.0) - vx, normW)
+        let vh = min(CGFloat(1.0) - vy, normH)
         let roiRect = CGRect(x: vx, y: vy, width: vw, height: vh)
 
         queue.async { [weak self] in
             defer { self?.isBusy = false }
             guard let self = self else { return }
 
-            // 2. Danh sách hướng xoay & lật gương ưu tiên:
-            // Với Camera trước: số bị ngược ngang -> Ưu tiên các hướng Mirrored (.upMirrored, .downMirrored, .rightMirrored, .leftMirrored)
-            // Với Camera sau: số chuẩn -> Thử .up, .down, .right, .left
-            let orientations: [CGImagePropertyOrientation] = isFront
-                ? [.upMirrored, .downMirrored, .rightMirrored, .leftMirrored, .up, .down]
-                : [.up, .down, .right, .left, .upMirrored]
+            // 2. ĐỐI XỨNG CAM TRƯỚC NGAY TỪ ĐẦU (Chạy siêu tốc 1.8ms trên Apple Neural Engine):
+            // Với Cam trước: .upMirrored (lật ngược lại số và chất về dạng xuôi chuẩn 100% tại chỗ)
+            // Với Cam sau: .up (chuẩn 100%)
+            let primaryOrient: CGImagePropertyOrientation = isFront ? .upMirrored : .up
+            let primaryHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: primaryOrient, options: [:])
+            var detected = self.evaluateVisionHandler(primaryHandler)
 
-            var detected: (cardCode: String, conf: Int)? = nil
-
-            // Vòng 1: Quét siêu tốc các góc 0°, 180°, 90°, 270° (kèm khử ngược số cho Cam trước)
-            for orient in orientations {
-                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orient, options: [:])
-                if let res = self.evaluateVisionHandler(handler, roiRect: roiRect) {
-                    detected = res
-                    break
-                }
-            }
-
-            // Vòng 2: Nếu chưa bắt được do bài bị xoay chéo 30°-60° hoặc nghiêng 3D:
-            // Thử xoay ảnh góc nghiêng chéo 45° quanh tâm ô đỏ
+            // 3. CHỈ XOAY KHI KHÔNG NHẬN DIỆN ĐƯỢC:
             if detected == nil {
-                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                let bufW = ciImage.extent.width
-                let bufH = ciImage.extent.height
-                if bufW > 50 && bufH > 50 {
-                    let cropX = max(0, min(bufW, roiRect.origin.x * bufW))
-                    let cropY = max(0, min(bufH, roiRect.origin.y * bufH))
-                    let cropW = max(30, min(bufW - cropX, roiRect.size.width * bufW))
-                    let cropH = max(30, min(bufH - cropY, roiRect.size.height * bufH))
-                    let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
-
-                    let midX = cropPixelRect.midX
-                    let midY = cropPixelRect.midY
-                    let rotTransform = CGAffineTransform(translationX: -midX, y: -midY)
-                        .concatenating(CGAffineTransform(rotationAngle: CGFloat.pi / 4.0)) // 45 độ
-                        .concatenating(CGAffineTransform(translationX: midX, y: midY))
-
-                    let rot45Image = ciImage.cropped(to: cropPixelRect).transformed(by: rotTransform)
-                    let rotHandler = VNImageRequestHandler(ciImage: rot45Image, orientation: isFront ? .upMirrored : .up, options: [:])
-                    if let res = self.evaluateVisionHandler(rotHandler, roiRect: nil) {
-                        detected = res
-                    }
-                }
+                // Thử góc ngược 180 độ (khi người chia cầm bài chúc đầu vào camera)
+                let secOrient: CGImagePropertyOrientation = isFront ? .downMirrored : .down
+                let secHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: secOrient, options: [:])
+                detected = self.evaluateVisionHandler(secHandler)
             }
 
-            // 3. Xử lý kết quả nhận diện
+            if detected == nil {
+                // Thử góc ngang 90 độ
+                let sideOrient: CGImagePropertyOrientation = isFront ? .rightMirrored : .right
+                let sideHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: sideOrient, options: [:])
+                detected = self.evaluateVisionHandler(sideHandler)
+            }
+
+            // 4. Xử lý kết quả nhận diện
             if let d = detected {
                 self.processCardCandidate(cardCode: d.cardCode, conf: d.conf, pixelBuffer: pixelBuffer, roiRect: roiRect, isFront: isFront)
             } else {
@@ -1488,7 +1477,7 @@ public class CardDetector: NSObject, ObservableObject {
     }
 
     /// Đánh giá kết quả từ VNImageRequestHandler trên CoreML
-    private func evaluateVisionHandler(_ handler: VNImageRequestHandler, roiRect: CGRect?) -> (cardCode: String, conf: Int)? {
+    private func evaluateVisionHandler(_ handler: VNImageRequestHandler) -> (cardCode: String, conf: Int)? {
         guard let visionModel = self.visionModel else { return nil }
         var result: (cardCode: String, conf: Int)? = nil
 
@@ -1496,7 +1485,7 @@ public class CardDetector: NSObject, ObservableObject {
             if let objectObs = req.results as? [VNRecognizedObjectObservation], !objectObs.isEmpty {
                 if let best = objectObs.max(by: { $0.confidence < $1.confidence }),
                    let label = best.labels.first,
-                   label.confidence >= 0.30 {
+                   label.confidence >= 0.25 {
                     let conf = Int((label.confidence * 100.0).rounded())
                     result = (label.identifier, conf)
                 }
@@ -1515,7 +1504,7 @@ public class CardDetector: NSObject, ObservableObject {
                                 maxIdx = i
                             }
                         }
-                        if maxConf >= 0.30 && maxIdx >= 0 {
+                        if maxConf >= 0.25 && maxIdx >= 0 {
                             let cardNames = [
                                 "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S",
                                 "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S",
@@ -1535,9 +1524,6 @@ public class CardDetector: NSObject, ObservableObject {
             }
         }
         request.imageCropAndScaleOption = .scaleFill
-        if let roi = roiRect {
-            request.regionOfInterest = roi
-        }
         try? handler.perform([request])
         return result
     }
