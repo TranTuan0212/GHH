@@ -319,6 +319,9 @@ public class CameraManager: NSObject, ObservableObject {
         // Đảm bảo Audio Session đã được cấu hình và kích hoạt trước khi tạo LFLiveSession
         configureAndActivateAudioSession()
         let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
+        audioCfg.numberOfChannels = 1
+        audioCfg.audioSampleRate = ._44100Hz
+        audioCfg.audioBitrate = ._64Kbps
 
         let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
         let uiOrientation: UIInterfaceOrientation = {
@@ -819,10 +822,9 @@ public class CameraManager: NSObject, ObservableObject {
         isConnecting = true
         errorMessage = nil
 
-        // Luôn chuyển tiếp frame ngay khi đã yêu cầu mở RTMP. Một số bản LFLiveKit publish thành
-        // công nhưng không bắn callback .start; nếu chỉ mở cổng ở callback đó thì server chỉ nhận
-        // handshake mà không nhận packet video. LFLiveKit tự bỏ frame trong lúc handshake.
-        self.isStreamingAtomic = true
+        // ĐẶT BẰNG FALSE: Chờ RTMP handshake & Audio Specific Config hoàn tất trước khi mở van video 120fps,
+        // ngăn hiện tượng bão khung hình làm MediaMTX nhận video trước và chốt luồng 1 track (H.264) rồi văng lỗi khi audio tới.
+        self.isStreamingAtomic = false
 
         // Đảm bảo Audio Session luôn được kích hoạt và micro không bị mute trước khi bắt đầu stream
         self.configureAndActivateAudioSession()
@@ -843,6 +845,11 @@ public class CameraManager: NSObject, ObservableObject {
             print("[CameraManager] → Gọi LFLiveSession.startLive() với URL: \(url)")
             let startTimestamp = Date()
             session.startLive(stream)
+            // Mở van video sau 0.5s nếu chưa nhận .start callback (đề phòng một số bản LFLiveKit không bắn callback)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self, self.isConnecting || self.isStreaming else { return }
+                self.isStreamingAtomic = true
+            }
             // KHÔNG set self?.isStreaming = true ở đây — chỉ set khi delegate báo liveStateDidChange(.start)
             // (tức là RTMP handshake đã thành công). Nếu set true tại đây, UI sẽ hiển thị "LIVE" dù
             // thực tế stream chưa được server chấp nhận, gây nhầm lẫn cho user.

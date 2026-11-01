@@ -70,12 +70,18 @@ post_install do |installer|
 
       # Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m
       # so 120fps bursts after 4G micro-stalls drain immediately on rtmpSendQueue.
+      # Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m
+      # and set RTMP chunk size to 4096 bytes so AAC audio packets (~200B) are never fragmented,
+      # eliminating 'received type 1 chunk but expected type 3 chunk' on strict media servers like MediaMTX.
       rtmp_sock = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'publish', 'LFStreamRtmpSocket.m')
       if File.exist?(rtmp_sock)
         sock_source = File.read(rtmp_sock)
         sock_patched = sock_source.gsub(
           /dispatch_async\(dispatch_get_global_queue\(DISPATCH_QUEUE_PRIORITY_DEFAULT,\s*0\),\s*\^\{\s*\/\/[^\n]*\n\s*_self\.isSending\s*=\s*NO;\s*\}\);/,
           '_self.isSending = NO;'
+        ).gsub(
+          'if (!RTMP_ConnectStream(_rtmp, 0))',
+          "_rtmp->m_outChunkSize = 4096;\n    RTMP_SendCtrl(_rtmp, 1, 4096, 0);\n    if (!RTMP_ConnectStream(_rtmp, 0))"
         )
         File.write(rtmp_sock, sock_patched) if sock_patched != sock_source
       end
