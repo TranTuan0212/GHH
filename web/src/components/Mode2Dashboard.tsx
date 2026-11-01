@@ -452,7 +452,15 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     return computeAllGroupAnswers(allEntries, playerCount, gameMode);
   }, [doorCards, playerCount, gameMode]);
 
-  const winnerDoor = groupAnswersResult.winnerGroupNum || 0;
+  const isAllDoorsComplete = useMemo(() => {
+    if (playerCount <= 0) return false;
+    for (let d = 1; d <= playerCount; d++) {
+      if ((doorCards[d] || []).length < cardsPerPlayer) return false;
+    }
+    return true;
+  }, [doorCards, playerCount, cardsPerPlayer]);
+
+  const winnerDoor = isAllDoorsComplete ? (groupAnswersResult.winnerGroupNum || 0) : 0;
 
   // Danh sách các quân bài đã chia theo Cửa để hiển thị ở Khay Soi & Bàn Cược
   const doorCardImages = useMemo(() => {
@@ -1440,7 +1448,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     if (!isTtsEnabled && !forceSpeak) return;
 
     const completed = (groupAnswersResult.sortedComplete || []).filter((a) => a.isComplete && a.score >= 0);
-    if (completed.length < 2) return;
+    if (!isAllDoorsComplete || completed.length < playerCount) return;
 
     const currentHash = completed.map((a) => `${a.groupNum}:${a.score}:${a.label}`).join('|');
     if (!forceSpeak && lastSpokenRoundHashRef.current === currentHash) return;
@@ -1509,10 +1517,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Tự động đọc kết quả khi ván bài chia xong đủ các cửa
   useEffect(() => {
-    if (groupAnswersResult.completeGroupsCount >= playerCount && playerCount >= 2) {
+    if (isAllDoorsComplete && groupAnswersResult.completeGroupsCount >= playerCount && playerCount >= 2) {
       speakRoundResult(false);
     }
-  }, [groupAnswersResult.completeGroupsCount, playerCount, speakRoundResult]);
+  }, [isAllDoorsComplete, groupAnswersResult.completeGroupsCount, playerCount, speakRoundResult]);
 
   // Tua bước chính xác từng khoảng giây (Replay DVR)
   const stepReplay = (offsetSeconds: number) => {
@@ -2354,7 +2362,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                     <Volume2 className="w-3 h-3 text-amber-400" />
                     <span>Đọc lại (2 lần)</span>
                   </button>
-                  {winnerDoor > 0 && (
+                  {isAllDoorsComplete && winnerDoor > 0 && (
                     <span className="text-[11px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/50 shadow">
                       👑 Cửa {winnerDoor} Thắng Nhất
                     </span>
@@ -2421,21 +2429,27 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                       </span>
 
                       {/* Xếp hạng */}
-                      {ans.rank && ans.isComplete && (
+                      {ans.rank && (
                         <div className="mt-1 w-full flex justify-center">
-                          <span
-                            className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
-                              ans.rank === 1
-                                ? 'bg-amber-500 text-slate-950 ring-1 ring-amber-300 shadow shadow-amber-500/40'
-                                : ans.rank === 2
-                                ? 'bg-slate-300 text-slate-950 font-bold'
-                                : ans.rank === 3
-                                ? 'bg-amber-800 text-amber-100 font-bold'
-                                : 'bg-slate-800 text-slate-400'
-                            }`}
-                          >
-                            {ans.rank === 1 ? '👑 Hạng 1' : ans.rank === 2 ? '🥈 Hạng 2' : ans.rank === 3 ? '🥉 Hạng 3' : `#${ans.rank}`}
-                          </span>
+                          {isAllDoorsComplete ? (
+                            <span
+                              className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
+                                ans.rank === 1
+                                  ? 'bg-amber-500 text-slate-950 ring-1 ring-amber-300 shadow shadow-amber-500/40'
+                                  : ans.rank === 2
+                                  ? 'bg-slate-300 text-slate-950 font-bold'
+                                  : ans.rank === 3
+                                  ? 'bg-amber-800 text-amber-100 font-bold'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {ans.rank === 1 ? '👑 Hạng 1' : ans.rank === 2 ? '🥈 Hạng 2' : ans.rank === 3 ? '🥉 Hạng 3' : `#${ans.rank}`}
+                            </span>
+                          ) : (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-slate-800 text-amber-300 border border-amber-500/30">
+                              Tạm #{ans.rank}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2799,7 +2813,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             <Layers className="w-4 h-4 text-amber-400" />
             <span>Bàn Cược {playerCount} Cửa Chơi ({cardsPerPlayer} lá/cửa)</span>
           </span>
-          {winnerDoor > 0 && (
+          {isAllDoorsComplete && winnerDoor > 0 && (
             <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 flex items-center space-x-1 animate-pulse">
               <Award className="w-3.5 h-3.5 text-amber-400" />
               <span>Cửa {winnerDoor} Thắng Lớn!</span>

@@ -822,9 +822,9 @@ public class CameraManager: NSObject, ObservableObject {
         isConnecting = true
         errorMessage = nil
 
-        // ĐẶT BẰNG FALSE: Chờ RTMP handshake & Audio Specific Config hoàn tất trước khi mở van video 120fps,
-        // ngăn hiện tượng bão khung hình làm MediaMTX nhận video trước và chốt luồng 1 track (H.264) rồi văng lỗi khi audio tới.
-        self.isStreamingAtomic = false
+        // ĐẶT BẰNG TRUE: Cung cấp khung hình video ngay từ đầu đồng bộ cùng audio stream,
+        // để LFLiveKit khởi tạo onMetaData đầy đủ cả 2 tracks (H.264 & AAC) cùng lúc tới MediaMTX.
+        self.isStreamingAtomic = true
 
         // Đảm bảo Audio Session luôn được kích hoạt và micro không bị mute trước khi bắt đầu stream
         self.configureAndActivateAudioSession()

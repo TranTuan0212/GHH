@@ -581,7 +581,7 @@ export interface GroupAnswerItem {
  * Hạng 9: Cam
  * Hạng 10+: Xám
  */
-export function getRankTheme(r: number | null, isComplete: boolean) {
+export function getRankTheme(r: number | null, isComplete: boolean, isAllComplete: boolean = true) {
   if (r === null) {
     return {
       rankBadgeText: '',
@@ -591,7 +591,7 @@ export function getRankTheme(r: number | null, isComplete: boolean) {
     };
   }
 
-  if (!isComplete) {
+  if (!isComplete || !isAllComplete) {
     return {
       rankBadgeText: `Hạng ${r} (Tạm)`,
       rankBadgeClass: 'bg-slate-800 text-amber-300 border border-amber-500/40 text-[9px] font-bold',
@@ -819,12 +819,16 @@ export function computeAllGroupAnswers(
   }
 
   // 3. Xếp hạng đối chiếu toàn cục từ cao xuống thấp (Hạng 1, 2, 3...)
-  // Nhóm đã đủ bài (isComplete) ưu tiên xếp trên nhóm đang nhập dở
+  // Xếp theo điểm số thực tế từ cao xuống thấp (không ưu tiên cửa đủ lá trước để tránh sai điểm)
+  const isAllComplete = completeGroupsCount === numGroups && completeGroupsCount > 0;
   const sortedComplete = [...completeList].sort((a, b) => {
+    if (Math.abs(b.score - a.score) >= 0.0001) {
+      return b.score - a.score;
+    }
     if (a.isComplete !== b.isComplete) {
       return a.isComplete ? -1 : 1;
     }
-    return b.score - a.score;
+    return a.groupNum - b.groupNum;
   });
   const ranksMap: { [groupNum: number]: number } = {};
   let currentRank = 1;
@@ -835,7 +839,8 @@ export function computeAllGroupAnswers(
     ranksMap[sortedComplete[i].groupNum] = currentRank;
   }
 
-  const winnerGroupNum: number | null = sortedComplete.length > 0 && sortedComplete[0].isComplete ? sortedComplete[0].groupNum : null;
+  // Chỉ công bố người thắng khi TẤT CẢ các cửa đã nhận đủ số lá bài
+  const winnerGroupNum: number | null = isAllComplete && sortedComplete.length > 0 ? sortedComplete[0].groupNum : null;
 
   // Lấy kết quả của Nhóm 1 nếu có chế độ so với Nhà Cái
   const group1Item = completeList.find((g) => g.groupNum === 1);
@@ -843,7 +848,7 @@ export function computeAllGroupAnswers(
   const answers: GroupAnswerItem[] = tempAnswers.map((a) => {
     const hasCards = a.items.length > 0 && a.score >= 0;
     const r = hasCards ? ranksMap[a.groupNum] : null;
-    const isWinner = r === 1 && a.isComplete;
+    const isWinner = isAllComplete && r === 1;
     const wins = headToHead[a.groupNum]?.wins || 0;
     const losses = headToHead[a.groupNum]?.losses || 0;
     const ties = headToHead[a.groupNum]?.ties || 0;
@@ -852,7 +857,7 @@ export function computeAllGroupAnswers(
     const tiedWith = headToHead[a.groupNum]?.tiedWith || [];
     const totalCompared = Math.max(0, completeGroupsCount - 1);
 
-    const theme = getRankTheme(r, a.isComplete);
+    const theme = getRankTheme(r, a.isComplete, isAllComplete);
     const rankBadgeText = theme.rankBadgeText;
     const rankBadgeClass = theme.rankBadgeClass;
     const rankCardClass = theme.rankCardClass;
@@ -894,13 +899,14 @@ export function computeAllGroupAnswers(
   let leaderboardText = '';
   for (let i = 0; i < sortedCompleteAnswers.length; i++) {
     const g = sortedCompleteAnswers[i];
-    const icon = g.rank === 1 ? '👑 ' : g.rank === 2 ? '🥈 ' : g.rank === 3 ? '🥉 ' : '';
+    const icon = isAllComplete ? (g.rank === 1 ? '👑 ' : g.rank === 2 ? '🥈 ' : g.rank === 3 ? '🥉 ' : '') : '';
+    const rankLabel = isAllComplete ? `Hạng ${g.rank}` : `Tạm #${g.rank}`;
     if (i > 0) {
       const prev = sortedCompleteAnswers[i - 1];
       const isTie = Math.abs(g.score - prev.score) < 0.0001;
       leaderboardText += isTie ? '  =  ' : '  >  ';
     }
-    leaderboardText += `${icon}${g.name} (Hạng ${g.rank} • ${g.label})`;
+    leaderboardText += `${icon}${g.name} (${rankLabel} • ${g.label})`;
   }
 
   return {
