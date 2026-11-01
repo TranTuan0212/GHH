@@ -565,6 +565,31 @@ app.use('/api/stream', streamRouter);
 
 app.use('/api/ai', aiRouter);
 
+// Vietnamese TTS Audio Proxy (đảm bảo đọc tiếng Việt rõ ràng trên mọi trình duyệt / Windows thiếu gói giọng đọc vi-VN)
+app.get('/api/tts', async (req, res) => {
+  try {
+    const text = ((req.query.text as string) || '').trim().slice(0, 200);
+    if (!text) {
+      return res.status(400).send('Missing text');
+    }
+    const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&q=${encodeURIComponent(text)}`;
+    const upstream = await fetch(ttsUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    if (!upstream.ok) {
+      return res.status(upstream.status).send('TTS upstream error');
+    }
+    const arrayBuffer = await upstream.arrayBuffer();
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err) {
+    res.status(500).send('TTS failed');
+  }
+});
+
 
 
 

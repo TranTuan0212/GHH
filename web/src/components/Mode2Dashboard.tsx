@@ -119,12 +119,34 @@ function formatCardItem(raw: string): { rank: string; symbol: string; isRed: boo
 
 // Lazy singleton AudioContext để không bao giờ làm đứng main thread khi bắt bài
 let globalAudioCtx: AudioContext | null = null;
+let audioUnlocked = false;
+let activeTtsAudio: HTMLAudioElement | null = null;
+
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    try {
+      if (!globalAudioCtx) {
+        globalAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      if (globalAudioCtx.state === 'suspended') {
+        globalAudioCtx.resume().catch(() => {});
+      }
+    } catch {}
+  };
+  window.addEventListener('pointerdown', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio, { passive: true });
+  window.addEventListener('touchstart', unlockAudio, { passive: true });
+}
 function playBeepSound() {
   try {
+    if (!audioUnlocked && !globalAudioCtx) return;
     if (!globalAudioCtx) {
       globalAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
     if (globalAudioCtx.state === 'suspended') {
+      if (!audioUnlocked) return;
       globalAudioCtx.resume().catch(() => {});
     }
     const osc = globalAudioCtx.createOscillator();
@@ -626,6 +648,13 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     if (onFinishRound) onFinishRound();
   };
 
+  const [webrtcRetryTick, setWebrtcRetryTick] = useState<number>(0);
+  const [dvrResetTick, setDvrResetTick] = useState<number>(0);
+  const hasWebRtcSignalRef = useRef<boolean>(false);
+  useEffect(() => {
+    hasWebRtcSignalRef.current = hasWebRtcSignal;
+  }, [hasWebRtcSignal]);
+
   // XONG PHIÊN: Xóa sạch toàn bộ dữ liệu bài, lịch sử các ván, kết quả, âm thanh và DB server
   const handleResetSession = useCallback(() => {
     doorCardsRef.current = {};
@@ -633,18 +662,39 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     setRoundHistories([]);
     localStorage.removeItem('mode2_histories');
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (activeTtsAudio) {
+      try {
+        activeTtsAudio.pause();
+        activeTtsAudio.currentTime = 0;
+      } catch {}
+      activeTtsAudio = null;
+    }
     lastSpokenRoundHashRef.current = '';
     setCapturedHistory([]);
     setCapturedFrame(null);
     setDebugCrop(null);
     prevThumbRef.current = null;
     setLastDetectedCard('');
-    if (onFinishRound) onFinishRound();
-    if (socket && roomId) {
+    // Giữ nguyên luồng Live WebRTC đang phát, không làm đen màn hình!
+    setIsLive(true);
+    setSeekPercent(100);
+    setPlaybackRate(1.0);
+    if (liveVideoRef.current && liveVideoRef.current.paused) {
+      liveVideoRef.current.play().catch(() => {});
+    }
+    if (onFinishRound) {
+      onFinishRound();
+    } else if (socket && roomId) {
       socket.emit('finish_round', { roomId });
+    }
+    if (socket && roomId) {
       socket.emit('reset_session_ram', { roomId });
       socket.emit('cards_cleared', { roomId });
     }
+    // Sau 1.5s khi server đã tạo lại playlist DVR 0s mới, nạp lại ngầm HLS DVR
+    setTimeout(() => {
+      setDvrResetTick((t) => t + 1);
+    }, 1500);
   }, [socket, roomId, onFinishRound]);
 
   // 1. Tính toán vùng hiển thị thực tế của Video bên trong container (loại bỏ viền đen)
@@ -940,16 +990,37 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // Đồng bộ trạng thái Stream tức thì qua Socket.io
   useEffect(() => {
     if (!socket) return;
-    const handleStatusChanged = (data: { roomId?: string; status: 'LIVE' | 'ENDED'; session?: StreamSession }) => {
+    const handleStatusChanged = (data: { roomId?: string; status: 'LIVE' | 'ENDED' | 'IDLE'; session?: StreamSession }) => {
       if (data.status === 'LIVE' && data.session) {
-        console.log('[Mode2] ⚡ Socket thông báo có luồng Live mới:', data.session.streamKey);
-        setActiveStreamSession(data.session);
-        setHasVideoSignal(false);
-        setHasWebRtcSignal(false);
+        console.log('[Mode2] ⚡ Socket thông báo có luồng Live:', data.session.streamKey);
+        setActiveStreamSession((prev) => {
+          const isNewStream = !prev || prev.streamKey !== data.session!.streamKey || prev.status !== 'LIVE';
+          if (isNewStream) {
+            setHasVideoSignal(false);
+            setHasWebRtcSignal(false);
+            setIsLive(true);
+            setSeekPercent(100);
+            setWebrtcRetryTick((t) => t + 1);
+          } else if (!hasWebRtcSignalRef.current) {
+            // Cùng streamKey (vd: sau khi bấm Xong Phiên) nhưng nếu WebRTC chưa lên thì kích hoạt nối lại
+            setIsLive(true);
+            setSeekPercent(100);
+            setWebrtcRetryTick((t) => t + 1);
+          } else {
+            // Cùng streamKey và WebRTC đang phát mượt -> Giữ nguyên hình Live, chỉ đảm bảo đang ở chế độ LIVE
+            setIsLive(true);
+            setSeekPercent(100);
+          }
+          return data.session!;
+        });
       } else if (data.status === 'ENDED') {
         console.log('[Mode2] ⏹ Socket thông báo phiên Live kết thúc (vẫn giữ Replay DVR để tua xem)');
         setActiveStreamSession((prev) => prev ? { ...prev, status: 'ENDED' } : null);
         setIsLive(false);
+        setHasWebRtcSignal(false);
+      } else if (data.status === 'IDLE') {
+        setActiveStreamSession(null);
+        setHasVideoSignal(false);
         setHasWebRtcSignal(false);
       }
     };
@@ -1108,11 +1179,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           if (cancelled) return;
           if (data?.stream?.status === 'LIVE') {
             setActiveStreamSession((prev) => {
-              if (prev?.streamKey !== data.stream.streamKey) {
+              if (prev?.streamKey !== data.stream.streamKey || prev?.status !== 'LIVE') {
                 console.log('[Mode2] Tự động bắt luồng Live mới từ server:', data.stream.streamKey);
                 setHasVideoSignal(false);
                 setHasWebRtcSignal(false);
+                setIsLive(true);
+                setSeekPercent(100);
+                setWebrtcRetryTick((t) => t + 1);
                 return data.stream;
+              }
+              if (!hasWebRtcSignalRef.current && (!peerRef.current || peerRef.current.connectionState === 'failed' || peerRef.current.connectionState === 'disconnected' || peerRef.current.connectionState === 'closed')) {
+                setWebrtcRetryTick((t) => t + 1);
               }
               return prev;
             });
@@ -1149,17 +1226,26 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     }
   }, [activeStreamSession?.streamKey, activeStreamSession?.status]);
 
-  // 1. Kết nối WebRTC WHEP Live trực tiếp (Zero Delay <0.2s, 60fps mượt tuyệt đối) với Auto-Retry Loop
+  // 1. Kết nối WebRTC WHEP Live trực tiếp (Zero Delay <0.2s, 60fps mượt tuyệt đối) với Auto-Retry Loop kiên trì
   useEffect(() => {
     if (!whepUrl) return;
     let cancelled = false;
     let peer: RTCPeerConnection | null = null;
     let sessionUrl: string | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    setHasWebRtcSignal(false);
+    const triggerAutoReconnect = () => {
+      if (cancelled) return;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (!cancelled) {
+          setWebrtcRetryTick((t) => t + 1);
+        }
+      }, 700);
+    };
 
     const connectWebRtc = async () => {
-      for (let attempt = 1; !cancelled && attempt <= 3; attempt++) {
+      for (let attempt = 1; !cancelled; attempt++) {
         try {
           if (peerRef.current) {
             peerRef.current.close();
@@ -1177,14 +1263,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             try {
               const anyReceiver = receiver as any;
               if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
-                anyReceiver.playoutDelayHint = 0;
+                anyReceiver.playoutDelayHint = 0.05;
               }
               if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
-                anyReceiver.jitterBufferTarget = 0;
+                anyReceiver.jitterBufferTarget = 50;
               }
             } catch {}
             if (cancelled || !streams[0] || !liveVideoRef.current) return;
-            receivedTrack = true;
+            if (event.track.kind === 'video') {
+              receivedTrack = true;
+            }
             liveVideoRef.current.srcObject = streams[0];
             liveVideoRef.current.playbackRate = 1.0;
             liveVideoRef.current.play().catch(() => {});
@@ -1198,8 +1286,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             const vTrack = streams[0].getVideoTracks()[0];
             if (vTrack) {
               vTrack.onended = () => {
-                console.log('[Mode2] WebRTC video track ended');
+                console.log('[Mode2] WebRTC video track ended -> tự động nối lại...');
                 setHasWebRtcSignal(false);
+                triggerAutoReconnect();
               };
             }
           };
@@ -1235,23 +1324,26 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           if (cancelled) break;
           await peer.setRemoteDescription({ type: 'answer', sdp: answer });
 
-          // Chờ video track đến (tối đa 1.5s)
+          // Chờ video track đến (tối đa 2.5s)
           await new Promise<void>((resolve, reject) => {
             if (receivedTrack) return resolve();
             const timer = setTimeout(() => {
               if (!receivedTrack) reject(new Error('Chờ video track timeout'));
               else resolve();
-            }, 1500);
-            peer!.addEventListener('track', () => {
-              clearTimeout(timer);
-              resolve();
-            }, { once: true });
+            }, 2500);
+            peer!.addEventListener('track', (ev) => {
+              if (ev.track.kind === 'video') {
+                clearTimeout(timer);
+                resolve();
+              }
+            });
           });
 
           peer.onconnectionstatechange = () => {
             if (peer?.connectionState === 'failed' || peer?.connectionState === 'disconnected') {
-              console.log('[Mode2] WebRTC disconnected, fallback to HLS...');
+              console.log('[Mode2] WebRTC disconnected -> fallback to HLS & tự động nối lại...');
               setHasWebRtcSignal(false);
+              triggerAutoReconnect();
             }
           };
 
@@ -1267,8 +1359,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             peerRef.current = null;
           }
           if (cancelled) break;
-          // Chờ MediaMTX nhận RTMP từ iPhone -> Giãn cách 1.2s tránh làm nghẽn MediaMTX
-          await new Promise((r) => setTimeout(r, 400));
+          // Chờ MediaMTX nhận RTMP từ iPhone (thử liên tục mỗi 500ms cho đến khi luồng lên)
+          await new Promise((r) => setTimeout(r, attempt <= 15 ? 500 : 1000));
         }
       }
     };
@@ -1277,6 +1369,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
     return () => {
       cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (sessionUrl) {
         fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
         sessionUrl = null;
@@ -1286,7 +1379,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         peerRef.current = null;
       }
     };
-  }, [whepUrl]);
+  }, [whepUrl, webrtcRetryTick]);
 
   // 2. Kết nối HLS Replay DVR Master (để tua chậm, tua lại chi tiết từng frame 120fps)
   useEffect(() => {
@@ -1294,22 +1387,27 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     if (!video || !activeStreamSession?.streamKey) return;
 
     const streamKey = activeStreamSession.streamKey;
-    const replayUrl = `/replay/${streamKey}/index.m3u8`;
-    const liveHlsUrl = activeStreamSession.hlsPlaylistUrl || `/live/${streamKey}/index.m3u8`;
+    const replayUrl = `/replay/${streamKey}/index.m3u8?r=${dvrResetTick}`;
+    const liveHlsUrl = `${activeStreamSession.hlsPlaylistUrl || `/live/${streamKey}/index.m3u8`}?r=${dvrResetTick}`;
     let isCancelled = false;
 
     (async () => {
       let activeHlsUrl = replayUrl;
-      // Nạp trực tiếp không chờ đợi vòng lặp gây trễ màn hình
-      try {
-        const resReplay = await fetch(replayUrl, { method: 'HEAD', cache: 'no-store' });
-        if (resReplay.ok) {
-          activeHlsUrl = replayUrl;
-        } else {
-          activeHlsUrl = liveHlsUrl;
-        }
-      } catch {
-        activeHlsUrl = liveHlsUrl;
+      // Chờ cho tới khi FFmpeg ghi xong segment .m3u8 đầu tiên (tránh lỗi 404 làm đứng HLS)
+      for (let attempt = 1; !isCancelled && attempt <= 30; attempt++) {
+        try {
+          const resReplay = await fetch(replayUrl, { method: 'HEAD', cache: 'no-store' });
+          if (resReplay.ok) {
+            activeHlsUrl = replayUrl;
+            break;
+          }
+          const resLive = await fetch(liveHlsUrl, { method: 'HEAD', cache: 'no-store' });
+          if (resLive.ok) {
+            activeHlsUrl = liveHlsUrl;
+            break;
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 800));
       }
       if (isCancelled) return;
 
@@ -1340,8 +1438,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (!hasVideoSignal) setHasVideoSignal(true);
-          if (!hasWebRtcSignal) {
+          setHasVideoSignal(true);
+          if (!hasWebRtcSignalRef.current) {
             video.play().catch(() => {});
           }
         });
@@ -1368,8 +1466,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = activeHlsUrl;
-        if (!hasVideoSignal) setHasVideoSignal(true);
-        if (!hasWebRtcSignal) {
+        setHasVideoSignal(true);
+        if (!hasWebRtcSignalRef.current) {
           video.play().catch(() => {});
         }
       }
@@ -1382,7 +1480,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [activeStreamSession?.streamKey, activeStreamSession?.hlsPlaylistUrl]);
+  }, [activeStreamSession?.streamKey, activeStreamSession?.hlsPlaylistUrl, dvrResetTick]);
 
 
 
@@ -1467,9 +1565,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
   }, [isReticleActive, isLive, hasWebRtcSignal, renderFrame120Fps]);
 
-  // Đọc kết quả Cửa Nhất và Cửa Nhì bằng Web Speech API tiếng Việt (lặp lại 2 lần)
+  // Đọc kết quả Cửa Nhất và Cửa Nhì bằng Giọng đọc Tiếng Việt (Server TTS + Web Speech API fallback, lặp lại 2 lần)
   const speakRoundResult = useCallback((forceSpeak: boolean = false) => {
-    if (!('speechSynthesis' in window)) return;
     if (!isTtsEnabled && !forceSpeak) return;
 
     const completed = (groupAnswersResult.sortedComplete || []).filter((a) => a.isComplete && a.score >= 0);
@@ -1483,7 +1580,14 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     const rank2 = completed.filter((a) => a.rank === 2);
 
     const cleanReason = (lbl: string) => {
-      let c = (lbl || '').replace(/[\(\)\u{1F451}\u{2B50}\u{2666}\u{2663}\u{2660}\u{2665}]/gu, '').trim();
+      let c = (lbl || '')
+        .replace(/\(♦\)/g, ' có rô ')
+        .replace(/♦/g, ' rô ')
+        .replace(/♥/g, ' cơ ')
+        .replace(/♣/g, ' tép ')
+        .replace(/♠/g, ' bích ')
+        .replace(/[\(\)\u{1F451}\u{2B50}\u{2728}\u{1F525}\u{1F31F}]/gu, '')
+        .trim();
       return c.replace(/\s+/g, ' ').toLowerCase();
     };
 
@@ -1511,34 +1615,63 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
     if (!textToSpeak) return;
 
-    window.speechSynthesis.cancel();
-    let repeat = 0;
-    const playSpeech = () => {
-      if (repeat >= 2) return;
-      const u = new SpeechSynthesisUtterance(textToSpeak);
-      u.lang = 'vi-VN';
-      u.rate = 0.92;
-      const voices = window.speechSynthesis.getVoices();
-      const viVoice = voices.find((v) => v.lang === 'vi-VN' || v.lang.startsWith('vi'));
-      if (viVoice) u.voice = viVoice;
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (activeTtsAudio) {
+      try {
+        activeTtsAudio.pause();
+        activeTtsAudio.currentTime = 0;
+      } catch {}
+      activeTtsAudio = null;
+    }
 
-      u.onend = () => {
-        repeat++;
-        if (repeat < 2) {
-          setTimeout(playSpeech, 800);
-        }
-      };
-      u.onerror = () => {
-        repeat++;
-        if (repeat < 2) {
-          setTimeout(playSpeech, 800);
-        }
-      };
-      window.speechSynthesis.speak(u);
+    let repeat = 0;
+
+    const playNativeSpeechFallback = () => {
+      if (!('speechSynthesis' in window) || repeat >= 2) return;
+      try {
+        window.speechSynthesis.resume();
+        const u = new SpeechSynthesisUtterance(textToSpeak);
+        u.lang = 'vi-VN';
+        u.rate = 0.95;
+        const voices = window.speechSynthesis.getVoices();
+        const viVoice = voices.find((v) => v.lang === 'vi-VN' || v.lang.toLowerCase().startsWith('vi'));
+        if (viVoice) u.voice = viVoice;
+        u.onend = () => {
+          repeat++;
+          if (repeat < 2) {
+            setTimeout(playNativeSpeechFallback, 700);
+          }
+        };
+        window.speechSynthesis.speak(u);
+      } catch {}
     };
 
-    playSpeech();
-  }, [groupAnswersResult.sortedComplete, isTtsEnabled]);
+    const playServerTts = () => {
+      if (repeat >= 2) return;
+      try {
+        const audio = new Audio(`/api/tts?text=${encodeURIComponent(textToSpeak)}`);
+        activeTtsAudio = audio;
+        audio.onended = () => {
+          repeat++;
+          if (repeat < 2) {
+            setTimeout(playServerTts, 650);
+          }
+        };
+        audio.onerror = () => {
+          playNativeSpeechFallback();
+        };
+        audio.play().catch(() => {
+          playNativeSpeechFallback();
+        });
+      } catch {
+        playNativeSpeechFallback();
+      }
+    };
+
+    setTimeout(playServerTts, 50);
+  }, [groupAnswersResult.sortedComplete, isTtsEnabled, isAllDoorsComplete, playerCount]);
 
   // Tự động đọc kết quả khi ván bài chia xong đủ các cửa
   useEffect(() => {
