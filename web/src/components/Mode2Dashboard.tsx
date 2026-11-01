@@ -179,6 +179,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Trạng thái bài của từng Cửa kèm ảnh snapshot 1080p @ 120fps: { [doorIndex 1..N]: Mode2CardItem[] }
   const [doorCards, setDoorCards] = useState<{ [doorIndex: number]: Mode2CardItem[] }>({});
+  const doorCardsRef = useRef(doorCards);
+  useEffect(() => {
+    doorCardsRef.current = doorCards;
+  }, [doorCards]);
   
   // Lịch sử các ván trước
   const [roundHistories, setRoundHistories] = useState<RoundHistory[]>(() => {
@@ -475,7 +479,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     return list;
   }, [doorCards, playerCount, selectedDoorFilter]);
 
-  // Ghi nhận lá bài vào Cửa — Chống trùng bài 100% trong cùng ván
+  // Ghi nhận lá bài vào Cửa — Chống trùng bài 100% trong cùng ván (dùng doorCardsRef chống race-condition)
   const addCardToActiveDoor = useCallback(
     (cardCode: string, image?: string, sharpness?: number, confidence?: number, updateOnly?: boolean) => {
       if (updateOnly) {
@@ -494,6 +498,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   confidence: confidence || updated[lastIdx].confidence
                 };
                 next[d] = updated;
+                doorCardsRef.current = next;
                 return next;
               }
             }
@@ -503,9 +508,38 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         return true;
       }
 
-      if (!nextTarget) return false;
+      const currentCards = doorCardsRef.current;
+      const alreadyDealt = Object.values(currentCards).some((cards) =>
+        Array.isArray(cards) && cards.some((c) => c.code === cardCode)
+      );
+      if (alreadyDealt) return false;
 
-      let added = false;
+      // Tìm cửa tiếp theo theo dealStrategy (sequential hoặc round_robin)
+      let targetDoor = -1;
+      if (dealStrategy === 'sequential') {
+        for (let d = 1; d <= playerCount; d++) {
+          const list = currentCards[d] || [];
+          if (list.length < cardsPerPlayer) {
+            targetDoor = d;
+            break;
+          }
+        }
+      } else {
+        // round_robin (vòng tròn: lá 1 lần lượt các cửa -> lá 2 -> lá 3)
+        for (let s = 0; s < cardsPerPlayer; s++) {
+          for (let d = 1; d <= playerCount; d++) {
+            const list = currentCards[d] || [];
+            if (list.length === s) {
+              targetDoor = d;
+              break;
+            }
+          }
+          if (targetDoor !== -1) break;
+        }
+      }
+
+      if (targetDoor === -1) return false;
+
       const newItem: Mode2CardItem = {
         code: cardCode,
         image,
@@ -514,22 +548,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         timestamp: new Date().toLocaleTimeString('vi-VN')
       };
 
-      setDoorCards((prev) => {
-        const alreadyDealt = Object.values(prev).some((cards) =>
-          Array.isArray(cards) && cards.some((c) => c.code === cardCode)
-        );
-        if (alreadyDealt) return prev;
-
-        const current = prev[nextTarget.door] || [];
-        if (current.length >= cardsPerPlayer) return prev;
-        added = true;
-        return {
-          ...prev,
-          [nextTarget.door]: [...current, newItem]
-        };
-      });
-
-      if (!added) return false;
+      const updatedMap = {
+        ...currentCards,
+        [targetDoor]: [...(currentCards[targetDoor] || []), newItem]
+      };
+      doorCardsRef.current = updatedMap;
+      setDoorCards(updatedMap);
 
       playBeepSound();
       setIsAiFlashing(true);
@@ -539,13 +563,13 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         socket.emit('card_added', {
           roomId,
           cardValue: cardCode,
-          groupIndex: nextTarget.door,
+          groupIndex: targetDoor,
           sequenceOrder: Date.now()
         });
       }
       return true;
     },
-    [nextTarget, cardsPerPlayer, playerCount, socket, roomId]
+    [cardsPerPlayer, playerCount, dealStrategy, socket, roomId]
   );
 
   // Hoàn tác lá bài vừa nhận gần nhất
@@ -593,6 +617,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       setRoundHistories((prev) => [newHistory, ...prev]);
     }
 
+    doorCardsRef.current = {};
     setDoorCards({});
     setCapturedFrame(null);
     if (socket && roomId) {
@@ -603,6 +628,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // XONG PHIÊN: Xóa sạch toàn bộ dữ liệu bài, lịch sử các ván, kết quả, âm thanh và DB server
   const handleResetSession = useCallback(() => {
+    doorCardsRef.current = {};
     setDoorCards({});
     setRoundHistories([]);
     localStorage.removeItem('mode2_histories');
