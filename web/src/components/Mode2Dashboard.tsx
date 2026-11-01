@@ -276,6 +276,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const [seekPercent, setSeekPercent] = useState<number>(100); // 100% = Live
   const [dvrWindow, setDvrWindow] = useState<{ start: number; end: number; duration: number }>({ start: 0, end: 0, duration: 0 });
   const isSeekingRef = useRef<boolean>(false);
+  const [isDraggingSeek, setIsDraggingSeek] = useState<boolean>(false);
+  const isDraggingSeekRef = useRef<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(true);
 
   // Lật & Xoay khung hình
@@ -591,18 +593,25 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     if (onFinishRound) onFinishRound();
   };
 
-  // XONG PHIÊN: Xóa sạch bàn chơi, lịch sử ảnh, và giải phóng bộ đệm RAM để test lại từ đầu
+  // XONG PHIÊN: Xóa sạch toàn bộ dữ liệu bài, lịch sử các ván, kết quả, âm thanh và DB server
   const handleResetSession = useCallback(() => {
     setDoorCards({});
+    setRoundHistories([]);
+    localStorage.removeItem('mode2_histories');
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    lastSpokenRoundHashRef.current = '';
     setCapturedHistory([]);
     setCapturedFrame(null);
     setDebugCrop(null);
     prevThumbRef.current = null;
+    setLastDetectedCard('');
+    if (onFinishRound) onFinishRound();
     if (socket && roomId) {
+      socket.emit('finish_round', { roomId });
       socket.emit('reset_session_ram', { roomId });
       socket.emit('cards_cleared', { roomId });
     }
-  }, [socket, roomId]);
+  }, [socket, roomId, onFinishRound]);
 
   // 1. Tính toán vùng hiển thị thực tế của Video bên trong container (loại bỏ viền đen)
   const getRenderedVideoRect = useCallback(() => {
@@ -1117,7 +1126,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     setHasWebRtcSignal(false);
 
     const connectWebRtc = async () => {
-      for (let attempt = 1; !cancelled && attempt <= 25; attempt++) {
+      for (let attempt = 1; !cancelled && attempt <= 3; attempt++) {
         try {
           if (peerRef.current) {
             peerRef.current.close();
@@ -1193,13 +1202,13 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           if (cancelled) break;
           await peer.setRemoteDescription({ type: 'answer', sdp: answer });
 
-          // Chờ video track đến (tối đa 5s)
+          // Chờ video track đến (tối đa 1.5s)
           await new Promise<void>((resolve, reject) => {
             if (receivedTrack) return resolve();
             const timer = setTimeout(() => {
               if (!receivedTrack) reject(new Error('Chờ video track timeout'));
               else resolve();
-            }, 5000);
+            }, 1500);
             peer!.addEventListener('track', () => {
               clearTimeout(timer);
               resolve();
@@ -1226,7 +1235,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           }
           if (cancelled) break;
           // Chờ MediaMTX nhận RTMP từ iPhone -> Giãn cách 1.2s tránh làm nghẽn MediaMTX
-          await new Promise((r) => setTimeout(r, attempt <= 3 ? 1000 : 1500));
+          await new Promise((r) => setTimeout(r, 400));
         }
       }
     };
@@ -1258,21 +1267,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
     (async () => {
       let activeHlsUrl = replayUrl;
-      // Đợi playlist sẵn sàng (thử cả replay và live)
-      for (let i = 0; i < 20 && !isCancelled; i++) {
-        try {
-          const resReplay = await fetch(replayUrl, { method: 'HEAD', cache: 'no-store' });
-          if (resReplay.ok) {
-            activeHlsUrl = replayUrl;
-            break;
-          }
-          const resLive = await fetch(liveHlsUrl, { method: 'HEAD', cache: 'no-store' });
-          if (resLive.ok) {
-            activeHlsUrl = liveHlsUrl;
-            break;
-          }
-        } catch {}
-        await new Promise((r) => setTimeout(r, 1200));
+      // Nạp trực tiếp không chờ đợi vòng lặp gây trễ màn hình
+      try {
+        const resReplay = await fetch(replayUrl, { method: 'HEAD', cache: 'no-store' });
+        if (resReplay.ok) {
+          activeHlsUrl = replayUrl;
+        } else {
+          activeHlsUrl = liveHlsUrl;
+        }
+      } catch {
+        activeHlsUrl = liveHlsUrl;
       }
       if (isCancelled) return;
 
@@ -1285,17 +1289,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
-          backBufferLength: 30, // Giữ 30s để tua lại mượt mà 120fps
+          backBufferLength: 25,
           maxBufferLength: 8,
           maxMaxBufferLength: 16,
           maxBufferSize: 128 * 1024 * 1024,
-          maxBufferHole: 0.2,
-          nudgeOffset: 0.1,
+          maxBufferHole: 0.1,
+          nudgeOffset: 0.05,
           nudgeMaxRetry: 5,
           highBufferWatchdogPeriod: 0,
-          liveSyncDuration: 1.5,
-          liveMaxLatencyDuration: 3.5,
-          maxLiveSyncPlaybackRate: 1.15
+          liveSyncDuration: 2.0,
+          liveMaxLatencyDuration: 4.0,
+          maxLiveSyncPlaybackRate: 1.0 // Cố định 1.0x chống giật khựng do buffer underrun
         });
 
         hlsRef.current = hls;
@@ -1546,8 +1550,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   };
 
   // Xử lý tua lại video theo chuẩn DVR Sliding Window
-  const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const pct = parseFloat(e.target.value);
+  const handleSeekChange = (pct: number) => {
     setSeekPercent(pct);
     if (pct >= 99 && activeStreamSession?.status === 'LIVE') {
       jumpToLive();
@@ -1950,7 +1953,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   const dur = e - s;
                   if (dur > 0) {
                     setDvrWindow({ start: s, end: e, duration: dur });
-                    if (!isLive && !isSeekingRef.current) {
+                    if (!isLive && !isSeekingRef.current && !isDraggingSeekRef.current) {
                       const cur = rv.currentTime;
                       const pct = Math.max(0, Math.min(100, ((cur - s) / dur) * 100));
                       setSeekPercent(pct);
@@ -2138,7 +2141,35 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 max={100}
                 step={0.5}
                 value={isLive ? 100 : seekPercent}
-                onChange={handleSeekChange}
+                onMouseDown={() => {
+                  isDraggingSeekRef.current = true;
+                  setIsDraggingSeek(true);
+                  if (replayVideoRef.current && !replayVideoRef.current.paused) {
+                    replayVideoRef.current.pause();
+                  }
+                }}
+                onTouchStart={() => {
+                  isDraggingSeekRef.current = true;
+                  setIsDraggingSeek(true);
+                  if (replayVideoRef.current && !replayVideoRef.current.paused) {
+                    replayVideoRef.current.pause();
+                  }
+                }}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setSeekPercent(val);
+                }}
+                onMouseUp={(e) => {
+                  isDraggingSeekRef.current = false;
+                  setIsDraggingSeek(false);
+                  const val = parseFloat((e.target as HTMLInputElement).value);
+                  handleSeekChange(val);
+                }}
+                onTouchEnd={() => {
+                  isDraggingSeekRef.current = false;
+                  setIsDraggingSeek(false);
+                  handleSeekChange(seekPercent);
+                }}
                 className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
               />
               <span className="text-[10px] text-slate-300 font-mono whitespace-nowrap min-w-[65px] text-right">

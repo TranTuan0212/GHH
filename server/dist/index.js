@@ -435,52 +435,98 @@ app.get('/ios/manifest.plist', (req, res) => {
     }
     const ipaUrl = `${scheme}://${host}/ios/${ipaFilename}`;
     const iconUrl = `${scheme}://${host}/vite.svg`;
-    const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>items</key>
-    <array>
-        <dict>
-            <key>assets</key>
-            <array>
-                <dict>
-                    <key>kind</key>
-                    <string>software-package</string>
-                    <key>url</key>
-                    <string>${ipaUrl}</string>
-                </dict>
-                <dict>
-                    <key>kind</key>
-                    <string>display-image</string>
-                    <key>needs-shine</key>
-                    <false/>
-                    <key>url</key>
-                    <string>${iconUrl}</string>
-                </dict>
-                <dict>
-                    <key>kind</key>
-                    <string>full-size-image</string>
-                    <key>needs-shine</key>
-                    <false/>
-                    <key>url</key>
-                    <string>${iconUrl}</string>
-                </dict>
-            </array>
-            <key>metadata</key>
-            <dict>
-                <key>bundle-identifier</key>
-                <string>com.slomo.live</string>
-                <key>bundle-version</key>
-                <string>1.0.0</string>
-                <key>kind</key>
-                <string>software</string>
-                <key>title</key>
-                <string>SloMo Live 240FPS</string>
-            </dict>
-        </dict>
-    </array>
-</dict>
+    const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+
+<plist version="1.0">
+
+<dict>
+
+    <key>items</key>
+
+    <array>
+
+        <dict>
+
+            <key>assets</key>
+
+            <array>
+
+                <dict>
+
+                    <key>kind</key>
+
+                    <string>software-package</string>
+
+                    <key>url</key>
+
+                    <string>${ipaUrl}</string>
+
+                </dict>
+
+                <dict>
+
+                    <key>kind</key>
+
+                    <string>display-image</string>
+
+                    <key>needs-shine</key>
+
+                    <false/>
+
+                    <key>url</key>
+
+                    <string>${iconUrl}</string>
+
+                </dict>
+
+                <dict>
+
+                    <key>kind</key>
+
+                    <string>full-size-image</string>
+
+                    <key>needs-shine</key>
+
+                    <false/>
+
+                    <key>url</key>
+
+                    <string>${iconUrl}</string>
+
+                </dict>
+
+            </array>
+
+            <key>metadata</key>
+
+            <dict>
+
+                <key>bundle-identifier</key>
+
+                <string>com.slomo.live</string>
+
+                <key>bundle-version</key>
+
+                <string>1.0.0</string>
+
+                <key>kind</key>
+
+                <string>software</string>
+
+                <key>title</key>
+
+                <string>SloMo Live 240FPS</string>
+
+            </dict>
+
+        </dict>
+
+    </array>
+
+</dict>
+
 </plist>`;
     res.setHeader('Content-Type', 'application/xml');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -710,6 +756,9 @@ io.on('connection', (socket) => {
         io.emit('scan_exact_frame_request', data);
     });
     socket.on('reset_session_ram', (data) => {
+        const targetRoomId = (user?.role === 'ADMIN' && data?.roomId) ? data.roomId : (data?.roomId || user?.id || 'default');
+        db_1.db.clearCardEntries(targetRoomId);
+        io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
         io.emit('reset_session_ram', data);
     });
     socket.on('server_card_detected', (data) => {
@@ -737,7 +786,9 @@ io.on('connection', (socket) => {
         });
     });
     socket.on('cards_cleared', (data) => {
-        io.emit('cards_cleared', data || {});
+        const targetRoomId = (user?.role === 'ADMIN' && data?.roomId) ? data.roomId : (data?.roomId || user?.id || 'default');
+        db_1.db.clearCardEntries(targetRoomId);
+        io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
         broadcastRoiWs({ type: 'cards_cleared', data: data || {} });
     });
     socket.on('clear_cards', (data) => {
