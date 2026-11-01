@@ -994,7 +994,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       roomId?: string;
     }) => {
       if (!data?.card) return;
-      if (data?.roomId && roomId && data.roomId !== roomId && user?.role !== 'ADMIN') return;
+      if (data?.roomId && data.roomId !== 'default' && roomId && data.roomId !== roomId && user?.role !== 'ADMIN') return;
       const best = data.card;
       const conf = data.confidence || best.confidence || 0.95;
       const sharp = data.sharpness || 0;
@@ -1056,7 +1056,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   useEffect(() => {
     if (!socket) return;
     const handleDebugCrop = (data: any) => {
-      if (data?.roomId && roomId && data.roomId !== roomId && user?.role !== 'ADMIN') return;
+      if (data?.roomId && data.roomId !== 'default' && roomId && data.roomId !== roomId && user?.role !== 'ADMIN') return;
       if (data && data.image) {
         isAiBusyRef.current = false;
         if (scanReqTimeRef.current > 0) {

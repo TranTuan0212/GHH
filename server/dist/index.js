@@ -120,7 +120,13 @@ roiWss.on('connection', (ws) => {
                 const image = msg.data.image || '';
                 const updateFrameOnly = Boolean(msg.data.updateFrameOnly);
                 const cardMeta = parseCardMeta(cardCode);
-                console.log(`[WebSocket] 🎯 iPhone On-Device AI phát hiện: ${cardMeta.display} (${Math.round(conf * 100)}%) | Nét=${sharpness} | updateOnly=${updateFrameOnly} | Có ảnh=${image ? 'YES' : 'NO'}`);
+                const activeLive = db_1.db.getActiveStream() || db_1.db.getLatestStream();
+                const effectiveRoomId = (msg.roomId && msg.roomId !== 'default')
+                    ? msg.roomId
+                    : (msg.data?.roomId && msg.data.roomId !== 'default'
+                        ? msg.data.roomId
+                        : (activeLive?.userId || 'default'));
+                console.log(`[WebSocket] 🎯 iPhone On-Device AI phát hiện: ${cardMeta.display} (${Math.round(conf * 100)}%) | Nét=${sharpness} | updateOnly=${updateFrameOnly} | Room=${effectiveRoomId}`);
                 const payload = {
                     card: cardMeta,
                     allCards: [cardMeta],
@@ -129,11 +135,9 @@ roiWss.on('connection', (ws) => {
                     image: image,
                     updateFrameOnly: updateFrameOnly,
                     timestamp: new Date().toLocaleTimeString('vi-VN'),
-                    roomId: msg.roomId || 'default'
+                    roomId: effectiveRoomId
                 };
-                const targetRoom = msg.roomId ? `room_${msg.roomId}` : 'room_default';
-                io.to(targetRoom).emit('card_detected', payload);
-                io.to('room_admin').emit('card_detected', payload);
+                io.emit('card_detected', payload);
                 broadcastRoiWs({ type: 'card_detected', data: payload });
             }
         }
@@ -762,9 +766,10 @@ io.on('connection', (socket) => {
         io.emit('reset_session_ram', data);
     });
     socket.on('server_card_detected', (data) => {
-        const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
-        io.to(targetRoom).emit('card_detected', data);
-        io.to('room_admin').emit('card_detected', data);
+        const activeLive = db_1.db.getActiveStream() || db_1.db.getLatestStream();
+        const effectiveRoomId = (data.roomId && data.roomId !== 'default') ? data.roomId : (activeLive?.userId || 'default');
+        const enriched = { ...data, roomId: effectiveRoomId };
+        io.emit('card_detected', enriched);
     });
     socket.on('ai_debug_crop', (data) => {
         const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';

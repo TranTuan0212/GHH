@@ -1265,11 +1265,13 @@ public class RoiSyncManager: ObservableObject {
             }
             return
         }
+        let currentRoomId = NetworkManager.shared.currentUserId ?? ""
         var cardData: [String: Any] = [
             "cardValue": cardCode,
             "confidence": Double(conf) / 100.0,
             "sharpness": sharpness,
             "updateFrameOnly": updateFrameOnly,
+            "roomId": currentRoomId,
             "timestamp": Date().timeIntervalSince1970
         ]
         if let img = imageBase64, !img.isEmpty {
@@ -1277,6 +1279,7 @@ public class RoiSyncManager: ObservableObject {
         }
         let payload: [String: Any] = [
             "type": "card_detected_from_ios",
+            "roomId": currentRoomId,
             "data": cardData
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
