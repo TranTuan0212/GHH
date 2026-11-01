@@ -2,7 +2,7 @@ platform :ios, '16.0'
 use_frameworks! :linkage => :static
 
 target 'SloMoLive' do
-  # RTMP push từ iOS lên Node Media Server (NMS).
+  # RTMP push từ iOS lên Node Media Server (NMS) / MediaMTX.
   # LFLiveKit đã được dùng trong CameraManager.swift để đẩy luồng H.264 120/240fps.
   pod 'LFLiveKit'
 end
@@ -31,10 +31,24 @@ post_install do |installer|
           'VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel);',
           "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_Quality, (__bridge CFTypeRef)@(0.85));\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
         ).gsub(
-          'NSNumber *timeNumber = @(timeStamp);',
-          "static int64_t _startTimestamp = 0;\n    int64_t expectedOffset = (int64_t)llround((double)frameCount * 1000.0 / (double)_configuration.videoFrameRate);\n    int64_t paced = _startTimestamp + expectedOffset;\n    if (frameCount <= 1 || _startTimestamp <= 0 || llabs((int64_t)timeStamp - paced) > 1000) {\n        _startTimestamp = (int64_t)timeStamp - expectedOffset;\n        paced = (int64_t)timeStamp;\n    }\n    NSNumber *timeNumber = @((uint64_t)paced);"
+          'if (frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {',
+          'if (frameCount <= 10 || frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {'
         )
         File.write(encoder, patched) if patched != source
+      end
+
+      # Prevent uint64_t timestamp underflow in LFLiveSession.m and allow immediate keyframe lock
+      session_file = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'LFLiveSession.m')
+      if File.exist?(session_file)
+        sess_source = File.read(session_file)
+        sess_patched = sess_source.gsub(
+          'if(frame.isKeyFrame && self.hasCaptureAudio) self.hasKeyFrameVideo = YES;',
+          'if(frame.isKeyFrame) { self.hasCaptureAudio = YES; self.hasKeyFrameVideo = YES; }'
+        ).gsub(
+          'currentts = captureTimestamp - self.relativeTimestamps;',
+          'currentts = (captureTimestamp > self.relativeTimestamps) ? (captureTimestamp - self.relativeTimestamps) : 0;'
+        )
+        File.write(session_file, sess_patched) if sess_patched != sess_source
       end
 
       # Prevent LFLiveVideoConfiguration from creating a dummy AVCaptureSession attached to
@@ -68,17 +82,96 @@ post_install do |installer|
         end
       end
 
-      # Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m
-      # so 120fps bursts after 4G micro-stalls drain immediately on rtmpSendQueue.
-      # Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m
-      # and set RTMP chunk size to 4096 bytes so AAC audio packets (~200B) are never fragmented,
-      # eliminating 'received type 1 chunk but expected type 3 chunk' on strict media servers like MediaMTX.
-      rtmp_sock = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'publish', 'LFStreamRtmpSocket.m')
-      if File.exist?(rtmp_sock)
+      # 1. Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m.
+      # 2. Synchronously emit both H.264 Sequence Header (0x17 0x00) and AAC Sequence Header (0xAF 0x00)
+      #    before any media payload packet so MediaMTX always registers 2 tracks on the very first attempt
+      #    (preventing 'received a packet for audio track 0, but track is not set up').
+      # 3. Separate RTMP chunk channels (0x04 for video, 0x05 for audio) and use RTMP_PACKET_SIZE_LARGE
+      #    to prevent uint32_t relative timestamp delta underflow in pili-librtmp
+      #    (preventing 'extended chunk stream IDs are not supported (yet)').
+      ['LFStreamRtmpSocket.m', 'LFStreamRTMPSocket.m'].each do |sock_name|
+        rtmp_sock = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'publish', sock_name)
+        next unless File.exist?(rtmp_sock)
         sock_source = File.read(rtmp_sock)
+        old_send_block = <<-'OBJC'.chomp
+            if ([frame isKindOfClass:[LFVideoFrame class]]) {
+                if (!_self.sendVideoHead) {
+                    _self.sendVideoHead = YES;
+                    if(!((LFVideoFrame*)frame).sps || !((LFVideoFrame*)frame).pps){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    [_self sendVideoHeader:(LFVideoFrame *)frame];
+                } else {
+                    [_self sendVideo:(LFVideoFrame *)frame];
+                }
+            } else {
+                if (!_self.sendAudioHead) {
+                    _self.sendAudioHead = YES;
+                    if(!((LFAudioFrame*)frame).audioInfo){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    [_self sendAudioHeader:(LFAudioFrame *)frame];
+                } else {
+                    [_self sendAudio:frame];
+                }
+            }
+OBJC
+        new_send_block = <<-'OBJC'.chomp
+            if ([frame isKindOfClass:[LFVideoFrame class]]) {
+                if (!_self.sendVideoHead) {
+                    if(!((LFVideoFrame*)frame).sps || !((LFVideoFrame*)frame).pps){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    _self.sendVideoHead = YES;
+                    [_self sendVideoHeader:(LFVideoFrame *)frame];
+                    if (!_self.sendAudioHead && _self.stream.audioConfiguration && _self.stream.audioConfiguration.asc) {
+                        _self.sendAudioHead = YES;
+                        unsigned char ascBody[4] = {0xAF, 0x00, (unsigned char)_self.stream.audioConfiguration.asc[0], (unsigned char)_self.stream.audioConfiguration.asc[1]};
+                        [_self sendPacket:RTMP_PACKET_TYPE_AUDIO data:ascBody size:4 nTimestamp:0];
+                    }
+                    [_self sendVideo:(LFVideoFrame *)frame];
+                } else {
+                    [_self sendVideo:(LFVideoFrame *)frame];
+                }
+            } else {
+                if (!_self.sendAudioHead) {
+                    if(!((LFAudioFrame*)frame).audioInfo){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    _self.sendAudioHead = YES;
+                    [_self sendAudioHeader:(LFAudioFrame *)frame];
+                    if (_self.sendVideoHead) {
+                        [_self sendAudio:frame];
+                    }
+                } else if (_self.sendVideoHead) {
+                    [_self sendAudio:frame];
+                }
+            }
+OBJC
+        old_channel_block = <<-'OBJC'.chomp
+    rtmp_pack.m_nChannel = 0x04;
+    rtmp_pack.m_headerType = RTMP_PACKET_SIZE_LARGE;
+    if (RTMP_PACKET_TYPE_AUDIO == nPacketType && size != 4) {
+        rtmp_pack.m_headerType = RTMP_PACKET_SIZE_MEDIUM;
+    }
+OBJC
+        new_channel_block = <<-'OBJC'.chomp
+    rtmp_pack.m_nChannel = (RTMP_PACKET_TYPE_AUDIO == nPacketType) ? 0x05 : 0x04;
+    rtmp_pack.m_headerType = RTMP_PACKET_SIZE_LARGE;
+OBJC
         sock_patched = sock_source.gsub(
           /dispatch_async\(dispatch_get_global_queue\(DISPATCH_QUEUE_PRIORITY_DEFAULT,\s*0\),\s*\^\{\s*\/\/[^\n]*\n\s*_self\.isSending\s*=\s*NO;\s*\}\);/,
           '_self.isSending = NO;'
+        ).gsub(
+          old_send_block.gsub("\r\n", "\n"),
+          new_send_block.gsub("\r\n", "\n")
+        ).gsub(
+          old_channel_block.gsub("\r\n", "\n"),
+          new_channel_block.gsub("\r\n", "\n")
         )
         File.write(rtmp_sock, sock_patched) if sock_patched != sock_source
       end
