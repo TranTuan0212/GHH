@@ -34,7 +34,7 @@ import {
   Filter
 } from 'lucide-react';
 import { parseCardRank, getRankLabel } from '../utils/cardRules';
-import { GameMode, computeAllGroupAnswers, evaluate3Cards as eval3Cards, evaluate2Cards } from './DataGroupingUI';
+import { GameMode, computeAllGroupAnswers, evaluate3Cards as eval3Cards, evaluate2Cards, parseCard } from './DataGroupingUI';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
 interface Mode2DashboardProps {
@@ -71,6 +71,31 @@ const SUIT_DISPLAY: Record<string, { symbol: string; color: string; isRed: boole
   'TÉP': { symbol: '♣', color: 'text-slate-100', isRed: false },
   'BÍCH': { symbol: '♠', color: 'text-slate-100', isRed: false },
 };
+
+function getConversionFormula(cards: Mode2CardItem[], gameMode: GameMode): string {
+  if (!cards || cards.length === 0) return '';
+  const parsed = cards.map(c => parseCard(c.code));
+  
+  if (gameMode === '3cards' && cards.length === 3) {
+    const ranks = parsed.map(p => p.rank);
+    if (ranks[0] !== '0' && ranks[0] === ranks[1] && ranks[1] === ranks[2]) {
+      return `${ranks[0]}+${ranks[1]}+${ranks[2]} ➔ Sáp ${ranks[0]}`;
+    }
+    const is3Tay = ranks.every(r => ['J', 'Q', 'K'].includes(r));
+    if (is3Tay) {
+      return `${ranks.join('+')} ➔ Ba Tây`;
+    }
+  }
+  
+  const values = parsed.map(p => p.value);
+  const sum = values.reduce((a, b) => a + b, 0);
+  const pts = sum % 10;
+  
+  if (cards.length === 1) {
+    return `${values[0]} ➔ ${pts} Điểm`;
+  }
+  return `${values.join('+')}=${sum} ➔ ${pts} Điểm`;
+}
 
 function formatCardItem(raw: string): { rank: string; symbol: string; isRed: boolean; full: string } {
   if (!raw) return { rank: '', symbol: '', isRed: false, full: '' };
@@ -239,6 +264,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     count: number;
     firstSeen: number;
   } | null>(null);
+
+  // Giọng đọc kết quả bằng Web Speech API tiếng Việt
+  const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('mode2_tts_enabled') !== 'false';
+  });
+  const lastSpokenRoundHashRef = useRef<string>('');
 
   // Trạng thái điều khiển video: Live vs Tua lại
   const [isLive, setIsLive] = useState<boolean>(true);
@@ -873,9 +904,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         setHasVideoSignal(false);
         setHasWebRtcSignal(false);
       } else if (data.status === 'ENDED') {
-        console.log('[Mode2] ⏹ Socket thông báo phiên Live kết thúc');
-        setActiveStreamSession(null);
-        setHasVideoSignal(false);
+        console.log('[Mode2] ⏹ Socket thông báo phiên Live kết thúc (vẫn giữ Replay DVR để tua xem)');
+        setActiveStreamSession((prev) => prev ? { ...prev, status: 'ENDED' } : null);
+        setIsLive(false);
         setHasWebRtcSignal(false);
       }
     };
@@ -917,8 +948,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       image?: string;
       timestamp?: string;
       updateFrameOnly?: boolean;
+      roomId?: string;
     }) => {
       if (!data?.card) return;
+      if (data?.roomId && roomId && data.roomId !== roomId && user?.role !== 'ADMIN') return;
       const best = data.card;
       const conf = data.confidence || best.confidence || 0.95;
       const sharp = data.sharpness || 0;
@@ -981,6 +1014,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   useEffect(() => {
     if (!socket) return;
     const handleDebugCrop = (data: any) => {
+      if (data?.roomId && roomId && data.roomId !== roomId && user?.role !== 'ADMIN') return;
       if (data && data.image) {
         isAiBusyRef.current = false;
         if (scanReqTimeRef.current > 0) {
@@ -1040,17 +1074,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               }
               return prev;
             });
-          } else if (data?.stream?.status === 'ENDED' || !data?.stream) {
-            // Khi phiên stream cũ kết thúc, xóa active session để ngắt WebRTC/HLS cũ, ngừng gọi 404
+          } else if (data?.stream?.status === 'ENDED') {
             setActiveStreamSession((prev) => {
-              if (prev !== null) {
-                console.log('[Mode2] Phiên Live cũ đã dừng, reset player chờ luồng mới...');
-                setHasVideoSignal(false);
-                setHasWebRtcSignal(false);
-                return null;
-              }
-              return prev;
+              if (prev && prev.streamKey === data.stream.streamKey && prev.status === 'ENDED') return prev;
+              return data.stream;
             });
+            setIsLive(false);
+            setHasWebRtcSignal(false);
+          } else if (!data?.stream) {
+            setHasVideoSignal(false);
+            setHasWebRtcSignal(false);
           }
         }
       } catch {}
@@ -1216,7 +1249,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // 2. Kết nối HLS Replay DVR Master (để tua chậm, tua lại chi tiết từng frame 120fps)
   useEffect(() => {
     const video = replayVideoRef.current;
-    if (!video || !activeStreamSession?.streamKey || activeStreamSession?.status === 'ENDED') return;
+    if (!video || !activeStreamSession?.streamKey) return;
 
     const streamKey = activeStreamSession.streamKey;
     const replayUrl = `/replay/${streamKey}/index.m3u8`;
@@ -1397,11 +1430,126 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     };
   }, [isReticleActive, isLive, hasWebRtcSignal, renderFrame120Fps]);
 
+  // Đọc kết quả Cửa Nhất và Cửa Nhì bằng Web Speech API tiếng Việt (lặp lại 2 lần)
+  const speakRoundResult = useCallback((forceSpeak: boolean = false) => {
+    if (!('speechSynthesis' in window)) return;
+    if (!isTtsEnabled && !forceSpeak) return;
+
+    const completed = (groupAnswersResult.sortedComplete || []).filter((a) => a.isComplete && a.score >= 0);
+    if (completed.length < 2) return;
+
+    const currentHash = completed.map((a) => `${a.groupNum}:${a.score}:${a.label}`).join('|');
+    if (!forceSpeak && lastSpokenRoundHashRef.current === currentHash) return;
+    lastSpokenRoundHashRef.current = currentHash;
+
+    const rank1 = completed.filter((a) => a.rank === 1);
+    const rank2 = completed.filter((a) => a.rank === 2);
+
+    const cleanReason = (lbl: string) => {
+      let c = (lbl || '').replace(/[\(\)\u{1F451}\u{2B50}\u{2666}\u{2663}\u{2660}\u{2665}]/gu, '').trim();
+      return c.replace(/\s+/g, ' ').toLowerCase();
+    };
+
+    let textToSpeak = '';
+    if (rank1.length > 1) {
+      const names = rank1.map((d) => `Cửa ${d.groupNum}`).join(' và ');
+      const r = cleanReason(rank1[0].label);
+      textToSpeak = `${names} đồng hạng nhất với lý do ${r}.`;
+    } else if (rank1.length === 1) {
+      const w = rank1[0];
+      const wReason = cleanReason(w.label);
+      const r1 = `Cửa ${w.groupNum} về nhất với lý do ${wReason}.`;
+      if (rank2.length > 1) {
+        const names2 = rank2.map((d) => `Cửa ${d.groupNum}`).join(' và ');
+        const r2 = cleanReason(rank2[0].label);
+        textToSpeak = `${r1} ${names2} đồng hạng nhì với lý do ${r2}.`;
+      } else if (rank2.length === 1) {
+        const s = rank2[0];
+        const sReason = cleanReason(s.label);
+        textToSpeak = `${r1} Cửa ${s.groupNum} về nhì với lý do ${sReason}.`;
+      } else {
+        textToSpeak = r1;
+      }
+    }
+
+    if (!textToSpeak) return;
+
+    window.speechSynthesis.cancel();
+    let repeat = 0;
+    const playSpeech = () => {
+      if (repeat >= 2) return;
+      const u = new SpeechSynthesisUtterance(textToSpeak);
+      u.lang = 'vi-VN';
+      u.rate = 0.92;
+      const voices = window.speechSynthesis.getVoices();
+      const viVoice = voices.find((v) => v.lang === 'vi-VN' || v.lang.startsWith('vi'));
+      if (viVoice) u.voice = viVoice;
+
+      u.onend = () => {
+        repeat++;
+        if (repeat < 2) {
+          setTimeout(playSpeech, 800);
+        }
+      };
+      u.onerror = () => {
+        repeat++;
+        if (repeat < 2) {
+          setTimeout(playSpeech, 800);
+        }
+      };
+      window.speechSynthesis.speak(u);
+    };
+
+    playSpeech();
+  }, [groupAnswersResult.sortedComplete, isTtsEnabled]);
+
+  // Tự động đọc kết quả khi ván bài chia xong đủ các cửa
+  useEffect(() => {
+    if (groupAnswersResult.completeGroupsCount >= playerCount && playerCount >= 2) {
+      speakRoundResult(false);
+    }
+  }, [groupAnswersResult.completeGroupsCount, playerCount, speakRoundResult]);
+
+  // Tua bước chính xác từng khoảng giây (Replay DVR)
+  const stepReplay = (offsetSeconds: number) => {
+    setIsLive(false);
+    const rv = replayVideoRef.current;
+    if (!rv) return;
+    if (liveVideoRef.current && !liveVideoRef.current.paused) {
+      liveVideoRef.current.pause();
+    }
+    
+    let curTime = rv.currentTime;
+    let s = dvrWindow.start;
+    let e = dvrWindow.end;
+    let dur = dvrWindow.duration;
+    if (rv.seekable && rv.seekable.length > 0) {
+      s = rv.seekable.start(0);
+      e = rv.seekable.end(0);
+      dur = e - s;
+    }
+    
+    if (isLive || curTime < s || curTime > e || curTime === 0) {
+      curTime = Math.max(s, e - 0.2);
+    }
+    
+    let targetTime = curTime + offsetSeconds;
+    if (dur > 0) {
+      targetTime = Math.max(s, Math.min(e, targetTime));
+      const pct = Math.max(0, Math.min(100, ((targetTime - s) / dur) * 100));
+      setSeekPercent(pct);
+    }
+    
+    rv.pause();
+    rv.currentTime = targetTime;
+    setTimeout(() => scanCurrentFrameFromVideo(true), 60);
+  };
+
   // Xử lý tua lại video theo chuẩn DVR Sliding Window
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const pct = parseFloat(e.target.value);
     setSeekPercent(pct);
-    if (pct >= 99) {
+    if (pct >= 99 && activeStreamSession?.status === 'LIVE') {
       jumpToLive();
       return;
     }
@@ -1417,9 +1565,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       }
       if (dur > 0) {
         const targetTime = s + (pct / 100) * dur;
-        if (rv.paused) {
-          rv.play().catch(() => {});
-        }
         rv.currentTime = targetTime;
         setTimeout(() => scanCurrentFrameFromVideo(true), 40);
       }
@@ -1948,6 +2093,42 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               <span>LIVE</span>
             </button>
 
+            {/* Nút tua bước nhanh (Step DVR) */}
+            <div className="flex items-center space-x-1">
+              <button
+                type="button"
+                onClick={() => stepReplay(-3)}
+                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px] font-bold border border-slate-700/80 transition"
+                title="Tua lùi 3 giây"
+              >
+                ⏪ -3s
+              </button>
+              <button
+                type="button"
+                onClick={() => stepReplay(-0.5)}
+                className="px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px] font-bold border border-slate-700/80 transition"
+                title="Tua lùi 0.5 giây"
+              >
+                ◀ -0.5s
+              </button>
+              <button
+                type="button"
+                onClick={() => stepReplay(0.5)}
+                className="px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px] font-bold border border-slate-700/80 transition"
+                title="Tua tiến 0.5 giây"
+              >
+                ▶ +0.5s
+              </button>
+              <button
+                type="button"
+                onClick={() => stepReplay(3)}
+                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px] font-bold border border-slate-700/80 transition"
+                title="Tua tiến 3 giây"
+              >
+                ⏩ +3s
+              </button>
+            </div>
+
             {/* Thanh Timeline Tua lại (Scrubbing Seekbar) */}
             <div className="flex-1 min-w-[150px] flex items-center space-x-2">
               <span className="text-[10px] text-slate-400 font-mono">Tua:</span>
@@ -2109,38 +2290,123 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
             {/* BẢNG XẾP HẠNG & TÍNH ĐIỂM THẮNG THUA (NHƯ CHẾ ĐỘ 1) */}
             <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex flex-col space-y-2">
-              <div className="flex items-center justify-between text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
                 <span className="font-bold text-slate-300 flex items-center space-x-1.5">
                   <Award className="w-3.5 h-3.5 text-amber-400" />
                   <span>Xếp Hạng & Điểm Số Các Cửa:</span>
                 </span>
-                {winnerDoor > 0 && (
-                  <span className="text-[11px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/50">
-                    👑 Cửa {winnerDoor} Thắng Nhất
-                  </span>
-                )}
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isTtsEnabled;
+                      setIsTtsEnabled(next);
+                      localStorage.setItem('mode2_tts_enabled', next.toString());
+                      if (!next && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold transition flex items-center space-x-1 ${
+                      isTtsEnabled
+                        ? 'bg-indigo-600/80 text-white border border-indigo-400/50 shadow'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}
+                    title={isTtsEnabled ? 'Tắt giọng nói đọc kết quả' : 'Bật giọng nói đọc kết quả'}
+                  >
+                    {isTtsEnabled ? <Volume2 className="w-3 h-3 text-indigo-300" /> : <VolumeX className="w-3 h-3 text-slate-500" />}
+                    <span>{isTtsEnabled ? 'Giọng đọc: BẬT' : 'Giọng đọc: TẮT'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => speakRoundResult(true)}
+                    className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-bold flex items-center space-x-1 transition"
+                    title="Đọc kết quả Nhất & Nhì (lặp lại 2 lần)"
+                  >
+                    <Volume2 className="w-3 h-3 text-amber-400" />
+                    <span>Đọc lại (2 lần)</span>
+                  </button>
+                  {winnerDoor > 0 && (
+                    <span className="text-[11px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/50 shadow">
+                      👑 Cửa {winnerDoor} Thắng Nhất
+                    </span>
+                  )}
+                </div>
               </div>
 
-              {/* Lưới Điểm Từng Cửa */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-1.5 text-center text-xs">
+              {/* Lưới Điểm Từng Cửa: Hiện con bài quy đổi -> Điểm số -> Xếp hạng */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 text-center text-xs">
                 {groupAnswersResult.answers.map((ans) => {
                   const isWin = ans.groupNum === winnerDoor;
+                  const cList = doorCards[ans.groupNum] || [];
+                  const formula = getConversionFormula(cList, gameMode);
                   return (
                     <div
                       key={ans.groupNum}
-                      className={`p-1.5 rounded-lg border flex flex-col items-center justify-between transition ${
+                      className={`p-2 rounded-xl border flex flex-col items-center justify-between transition min-h-[110px] ${
                         isWin
                           ? 'bg-amber-950/50 border-amber-400 text-amber-300 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
-                          : 'bg-slate-900 border-slate-800 text-slate-300'
+                          : 'bg-slate-900/90 border-slate-800 text-slate-300'
                       }`}
                     >
-                      <span className="font-bold text-[11px] flex items-center space-x-1">
+                      {/* Tiêu đề Cửa */}
+                      <div className="w-full flex items-center justify-between font-bold text-[11px] border-b border-white/5 pb-1">
                         <span>Cửa {ans.groupNum}</span>
-                        {isWin && <span>👑</span>}
-                      </span>
-                      <span className={`text-[10px] px-1 py-0.5 rounded font-black mt-1 ${ans.highlightClass || 'bg-slate-800 text-slate-400'}`}>
+                        {isWin && <span className="text-amber-400">👑 Nhất</span>}
+                      </div>
+
+                      {/* Các con bài đã bóc tách & icon chất */}
+                      <div className="my-1 flex flex-col items-center justify-center">
+                        {cList.length > 0 ? (
+                          <>
+                            <div className="flex items-center justify-center flex-wrap gap-1">
+                              {cList.map((c, i) => {
+                                const f = formatCardItem(c.code);
+                                return (
+                                  <span
+                                    key={i}
+                                    className={`px-1.5 py-0.5 rounded text-[11px] font-black border font-mono ${
+                                      f.isRed
+                                        ? 'bg-rose-950/80 border-rose-500/70 text-rose-300'
+                                        : 'bg-slate-800 border-slate-600 text-slate-100'
+                                    }`}
+                                  >
+                                    {f.rank}{f.symbol}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                            {formula && (
+                              <div className="text-[10px] text-amber-300 font-mono font-medium tracking-tight mt-1 bg-slate-950/70 px-1 py-0.5 rounded border border-white/5">
+                                {formula}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 italic py-1">Chưa có bài</span>
+                        )}
+                      </div>
+
+                      {/* Điểm số */}
+                      <span className={`text-[10px] px-2 py-0.5 rounded-md font-black w-full text-center ${ans.highlightClass || 'bg-slate-800 text-slate-400'}`}>
                         {ans.label || 'Chờ bài'}
                       </span>
+
+                      {/* Xếp hạng */}
+                      {ans.rank && ans.isComplete && (
+                        <div className="mt-1 w-full flex justify-center">
+                          <span
+                            className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
+                              ans.rank === 1
+                                ? 'bg-amber-500 text-slate-950 ring-1 ring-amber-300 shadow shadow-amber-500/40'
+                                : ans.rank === 2
+                                ? 'bg-slate-300 text-slate-950 font-bold'
+                                : ans.rank === 3
+                                ? 'bg-amber-800 text-amber-100 font-bold'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {ans.rank === 1 ? '👑 Hạng 1' : ans.rank === 2 ? '🥈 Hạng 2' : ans.rank === 3 ? '🥉 Hạng 3' : `#${ans.rank}`}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

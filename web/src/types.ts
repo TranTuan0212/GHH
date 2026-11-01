@@ -2,6 +2,7 @@ export interface User {
   id: string;
   username: string;
   role: 'ADMIN' | 'USER';
+  allowedMode?: 'mode1' | 'mode2' | 'all';
   isBlocked: boolean;
   expiresAt: string;
   isExpired?: boolean;

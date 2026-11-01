@@ -133,7 +133,7 @@ roiWss.on('connection', (ws) => {
                 };
                 const targetRoom = msg.roomId ? `room_${msg.roomId}` : 'room_default';
                 io.to(targetRoom).emit('card_detected', payload);
-                io.emit('card_detected', payload);
+                io.to('room_admin').emit('card_detected', payload);
                 broadcastRoiWs({ type: 'card_detected', data: payload });
             }
         }
@@ -308,23 +308,41 @@ app.get('/api/server-info', (req, res) => {
     });
 });
 /**
+
  * QUAN TRỌNG: proxy /live/* (HLS .m3u8 + .ts do NMS/ffmpeg sinh ra ở port 8000 nội bộ) qua
+
  * chính port 4000 này. Lý do:
+
  *   - Cloudflare Quick Tunnel chỉ forward 1 port (4000). Nếu trả về link
+
  *     "http://<lan-ip>:8000/live/..." thì trình duyệt (đang mở trang qua HTTPS tunnel) sẽ
+
  *     bị chặn bởi Mixed Content (http trong trang https) VÀ CORS Private Network Access
+
  *     (domain public không được phép gọi thẳng vào IP LAN riêng).
+
  *   - Proxy qua cùng port/host mà trình duyệt đang kết nối -> luôn same-origin, same-protocol,
+
  *     không còn Mixed Content, không còn CORS/private-network nữa, không cần mở thêm tunnel.
+
  *
+
  * NMS serve mediaroot tại port 8000 với path prefix /live/ (vd: /live/<streamKey>/index.m3u8),
+
  * nên proxy chỉ cần forward nguyên originalUrl tới localhost:8000 là đúng.
+
 /**
+
  * Phục vụ trực tiếp HLS (.m3u8 + .ts) từ thư mục ổ đĩa media/replay và media/live.
+
  * - Giải quyết triệt để lỗi 404: NodeMediaServer port 8000 không có route /replay,
+
  *   khiến request /replay/.../index.m3u8 bị 404 dù file đã được FFmpeg ghi trên đĩa.
+
  * - express.static hỗ trợ HTTP Range requests chuẩn (cực kỳ quan trọng để tua/seek video mượt).
+
  * - Cấu hình CORS mở và no-cache cho .m3u8 để cập nhật playlist mới nhất.
+
  */
 const MEDIA_ROOT = path_1.default.join(__dirname, '../media');
 app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'replay'), {
@@ -375,9 +393,13 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'repla
     }
 }));
 /**
+
  * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
+
  * host:port + protocol với chính request đang gọi /api/... -> nhờ có proxy /live ở trên nên
+
  * điều này đúng cho cả 3 trường hợp: LAN, Cloudflare tunnel (HTTPS), hay override thủ công.
+
  */
 function resolveHlsBaseUrl(req) {
     const forwardedProto = req.headers['x-forwarded-proto']?.split(',')[0]?.trim();
@@ -413,52 +435,52 @@ app.get('/ios/manifest.plist', (req, res) => {
     }
     const ipaUrl = `${scheme}://${host}/ios/${ipaFilename}`;
     const iconUrl = `${scheme}://${host}/vite.svg`;
-    const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>items</key>
-    <array>
-        <dict>
-            <key>assets</key>
-            <array>
-                <dict>
-                    <key>kind</key>
-                    <string>software-package</string>
-                    <key>url</key>
-                    <string>${ipaUrl}</string>
-                </dict>
-                <dict>
-                    <key>kind</key>
-                    <string>display-image</string>
-                    <key>needs-shine</key>
-                    <false/>
-                    <key>url</key>
-                    <string>${iconUrl}</string>
-                </dict>
-                <dict>
-                    <key>kind</key>
-                    <string>full-size-image</string>
-                    <key>needs-shine</key>
-                    <false/>
-                    <key>url</key>
-                    <string>${iconUrl}</string>
-                </dict>
-            </array>
-            <key>metadata</key>
-            <dict>
-                <key>bundle-identifier</key>
-                <string>com.slomo.live</string>
-                <key>bundle-version</key>
-                <string>1.0.0</string>
-                <key>kind</key>
-                <string>software</string>
-                <key>title</key>
-                <string>SloMo Live 240FPS</string>
-            </dict>
-        </dict>
-    </array>
-</dict>
+    const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>assets</key>
+            <array>
+                <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>${ipaUrl}</string>
+                </dict>
+                <dict>
+                    <key>kind</key>
+                    <string>display-image</string>
+                    <key>needs-shine</key>
+                    <false/>
+                    <key>url</key>
+                    <string>${iconUrl}</string>
+                </dict>
+                <dict>
+                    <key>kind</key>
+                    <string>full-size-image</string>
+                    <key>needs-shine</key>
+                    <false/>
+                    <key>url</key>
+                    <string>${iconUrl}</string>
+                </dict>
+            </array>
+            <key>metadata</key>
+            <dict>
+                <key>bundle-identifier</key>
+                <string>com.slomo.live</string>
+                <key>bundle-version</key>
+                <string>1.0.0</string>
+                <key>kind</key>
+                <string>software</string>
+                <key>title</key>
+                <string>SloMo Live 240FPS</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
 </plist>`;
     res.setHeader('Content-Type', 'application/xml');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -693,12 +715,12 @@ io.on('connection', (socket) => {
     socket.on('server_card_detected', (data) => {
         const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
         io.to(targetRoom).emit('card_detected', data);
-        io.emit('card_detected', data);
+        io.to('room_admin').emit('card_detected', data);
     });
     socket.on('ai_debug_crop', (data) => {
         const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
         io.to(targetRoom).emit('ai_debug_crop', data);
-        io.emit('ai_debug_crop', data);
+        io.to('room_admin').emit('ai_debug_crop', data);
     });
     socket.on('live_remote_card', (data) => {
         if (!user)

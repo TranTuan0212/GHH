@@ -7,6 +7,7 @@ export interface User {
   username: string;
   passwordHash: string;
   role: 'ADMIN' | 'USER';
+  allowedMode?: 'mode1' | 'mode2' | 'all';
   isBlocked: boolean;
   expiresAt: string; // ISO string
   createdAt: string;
