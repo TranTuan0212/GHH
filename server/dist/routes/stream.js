@@ -50,6 +50,18 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
         startedAt: new Date().toISOString()
     };
     db_1.db.createStreamSession(newStream);
+    const fullUserForMode = db_1.db.getUserById(roomId);
+    const effModeOnStart = (0, index_1.getEffectiveRoomMode)(roomId);
+    (0, index_1.broadcastRoiWs)({
+        type: 'mode_changed',
+        data: {
+            userId: roomId,
+            username: req.user.username,
+            allowedMode: fullUserForMode?.allowedMode || 'all',
+            effectiveMode: effModeOnStart,
+            isAiEnabled: effModeOnStart === 'mode2'
+        }
+    });
     if (globalIo) {
         globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
         globalIo.to('room_admin').emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
@@ -59,7 +71,10 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
         stream: newStream,
         rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
         streamKey,
-        roi: (0, index_1.getLatestReticleRoi)()
+        roi: (0, index_1.getLatestReticleRoi)(),
+        allowedMode: db_1.db.getUserById(roomId)?.allowedMode || 'all',
+        effectiveMode: (0, index_1.getEffectiveRoomMode)(roomId),
+        isAiEnabled: (0, index_1.getEffectiveRoomMode)(roomId) === 'mode2'
     });
 });
 // POST /api/stream/end — stop ffmpeg nhưng GIỮ LẠI file replay để người xem có thể tua

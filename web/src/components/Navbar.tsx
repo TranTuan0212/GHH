@@ -43,7 +43,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const handleCopyIp = () => {
     const ip = serverLanIp || window.location.hostname;
-    navigator.clipboard.writeText(`http://${ip}:4000`);
+    const isDomain = window.location.hostname.includes('slomoview.stream');
+    navigator.clipboard.writeText(isDomain ? 'https://slomoview.stream' : `http://${ip}:4000`);
     setCopiedIp(true);
     setTimeout(() => setCopiedIp(false), 2000);
   };

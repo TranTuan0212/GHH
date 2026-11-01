@@ -70,10 +70,18 @@ function resolveRtmpHostForClient(req) {
         return { rtmpHost: overrideHost, rtmpPort: overridePort || 1935 };
     }
     const rawHostHeader = (req.headers?.host || '').split(':')[0].trim();
-    if (rawHostHeader.endsWith('trycloudflare.com') || rawHostHeader.endsWith('.ngrok.io') ||
-        rawHostHeader.endsWith('.ngrok-free.app') || rawHostHeader.endsWith('.pinggy.link') ||
-        rawHostHeader.endsWith('.pinggy.online')) {
-        console.log('[Network] Host header là tunnel domain (' + rawHostHeader + '), trả lại cho RTMP.');
+    if (rawHostHeader.includes('slomoview.stream')) {
+        const vpsIp = process.env.VPS_PUBLIC_IP || '157.66.100.10';
+        console.log('[Network] Domain slomoview.stream -> sử dụng VPS IP (' + vpsIp + ':1935) cho RTMP.');
+        return { rtmpHost: vpsIp, rtmpPort: overridePort || 1935 };
+    }
+    if (rawHostHeader.endsWith('trycloudflare.com') ||
+        rawHostHeader.endsWith('.ngrok.io') ||
+        rawHostHeader.endsWith('.ngrok-free.app') ||
+        rawHostHeader.endsWith('.pinggy.link') ||
+        rawHostHeader.endsWith('.pinggy.online') ||
+        (rawHostHeader.includes('.') && !/^\d+\.\d+\.\d+\.\d+$/.test(rawHostHeader) && rawHostHeader !== 'localhost')) {
+        console.log('[Network] Host header là tunnel/domain (' + rawHostHeader + '), trả lại cho RTMP.');
         return { rtmpHost: rawHostHeader, rtmpPort: overridePort || 1935 };
     }
     const isIpv4Pattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;

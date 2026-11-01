@@ -20,6 +20,9 @@ public class NetworkManager: ObservableObject {
     @Published public var currentUsername: String? = nil
     @Published public var currentUserId: String? = nil
     @Published public var userExpiresAt: String? = nil
+    @Published public var allowedMode: String = "all"
+    @Published public var effectiveMode: String = "mode2"
+    @Published public var isAiModeEnabled: Bool = true
     @Published public var activeStreamId: String? = nil
     @Published public var streamKey: String? = nil
     @Published public var rtmpIngestUrl: String? = nil
@@ -63,6 +66,9 @@ public class NetworkManager: ObservableObject {
             self.currentUsername = UserDefaults.standard.string(forKey: "saved_username")
             self.currentUserId = UserDefaults.standard.string(forKey: "saved_user_id")
             self.userExpiresAt = UserDefaults.standard.string(forKey: "saved_user_expires_at")
+            let savedAllowed = UserDefaults.standard.string(forKey: "saved_allowed_mode") ?? "all"
+            let savedEffective = UserDefaults.standard.string(forKey: "saved_effective_mode")
+            self.applyAccountMode(allowed: savedAllowed, effective: savedEffective)
             self.isAuthenticated = true
 
             // Tự động làm mới hạn dùng và thông tin tài khoản từ máy chủ
@@ -77,14 +83,14 @@ public class NetworkManager: ObservableObject {
         if clean.isEmpty { return clean }
 
         if !clean.hasPrefix("http://") && !clean.hasPrefix("https://") {
-            if clean.contains("trycloudflare.com") || clean.contains("ngrok") {
+            if clean.contains("trycloudflare.com") || clean.contains("ngrok") || clean.contains("slomoview.stream") {
                 clean = "https://\(clean)"
             } else {
                 clean = "http://\(clean)"
             }
         }
 
-        if clean.contains("trycloudflare.com") || clean.contains("ngrok") {
+        if clean.contains("trycloudflare.com") || clean.contains("ngrok") || clean.contains("slomoview.stream") {
             if clean.hasPrefix("http://") {
                 clean = clean.replacingOccurrences(of: "http://", with: "https://")
             }
@@ -95,6 +101,27 @@ public class NetworkManager: ObservableObject {
             clean.removeLast()
         }
         return clean
+    }
+
+    public func applyAccountMode(allowed: String?, effective: String?) {
+        let normAllowed = (allowed ?? self.allowedMode).lowercased()
+        self.allowedMode = normAllowed
+        UserDefaults.standard.set(normAllowed, forKey: "saved_allowed_mode")
+
+        let resolvedEffective: String
+        if normAllowed == "mode1" {
+            resolvedEffective = "mode1"
+        } else if normAllowed == "mode2" {
+            resolvedEffective = "mode2"
+        } else if let eff = effective?.lowercased(), (eff == "mode1" || eff == "mode2") {
+            resolvedEffective = eff
+        } else {
+            resolvedEffective = self.effectiveMode
+        }
+
+        self.effectiveMode = resolvedEffective
+        self.isAiModeEnabled = (resolvedEffective == "mode2")
+        UserDefaults.standard.set(resolvedEffective, forKey: "saved_effective_mode")
     }
 
     private var apiBaseURL: String {
@@ -154,6 +181,7 @@ public class NetworkManager: ObservableObject {
                     self.currentUsername = user["username"] as? String
                     self.currentUserId = (user["id"] as? String) ?? (user["_id"] as? String)
                     self.userExpiresAt = user["expiresAt"] as? String
+                    self.applyAccountMode(allowed: user["allowedMode"] as? String, effective: user["effectiveMode"] as? String)
                     self.isAuthenticated = true
                     self.errorMessage = nil
 
@@ -224,6 +252,13 @@ public class NetworkManager: ObservableObject {
                 if let uname = user["username"] as? String {
                     self.currentUsername = uname
                     UserDefaults.standard.set(uname, forKey: "saved_username")
+                }
+                if let uid = (user["id"] as? String) ?? (user["_id"] as? String) {
+                    self.currentUserId = uid
+                    UserDefaults.standard.set(uid, forKey: "saved_user_id")
+                }
+                self.applyAccountMode(allowed: user["allowedMode"] as? String, effective: user["effectiveMode"] as? String)
+                if true {
                 }
                 completion?(true)
             }
@@ -333,6 +368,7 @@ public class NetworkManager: ObservableObject {
                 // sẽ báo lỗi "chưa cấu hình RTMP" thay vì mặc định localhost (gây crash qua 5G).
                 self.rtmpIngestUrl = json["rtmpIngestUrl"] as? String
                 self.hlsPlaylistUrl = streamObj["hlsPlaylistUrl"] as? String
+                self.applyAccountMode(allowed: json["allowedMode"] as? String, effective: json["effectiveMode"] as? String)
                 if let roiObj = json["roi"] as? [String: Any] {
                     RoiSyncManager.shared.updateRoi(data: roiObj)
                 }

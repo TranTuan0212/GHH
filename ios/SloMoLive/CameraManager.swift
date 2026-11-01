@@ -1265,7 +1265,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
             // from background threads" và truy cập thread-safe.
             // Chạy On-Device AI trực tiếp trên CVPixelBuffer gốc không nén
-            if RoiSyncManager.shared.isActive {
+            if NetworkManager.shared.isAiModeEnabled && RoiSyncManager.shared.isActive {
                 let isFront = (self.cameraPosition == .front)
                 CardDetector.shared.processFrame(
                     pixelBuffer: pixelBuffer,

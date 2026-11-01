@@ -33,7 +33,10 @@ export const App: React.FC = () => {
 
   const handleSetAppMode = (mode: 'mode1' | 'mode2') => {
     setAppMode(mode);
-    localStorage.setItem('app_mode', mode);
+    localStorage.setItem('app_mode', mode);
+    if (socket) {
+      socket.emit('set_active_app_mode', { roomId: currentRoomId || user?.id, appMode: mode });
+    }
   };
 
   // Set initial currentRoomId & sync allowedMode when user logs in
@@ -143,7 +146,20 @@ export const App: React.FC = () => {
     });
 
     // Realtime: admin thay đổi tài khoản/bản quyền -> tự tải lại danh sách, không cần reload trang
-    newSocket.on('users_changed', () => {
+    newSocket.on('users_changed', () => {
+      if (token) fetchAdminUsers(token);
+    });
+
+    newSocket.on('user_mode_changed', (data: any) => {
+      if (!data) return;
+      setUser((prev) => (prev && prev.id === data.userId ? { ...prev, allowedMode: data.allowedMode } : prev));
+      if (data.userId === currentRoomIdRef.current && (data.effectiveMode === 'mode1' || data.effectiveMode === 'mode2')) {
+        setAppMode(data.effectiveMode);
+        localStorage.setItem('app_mode', data.effectiveMode);
+      }
+    });
+
+    if (false) newSocket.on('_noop', () => {
       if (token) fetchAdminUsers(token);
     });
 
@@ -161,6 +177,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (socket && currentRoomId) {
       setViewerBlocked(false); // Reset khi đổi phòng
+      socket.emit('set_active_app_mode', { roomId: currentRoomId, appMode });
       socket.emit('join_room', {
         roomId: currentRoomId
       });

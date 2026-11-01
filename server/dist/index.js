@@ -3,8 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.latestReticleRoi = void 0;
+exports.activeRoomModes = exports.latestReticleRoi = void 0;
 exports.getLatestReticleRoi = getLatestReticleRoi;
+exports.getEffectiveRoomMode = getEffectiveRoomMode;
+exports.broadcastRoiWs = broadcastRoiWs;
 const ws_1 = require("ws");
 require("./env");
 const express_1 = __importDefault(require("express"));
@@ -43,6 +45,17 @@ exports.latestReticleRoi = {
 };
 function getLatestReticleRoi() {
     return exports.latestReticleRoi;
+}
+exports.activeRoomModes = new Map();
+function getEffectiveRoomMode(userId) {
+    if (!userId)
+        return 'mode2';
+    const u = db_1.db.getUserById(userId);
+    if (u?.allowedMode === 'mode1')
+        return 'mode1';
+    if (u?.allowedMode === 'mode2')
+        return 'mode2';
+    return exports.activeRoomModes.get(userId) || 'mode2';
 }
 function broadcastRoiWs(payload) {
     const data = JSON.stringify(payload);
@@ -108,11 +121,43 @@ roiWss.on('connection', (ws) => {
     console.log('[WebSocket] iOS Client connected to /ws/roi');
     try {
         ws.send(JSON.stringify({ type: 'roi', data: exports.latestReticleRoi }));
+        const activeLiveInit = db_1.db.getActiveStream() || db_1.db.getLatestStream();
+        if (activeLiveInit?.userId) {
+            const u = db_1.db.getUserById(activeLiveInit.userId);
+            const effMode = getEffectiveRoomMode(activeLiveInit.userId);
+            ws.send(JSON.stringify({
+                type: 'mode_changed',
+                data: {
+                    userId: activeLiveInit.userId,
+                    username: u?.username || '',
+                    allowedMode: u?.allowedMode || 'all',
+                    effectiveMode: effMode,
+                    isAiEnabled: effMode === 'mode2'
+                }
+            }));
+        }
     }
     catch (e) { }
     ws.on('message', (raw) => {
         try {
             const msg = JSON.parse(raw.toString());
+            if (msg.type === 'register_ios_client') {
+                const u = msg.userId ? db_1.db.getUserById(msg.userId) : (msg.username ? db_1.db.getUserByUsername(msg.username) : undefined);
+                if (u) {
+                    const effMode = getEffectiveRoomMode(u.id);
+                    ws.send(JSON.stringify({
+                        type: 'mode_changed',
+                        data: {
+                            userId: u.id,
+                            username: u.username,
+                            allowedMode: u.allowedMode || 'all',
+                            effectiveMode: effMode,
+                            isAiEnabled: effMode === 'mode2'
+                        }
+                    }));
+                }
+                return;
+            }
             if (msg.type === 'card_detected_from_ios' && msg.data) {
                 const cardCode = msg.data.cardValue;
                 const conf = typeof msg.data.confidence === 'number' ? msg.data.confidence : 0.95;
@@ -255,6 +300,30 @@ const realtimeUserChanges = (req, res, next) => {
         if (res.statusCode >= 400)
             return;
         io.to('room_admin').emit('users_changed', { path: fullPath, method: req.method, at: Date.now() });
+        const modeMatch = fullPath.match(/^\/api\/admin\/users\/([^/]+)\/mode$/);
+        if (modeMatch && req.method === 'POST') {
+            const targetUserId = modeMatch[1];
+            const updatedUser = db_1.db.getUserById(targetUserId);
+            if (updatedUser) {
+                const effMode = updatedUser.allowedMode === 'mode1'
+                    ? 'mode1'
+                    : updatedUser.allowedMode === 'mode2'
+                        ? 'mode2'
+                        : (exports.activeRoomModes.get(targetUserId) || 'mode2');
+                exports.activeRoomModes.set(targetUserId, effMode);
+                const modePayload = {
+                    userId: updatedUser.id,
+                    username: updatedUser.username,
+                    allowedMode: updatedUser.allowedMode || 'all',
+                    effectiveMode: effMode,
+                    isAiEnabled: effMode === 'mode2'
+                };
+                io.to(`room_${targetUserId}`).emit('user_mode_changed', modePayload);
+                io.to('room_admin').emit('user_mode_changed', modePayload);
+                broadcastRoiWs({ type: 'mode_changed', data: modePayload });
+                console.log(`[Admin] Đã đồng bộ chuyển chế độ realtime cho ${updatedUser.username} (${targetUserId}) -> ${effMode} (AI=${modePayload.isAiEnabled})`);
+            }
+        }
         const m = fullPath.match(/^\/api\/admin\/users\/([^/]+)(?:\/(toggle-block|reset-device|reset-password))?$/);
         if (!m)
             return;
@@ -276,6 +345,58 @@ app.use('/api/admin', realtimeUserChanges, admin_1.adminRouter);
 app.use('/api/license', realtimeUserChanges, license_1.licenseRouter);
 app.use('/api/stream', stream_1.streamRouter);
 app.use('/api/ai', ai_1.aiRouter);
+// Vietnamese TTS Audio Proxy (đảm bảo đọc tiếng Việt rõ ràng trên mọi trình duyệt / Windows thiếu gói giọng đọc vi-VN)
+app.get('/api/tts', async (req, res) => {
+    try {
+        const text = (req.query.text || '').trim().slice(0, 200);
+        if (!text) {
+            return res.status(400).send('Missing text');
+        }
+        const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&q=${encodeURIComponent(text)}`;
+        const upstream = await fetch(ttsUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        if (!upstream.ok) {
+            return res.status(upstream.status).send('TTS upstream error');
+        }
+        const arrayBuffer = await upstream.arrayBuffer();
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(Buffer.from(arrayBuffer));
+    }
+    catch (err) {
+        res.status(500).send('TTS failed');
+    }
+});
+// WebRTC WHEP Reverse Proxy (tránh lỗi Mixed Content HTTPS -> HTTP port 8889 trên slomoview.stream / VPS 157.66.100.10)
+app.post('/api/whep/:streamKey', express_1.default.text({ type: ['application/sdp', 'text/plain', '*/*'], limit: '2mb' }), async (req, res) => {
+    try {
+        const streamKey = (req.params.streamKey || '').replace(/[^a-zA-Z0-9._-]/g, '');
+        if (!streamKey) {
+            return res.status(400).send('Invalid streamKey');
+        }
+        const sdpOffer = typeof req.body === 'string' ? req.body : '';
+        const upstream = await fetch(`http://127.0.0.1:8889/live/${streamKey}/whep`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: sdpOffer
+        });
+        const answerText = await upstream.text();
+        res.status(upstream.status);
+        res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/sdp');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.send(answerText);
+    }
+    catch (err) {
+        res.status(502).send('WHEP upstream unavailable');
+    }
+});
+app.all('/api/whep/:streamKey/*', (_req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(200).end();
+});
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', serverTime: new Date().toISOString() });
@@ -424,7 +545,7 @@ const appDir = fs_1.default.existsSync(path_1.default.resolve(__dirname, '../../
     ? path_1.default.resolve(__dirname, '../../app')
     : path_1.default.resolve(process.cwd(), 'app');
 app.get('/ios/manifest.plist', (req, res) => {
-    const host = req.headers.host || 'streamslo.date';
+    const host = req.headers.host || 'slomoview.stream';
     const forwardedProto = req.headers['x-forwarded-proto']?.split(',')[0]?.trim();
     const proto = forwardedProto || req.protocol || 'https';
     // Apple itms-services bắt buộc HTTPS (trừ localhost test)
@@ -639,6 +760,7 @@ io.on('connection', (socket) => {
         const fakeReq = { headers: socket.handshake.headers };
         const { rtmpHost, rtmpPort } = (0, network_1.resolveRtmpHostForClient)(fakeReq);
         socket.emit('initial_state', {
+            effectiveMode: getEffectiveRoomMode(roomId),
             roomId,
             activeStream: activeStream || null,
             latestGps: latestGps || null,
@@ -749,6 +871,23 @@ io.on('connection', (socket) => {
         io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
     });
     // --- Server-Side AI Gateway ---
+    socket.on('set_active_app_mode', (data) => {
+        const targetRoomId = (user?.role === 'ADMIN' && data?.roomId) ? data.roomId : (user?.id || data?.roomId || 'default');
+        const requestedMode = data?.appMode === 'mode1' ? 'mode1' : 'mode2';
+        exports.activeRoomModes.set(targetRoomId, requestedMode);
+        const targetUser = db_1.db.getUserById(targetRoomId);
+        const allowedMode = targetUser?.allowedMode || 'all';
+        const effMode = allowedMode === 'mode1' ? 'mode1' : (allowedMode === 'mode2' ? 'mode2' : requestedMode);
+        const modePayload = {
+            userId: targetRoomId,
+            username: targetUser?.username || '',
+            allowedMode,
+            effectiveMode: effMode,
+            isAiEnabled: effMode === 'mode2'
+        };
+        broadcastRoiWs({ type: 'mode_changed', data: modePayload });
+        io.to(`room_${targetRoomId}`).emit('active_app_mode_synced', modePayload);
+    });
     socket.on('set_reticle_roi', (data) => {
         if (data && typeof data === 'object') {
             exports.latestReticleRoi = { ...exports.latestReticleRoi, ...data };

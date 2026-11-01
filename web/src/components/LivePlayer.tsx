@@ -137,7 +137,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [isLive, setIsLive] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const [rotation, setRotation] = useState<number>(0);
   const [isFlipped, setIsFlipped] = useState<boolean>(() => {
     try {
@@ -843,6 +843,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         try {
           const endpoint = new URL(detectedServerUrl);
           const pathKey = stream.streamKey;
+          const rawKey = pathKey.replace(/^live\//, '');
+          if (typeof window !== 'undefined' && window.location.origin) {
+            return `${window.location.origin}/api/whep/${encodeURIComponent(rawKey)}`;
+          }
           const normalizedPath = pathKey.startsWith('live/') ? pathKey : `live/${pathKey}`;
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
@@ -1055,6 +1059,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHasFrame(true);
             video.play().catch((err) => {
               console.warn('[LivePlayer] Autoplay WebRTC ban đầu:', err);
+              video.muted = true;
+              video.play().catch(() => {});
+              const unlockOnGesture = () => {
+                if (liveVideoRef.current) liveVideoRef.current.muted = false;
+                setIsMuted(false);
+                window.removeEventListener('pointerdown', unlockOnGesture, true);
+                window.removeEventListener('keydown', unlockOnGesture, true);
+              };
+              window.addEventListener('pointerdown', unlockOnGesture, true);
+              window.addEventListener('keydown', unlockOnGesture, true);
             });
             const track = streams[0].getVideoTracks()[0];
             if (track) {
@@ -2615,12 +2629,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             - Khi LIVE: Màn hình to toàn bộ.
             - Khi TUA: Ẩn hoàn toàn để dồn 100% GPU cho màn hình tua lại sắc nét, mượt mà và sáng rõ nhất (không có ô PiP che khuất) */}
         <div
+          style={
+            !isLive && hasLiveFrame
+              ? {
+                  width: `${pipWidth}px`,
+                  aspectRatio: '16 / 9',
+                  left: pipPos ? `${pipPos.xPercent}%` : undefined,
+                  right: pipPos ? undefined : '12px',
+                  top: pipPos ? `${pipPos.yPercent}%` : '12px'
+                }
+              : undefined
+          }
+          onMouseDown={!isLive ? (e) => handlePipMouseDown(e.clientX, e.clientY) : undefined}
+          onTouchStart={!isLive ? handlePipTouchStart : undefined}
           className={`select-none ${
             isLive
               ? hasLiveFrame
                 ? 'absolute inset-0 w-full h-full z-10 opacity-100 pointer-events-auto'
                 : 'absolute inset-0 w-full h-full z-0 opacity-0 pointer-events-none'
-              : 'hidden pointer-events-none opacity-0'
+              : hasLiveFrame
+                ? `absolute z-30 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black pointer-events-auto ${isPipDragging ? 'cursor-grabbing scale-[1.02]' : 'cursor-grab hover:border-red-400'}`
+                : 'hidden pointer-events-none opacity-0'
           }`}
         >
           <video
@@ -2639,6 +2668,56 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             autoPlay
           />
         </div>
+
+        {!isLive && hasLiveFrame && (
+          <div
+            className="absolute z-30 rounded-xl overflow-hidden pointer-events-none select-none"
+            style={{
+              width: `${pipWidth}px`,
+              aspectRatio: '16 / 9',
+              left: pipPos ? `${pipPos.xPercent}%` : undefined,
+              right: pipPos ? undefined : '12px',
+              top: pipPos ? `${pipPos.yPercent}%` : '12px'
+            }}
+          >
+            <div className="absolute top-0 inset-x-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-b from-black/85 via-black/40 to-transparent">
+              <div className="flex items-center space-x-1 bg-red-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                <span>LIVE</span>
+              </div>
+              <div className="flex items-center space-x-1 pointer-events-auto">
+                <button
+                  type="button"
+                  onClick={togglePipCorner}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  className="px-1.5 py-0.5 rounded bg-slate-900/85 hover:bg-slate-800 text-white text-[9px] font-bold border border-white/20"
+                  title="Đổi góc Trái / Phải"
+                >
+                  ⇄
+                </button>
+                <button
+                  type="button"
+                  onClick={cyclePipSize}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  className="px-1.5 py-0.5 rounded bg-slate-900/85 hover:bg-slate-800 text-white text-[9px] font-bold border border-white/20"
+                  title="Đổi cỡ khung Live"
+                >
+                  ⤢
+                </button>
+              </div>
+            </div>
+            <div
+              onMouseDown={handlePipResizeStart}
+              onTouchStart={handlePipResizeStart}
+              className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 text-white/80 hover:text-white bg-black/50 rounded-tl pointer-events-auto"
+              title="Kéo để chỉnh kích thước khung Live"
+            >
+              <span className="text-[9px] leading-none select-none">◢</span>
+            </div>
+          </div>
+        )}
 
         {!hasFrame && !hasLiveFrame && (
           <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500 z-20">

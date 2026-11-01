@@ -35,6 +35,12 @@ import {
 } from 'lucide-react';
 import { parseCardRank, getRankLabel } from '../utils/cardRules';
 import { GameMode, computeAllGroupAnswers, evaluate3Cards as eval3Cards, evaluate2Cards, parseCard } from './DataGroupingUI';
+import {
+  Server1GameMode,
+  SuitRuleType,
+  evaluateAllDoorsServer1,
+  getMaxCardsPerDoor
+} from '../utils/server1GameEngine';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
 interface Mode2DashboardProps {
@@ -72,11 +78,12 @@ const SUIT_DISPLAY: Record<string, { symbol: string; color: string; isRed: boole
   'BÍCH': { symbol: '♠', color: 'text-slate-100', isRed: false },
 };
 
-function getConversionFormula(cards: Mode2CardItem[], gameMode: GameMode): string {
+function getConversionFormula(cards: Mode2CardItem[], gameMode: string): string {
   if (!cards || cards.length === 0) return '';
+  if (gameMode !== '3cards' && gameMode !== 'lieng3' && gameMode !== '2cards') return '';
   const parsed = cards.map(c => parseCard(c.code));
   
-  if (gameMode === '3cards' && cards.length === 3) {
+  if ((gameMode === '3cards' || gameMode === 'lieng3') && cards.length === 3) {
     const ranks = parsed.map(p => p.rank);
     if (ranks[0] !== '0' && ranks[0] === ranks[1] && ranks[1] === ranks[2]) {
       return `${ranks[0]}+${ranks[1]}+${ranks[2]} ➔ Sáp ${ranks[0]}`;
@@ -170,10 +177,22 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   user,
   onFinishRound
 }) => {
-  // Cấu hình Bàn chơi theo Chế độ 1
-  const [gameMode, setGameMode] = useState<GameMode>(() => {
-    return (localStorage.getItem('mode2_game_mode') as GameMode) || '3cards';
+  // Cấu hình Bàn chơi đầy đủ 10 bộ môn chuẩn App Server 1
+  const [gameMode, setGameMode] = useState<Server1GameMode>(() => {
+    const saved = localStorage.getItem('mode2_game_mode');
+    if (saved === 'poker') return 'texas5';
+    return (saved as Server1GameMode) || '3cards';
   });
+
+  const [suitRule, setSuitRule] = useState<SuitRuleType>(() => {
+    return (localStorage.getItem('mode2_suit_rule') as SuitRuleType) || 'ro_bonus';
+  });
+
+  const [communityCards, setCommunityCards] = useState<Mode2CardItem[]>([]);
+  const communityCardsRef = useRef<Mode2CardItem[]>(communityCards);
+  useEffect(() => {
+    communityCardsRef.current = communityCards;
+  }, [communityCards]);
 
   const [playerCount, setPlayerCount] = useState<number>(() => {
     const saved = localStorage.getItem('mode2_player_count');
@@ -185,15 +204,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     return saved ? parseInt(saved, 10) : 3;
   });
 
-  // Tự động đồng bộ số lá/cửa theo thể loại bài
+  // Tự động đồng bộ số lá/cửa theo thể loại bài của Server 1
   useEffect(() => {
-    if (gameMode === '2cards') {
-      setCardsPerPlayer(2);
-    } else if (gameMode === 'poker') {
-      setCardsPerPlayer(2);
-    } else if (gameMode === '3cards') {
-      setCardsPerPlayer(3);
-    }
+    const maxForMode = getMaxCardsPerDoor(gameMode, 2);
+    setCardsPerPlayer(maxForMode);
+    localStorage.setItem('mode2_cards_per_player', maxForMode.toString());
   }, [gameMode]);
 
   const [dealStrategy, setDealStrategy] = useState<'roundRobin' | 'sequential'>('roundRobin');
@@ -304,7 +319,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const isSeekingRef = useRef<boolean>(false);
   const [isDraggingSeek, setIsDraggingSeek] = useState<boolean>(false);
   const isDraggingSeekRef = useRef<boolean>(false);
-  const [isMuted, setIsMuted] = useState<boolean>(true);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
 
   // Lật & Xoay khung hình
   const [isFlipped, setIsFlipped] = useState<boolean>(() => {
@@ -334,7 +349,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   const handleCopyIp = () => {
     const ip = serverLanIp || window.location.hostname;
-    navigator.clipboard.writeText(`http://${ip}:4000`);
+    const isDomain = window.location.hostname.includes('slomoview.stream');
+    navigator.clipboard.writeText(isDomain ? 'https://slomoview.stream' : `http://${ip}:4000`);
     setCopiedIp(true);
     setTimeout(() => setCopiedIp(false), 2000);
   };
@@ -400,91 +416,144 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     localStorage.setItem('mode2_histories', JSON.stringify(roundHistories.slice(-20)));
   }, [roundHistories]);
 
-  // Tìm cửa và slot tiếp theo đang chờ lá bài
+  // Tìm cửa và slot tiếp theo đang chờ lá bài (hỗ trợ Phỏm Cửa 1 = 10 lá & Poker 5 lá bài chung)
   const nextTarget = useMemo(() => {
+    const getDoorCap = (d: number) => (gameMode === 'phom9' && d === 1 ? 10 : cardsPerPlayer);
+
     if (dealStrategy === 'sequential') {
       for (let door = 1; door <= playerCount; door++) {
         const cards = doorCards[door] || [];
-        if (cards.length < cardsPerPlayer) {
-          return { door, slot: cards.length };
+        const cap = getDoorCap(door);
+        if (cards.length < cap) {
+          return { door, slot: cards.length, isCommunity: false };
         }
       }
-      return null;
     } else {
-      // roundRobin: Lượt 1: Cửa 1..N, Lượt 2: Cửa 1..N...
-      for (let round = 0; round < cardsPerPlayer; round++) {
+      const maxRounds = gameMode === 'phom9' ? 10 : cardsPerPlayer;
+      for (let round = 0; round < maxRounds; round++) {
         for (let door = 1; door <= playerCount; door++) {
+          const cap = getDoorCap(door);
+          if (round >= cap) continue;
           const cards = doorCards[door] || [];
           if (cards.length === round) {
-            return { door, slot: round };
+            return { door, slot: round, isCommunity: false };
           }
         }
       }
-      return null;
     }
-  }, [doorCards, playerCount, cardsPerPlayer, dealStrategy]);
 
-  // Đánh giá điểm từng Cửa theo Chế độ 1
+    if (gameMode === 'texas5' && communityCards.length < 5) {
+      return { door: 0, slot: communityCards.length, isCommunity: true };
+    }
+
+    return null;
+  }, [doorCards, communityCards, playerCount, cardsPerPlayer, dealStrategy, gameMode]);
+
+  // Đánh giá toàn bộ các Cửa bằng Server 1 Game Engine (hỗ trợ đủ 10 bộ môn bài)
+  const server1Evals = useMemo(() => {
+    const doorsMatrix: string[][] = [];
+    for (let d = 1; d <= playerCount; d++) {
+      doorsMatrix.push((doorCards[d] || []).map((c) => c.code));
+    }
+    const commCodes = communityCards.map((c) => c.code);
+    return evaluateAllDoorsServer1(doorsMatrix, commCodes, gameMode, suitRule);
+  }, [doorCards, communityCards, playerCount, gameMode, suitRule]);
+
+  // Đánh giá điểm từng Cửa
   const evaluations = useMemo(() => {
     const res: { [door: number]: any } = {};
     for (let d = 1; d <= playerCount; d++) {
-      const items = (doorCards[d] || []).map((c) => ({
-        id: `${d}-${c.code}`,
-        streamId: '',
-        userId: '',
-        cardValue: c.code,
-        groupIndex: d,
-        sequenceOrder: 0,
-        createdAt: ''
-      }));
-
-      if (gameMode === '2cards') {
-        const ev = evaluate2Cards(items);
-        res[d] = {
-          title: ev.label,
-          subText: `${items.length}/${cardsPerPlayer} lá`,
-          points: ev.total,
-          highlightClass: ev.highlightClass
-        };
-      } else {
-        const ev = eval3Cards(items);
-        res[d] = {
-          title: ev.label,
-          subText: `${items.length}/${cardsPerPlayer} lá`,
-          points: ev.score,
-          highlightClass: ev.highlightClass
-        };
-      }
+      const items = doorCards[d] || [];
+      const cap = gameMode === 'phom9' && d === 1 ? 10 : cardsPerPlayer;
+      const ev = server1Evals[d - 1];
+      const isComplete = ev && ev.score >= 0;
+      res[d] = {
+        title: isComplete ? ev.title : 'Chờ bài',
+        subText: ev?.subTitle ? `${ev.subTitle} (${items.length}/${cap})` : `${items.length}/${cap} lá`,
+        points: ev?.score ?? -1,
+        chiGroups: ev?.chiGroups,
+        chiTitles: ev?.chiTitles,
+        highlightClass: isComplete
+          ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+          : 'bg-slate-800 text-slate-400'
+      };
     }
     return res;
-  }, [doorCards, playerCount, gameMode, cardsPerPlayer]);
+  }, [doorCards, playerCount, gameMode, cardsPerPlayer, server1Evals]);
 
-  // Đối chiếu kết quả & Xếp hạng thắng thua giữa tất cả các Cửa như Chế độ 1
+  // Đối chiếu kết quả & Xếp hạng thắng thua giữa tất cả các Cửa theo chuẩn App Server 1
   const groupAnswersResult = useMemo(() => {
-    const allEntries: any[] = [];
-    for (let d = 1; d <= playerCount; d++) {
-      (doorCards[d] || []).forEach((c, idx) => {
-        allEntries.push({
-          id: `${d}-${c.code}-${idx}`,
-          streamId: '',
-          userId: '',
-          cardValue: c.code,
-          groupIndex: d,
-          sequenceOrder: idx,
-          createdAt: ''
-        });
-      });
+    const baseAnswers = server1Evals.map((ev, idx) => {
+      const groupNum = idx + 1;
+      const isComplete = ev.score >= 0;
+      return {
+        groupNum,
+        label: isComplete ? ev.title : 'Chờ bài',
+        subTitle: ev.subTitle || '',
+        score: ev.score,
+        isComplete,
+        rank: undefined as number | undefined,
+        chiGroups: ev.chiGroups,
+        chiTitles: ev.chiTitles,
+        highlightClass: isComplete
+          ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+          : 'bg-slate-800 text-slate-400'
+      };
+    });
+
+    const completed = baseAnswers
+      .filter((a) => a.isComplete && a.score >= 0)
+      .sort((a, b) => b.score - a.score);
+
+    let currentRank = 1;
+    for (let i = 0; i < completed.length; i++) {
+      if (i > 0 && Math.abs(completed[i].score - completed[i - 1].score) > 0.001) {
+        currentRank = i + 1;
+      }
+      completed[i].rank = currentRank;
     }
-    return computeAllGroupAnswers(allEntries, playerCount, gameMode);
-  }, [doorCards, playerCount, gameMode]);
+
+    const rankByGroup = new Map<number, number>();
+    completed.forEach((c) => {
+      if (c.rank) rankByGroup.set(c.groupNum, c.rank);
+    });
+
+    const answers = baseAnswers.map((a) => {
+      const rk = rankByGroup.get(a.groupNum);
+      return {
+        ...a,
+        rank: rk,
+        highlightClass:
+          rk === 1
+            ? 'bg-amber-500 text-slate-950 font-black shadow'
+            : a.isComplete
+            ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+            : 'bg-slate-800 text-slate-400'
+      };
+    });
+
+    const winnerGroupNum = completed.length > 0 ? completed[0].groupNum : null;
+    const leaderboardText =
+      completed.length >= 2
+        ? '🏆 Xếp hạng: ' +
+          completed
+            .map((c) => `Hạng ${c.rank}: Cửa ${c.groupNum} (${c.label})`)
+            .join(' ➔ ')
+        : '';
+
+    return {
+      answers,
+      sortedComplete: completed,
+      winnerGroupNum,
+      completeGroupsCount: completed.length,
+      leaderboardText
+    };
+  }, [server1Evals]);
 
   const isAllDoorsComplete = useMemo(() => {
     if (playerCount <= 0) return false;
-    for (let d = 1; d <= playerCount; d++) {
-      if ((doorCards[d] || []).length < cardsPerPlayer) return false;
-    }
-    return true;
-  }, [doorCards, playerCount, cardsPerPlayer]);
+    return groupAnswersResult.completeGroupsCount >= playerCount;
+  }, [playerCount, groupAnswersResult.completeGroupsCount]);
 
   const winnerDoor = isAllDoorsComplete ? (groupAnswersResult.winnerGroupNum || 0) : 0;
 
@@ -531,25 +600,30 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       }
 
       const currentCards = doorCardsRef.current;
-      const alreadyDealt = Object.values(currentCards).some((cards) =>
-        Array.isArray(cards) && cards.some((c) => c.code === cardCode)
-      );
+      const currentComm = communityCardsRef.current;
+      const alreadyDealt =
+        Object.values(currentCards).some((cards) => Array.isArray(cards) && cards.some((c) => c.code === cardCode)) ||
+        currentComm.some((c) => c.code === cardCode);
       if (alreadyDealt) return false;
+
+      const getDoorCap = (d: number) => (gameMode === 'phom9' && d === 1 ? 10 : cardsPerPlayer);
 
       // Tìm cửa tiếp theo theo dealStrategy (sequential hoặc round_robin)
       let targetDoor = -1;
       if (dealStrategy === 'sequential') {
         for (let d = 1; d <= playerCount; d++) {
           const list = currentCards[d] || [];
-          if (list.length < cardsPerPlayer) {
+          if (list.length < getDoorCap(d)) {
             targetDoor = d;
             break;
           }
         }
       } else {
-        // round_robin (vòng tròn: lá 1 lần lượt các cửa -> lá 2 -> lá 3)
-        for (let s = 0; s < cardsPerPlayer; s++) {
+        // round_robin (vòng tròn: lá 1 lần lượt các cửa -> lá 2 -> ...; Phỏm vòng 10 vào Cửa 1)
+        const maxRounds = gameMode === 'phom9' ? 10 : cardsPerPlayer;
+        for (let s = 0; s < maxRounds; s++) {
           for (let d = 1; d <= playerCount; d++) {
+            if (s >= getDoorCap(d)) continue;
             const list = currentCards[d] || [];
             if (list.length === s) {
               targetDoor = d;
@@ -560,8 +634,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         }
       }
 
-      if (targetDoor === -1) return false;
-
       const newItem: Mode2CardItem = {
         code: cardCode,
         image,
@@ -569,6 +641,20 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         confidence,
         timestamp: new Date().toLocaleTimeString('vi-VN')
       };
+
+      // Nếu là Texas Hold'em và đã chia đủ 2 lá tẩy cho các cửa -> chia tiếp vào 5 lá bài chung
+      if (targetDoor === -1) {
+        if (gameMode === 'texas5' && currentComm.length < 5) {
+          const nextComm = [...currentComm, newItem];
+          communityCardsRef.current = nextComm;
+          setCommunityCards(nextComm);
+          playBeepSound();
+          setIsAiFlashing(true);
+          setTimeout(() => setIsAiFlashing(false), 450);
+          return true;
+        }
+        return false;
+      }
 
       const updatedMap = {
         ...currentCards,
@@ -591,11 +677,18 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       }
       return true;
     },
-    [cardsPerPlayer, playerCount, dealStrategy, socket, roomId]
+    [cardsPerPlayer, playerCount, dealStrategy, gameMode, socket, roomId]
   );
 
   // Hoàn tác lá bài vừa nhận gần nhất
   const handleUndo = () => {
+    if (gameMode === 'texas5' && communityCards.length > 0) {
+      const nextComm = communityCards.slice(0, -1);
+      communityCardsRef.current = nextComm;
+      setCommunityCards(nextComm);
+      return;
+    }
+
     let lastDoor = -1;
     for (let d = playerCount; d >= 1; d--) {
       const cards = doorCards[d] || [];
@@ -609,10 +702,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     if (lastDoor !== -1) {
       setDoorCards((prev) => {
         const cur = prev[lastDoor] || [];
-        return {
+        const next = {
           ...prev,
           [lastDoor]: cur.slice(0, -1)
         };
+        doorCardsRef.current = next;
+        return next;
       });
     }
   };
@@ -641,6 +736,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
     doorCardsRef.current = {};
     setDoorCards({});
+    communityCardsRef.current = [];
+    setCommunityCards([]);
     setCapturedFrame(null);
     if (socket && roomId) {
       socket.emit('cards_cleared', { roomId });
@@ -659,6 +756,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   const handleResetSession = useCallback(() => {
     doorCardsRef.current = {};
     setDoorCards({});
+    communityCardsRef.current = [];
+    setCommunityCards([]);
     setRoundHistories([]);
     localStorage.removeItem('mode2_histories');
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
@@ -1219,8 +1318,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     const sKey = activeStreamSession?.streamKey;
     if (!sKey || activeStreamSession?.status === 'ENDED') return '';
     try {
+      const cleanKey = sKey.replace(/^live\//, '');
+      if (typeof window !== 'undefined' && window.location.origin) {
+        return `${window.location.origin}/api/whep/${encodeURIComponent(cleanKey)}`;
+      }
       const hostname = window.location.hostname || '127.0.0.1';
-      return `http://${hostname}:8889/live/${sKey}/whep`;
+      return `http://${hostname}:8889/live/${cleanKey}/whep`;
     } catch {
       return '';
     }
@@ -1275,7 +1378,21 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             }
             liveVideoRef.current.srcObject = streams[0];
             liveVideoRef.current.playbackRate = 1.0;
-            liveVideoRef.current.play().catch(() => {});
+            liveVideoRef.current.muted = isMuted;
+            liveVideoRef.current.play().catch(() => {
+              if (liveVideoRef.current) {
+                liveVideoRef.current.muted = true;
+                liveVideoRef.current.play().catch(() => {});
+              }
+              const unlockOnGesture = () => {
+                if (liveVideoRef.current) liveVideoRef.current.muted = false;
+                setIsMuted(false);
+                window.removeEventListener('pointerdown', unlockOnGesture, true);
+                window.removeEventListener('keydown', unlockOnGesture, true);
+              };
+              window.addEventListener('pointerdown', unlockOnGesture, true);
+              window.addEventListener('keydown', unlockOnGesture, true);
+            });
             if (replayVideoRef.current && !replayVideoRef.current.paused) {
               replayVideoRef.current.pause();
             }
@@ -2388,53 +2505,114 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         <div className="lg:col-span-6 flex flex-col gap-3">
           {/* MỤC 1: BẢNG ĐIỀU KHIỂN TRÒ CHƠI & XẾP HẠNG TÍNH ĐIỂM THEO CHẾ ĐỘ 1 */}
           <div className="bg-slate-900/90 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur flex flex-col space-y-3">
-            {/* Header: Thể loại chơi */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800 text-xs">
-              <span className="font-bold text-slate-200 flex items-center space-x-1.5">
-                <Sliders className="w-4 h-4 text-emerald-400" />
-                <span>Thể Loại Bài & Bàn Cược</span>
-              </span>
-              <div className="flex items-center space-x-1">
-                <button
-                  onClick={() => {
-                    setGameMode('3cards');
-                    localStorage.setItem('mode2_game_mode', '3cards');
-                  }}
-                  className={`px-2.5 py-1 rounded text-xs font-bold transition ${
-                    gameMode === '3cards'
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  3 Lá (Bài Cào)
-                </button>
-                <button
-                  onClick={() => {
-                    setGameMode('2cards');
-                    localStorage.setItem('mode2_game_mode', '2cards');
-                  }}
-                  className={`px-2.5 py-1 rounded text-xs font-bold transition ${
-                    gameMode === '2cards'
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  2 Lá (Xì Dách)
-                </button>
-                <button
-                  onClick={() => {
-                    setGameMode('poker');
-                    localStorage.setItem('mode2_game_mode', 'poker');
-                  }}
-                  className={`px-2.5 py-1 rounded text-xs font-bold transition ${
-                    gameMode === 'poker'
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  Poker (4 Chất)
-                </button>
+            {/* Header: Thể loại chơi (Đầy đủ 10 bộ môn chuẩn App Server 1) */}
+            <div className="flex flex-col space-y-2 pb-2 border-b border-slate-800 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-200 flex items-center space-x-1.5">
+                  <Sliders className="w-4 h-4 text-emerald-400" />
+                  <span>Bộ Môn Bài (Chuẩn App Server 1)</span>
+                </span>
+                {(gameMode === '3cards' || gameMode === 'lieng3') && (
+                  <div className="flex items-center space-x-1 bg-slate-950/80 p-0.5 rounded-lg border border-slate-800 text-[10px]">
+                    <span className="text-slate-400 px-1">Xét chất:</span>
+                    {([
+                      { id: 'ro_bonus', label: 'Có Rô ♦' },
+                      { id: 'co_ro_tep_bich', label: 'Cơ>Rô>Tép>Bích' },
+                      { id: 'bich_ro_co_tep', label: 'Bích>Rô>Cơ>Tép' },
+                      { id: 'dong_hang', label: 'Đồng hạng' }
+                    ] as { id: SuitRuleType; label: string }[]).map((sr) => (
+                      <button
+                        key={sr.id}
+                        type="button"
+                        onClick={() => {
+                          setSuitRule(sr.id);
+                          localStorage.setItem('mode2_suit_rule', sr.id);
+                        }}
+                        className={`px-1.5 py-0.5 rounded font-bold transition ${
+                          suitRule === sr.id
+                            ? 'bg-amber-500 text-slate-950 font-black'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {sr.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
+
+              <div className="flex flex-wrap items-center gap-1">
+                {([
+                  { id: '3cards', label: '3 Lá (Bài Cào ♦)' },
+                  { id: 'lieng3', label: 'Liêng / 3 Cây' },
+                  { id: '2cards', label: '2 Lá (Xì Dách)' },
+                  { id: 'texas5', label: 'Poker (2+5 Chung)' },
+                  { id: 'binh6', label: 'Binh 6 Lá' },
+                  { id: 'binh9', label: 'Binh 9 Lá (Có Liêng)' },
+                  { id: 'binh9NoStraight', label: '9 Lá Không Liên' },
+                  { id: 'phom9', label: 'Phỏm (9-10 Lá)' },
+                  { id: 'samLoc10', label: 'Sâm Lốc (10 Lá)' },
+                  { id: 'chan19', label: 'Chắn TQ (19 Lá)' }
+                ] as { id: Server1GameMode; label: string }[]).map((gm) => (
+                  <button
+                    key={gm.id}
+                    type="button"
+                    onClick={() => {
+                      setGameMode(gm.id);
+                      localStorage.setItem('mode2_game_mode', gm.id);
+                    }}
+                    className={`px-2 py-1 rounded text-[11px] font-bold transition ${
+                      gameMode === gm.id
+                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20 ring-1 ring-emerald-400'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {gm.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Thanh 5 Lá Bài Chung (Community Cards) khi chơi Poker Texas Hold'em */}
+              {gameMode === 'texas5' && (
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-indigo-950/40 border border-indigo-500/40 rounded-lg px-2.5 py-1.5">
+                  <span className="font-bold text-indigo-300 text-[11px]">
+                    🃏 5 Lá Bài Chung ({communityCards.length}/5):
+                  </span>
+                  <div className="flex items-center space-x-1.5">
+                    {Array.from({ length: 5 }, (_, cIdx) => {
+                      const cItem = communityCards[cIdx];
+                      const f = cItem ? formatCardItem(cItem.code) : null;
+                      const isNextComm = nextTarget?.isCommunity && nextTarget?.slot === cIdx;
+                      return (
+                        <div
+                          key={cIdx}
+                          onClick={() => {
+                            setPickerTarget({
+                              mode: cItem ? 'edit' : 'add',
+                              groupNum: 0,
+                              slotIndex: cIdx,
+                              currentValue: cItem?.code || ''
+                            });
+                            setPickerOpen(true);
+                          }}
+                          className={`px-2 py-1 rounded border text-xs font-mono font-black cursor-pointer transition ${
+                            isNextComm
+                              ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300 animate-pulse'
+                              : f
+                              ? f.isRed
+                                ? 'bg-rose-950 border-rose-500 text-rose-300'
+                                : 'bg-slate-800 border-slate-500 text-white'
+                              : 'border-dashed border-slate-600 bg-slate-900/60 text-slate-500'
+                          }`}
+                          title="Nhấn để chọn/sửa lá bài chung"
+                        >
+                          {f ? `${f.rank}${f.symbol}` : `Chung ${cIdx + 1}`}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Chọn Số Cửa & Chế độ chia bài */}
@@ -2575,6 +2753,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                                 {formula}
                               </div>
                             )}
+                            {ans.chiTitles && ans.chiTitles.length > 0 ? (
+                              <div className="w-full mt-1 space-y-0.5 text-[9px] text-left bg-slate-950/80 p-1 rounded border border-white/5 font-mono text-emerald-300">
+                                {ans.chiTitles.map((ct, cIdx) => (
+                                  <div key={cIdx} className="truncate">{ct}</div>
+                                ))}
+                              </div>
+                            ) : ans.subTitle ? (
+                              <div className="text-[9px] text-slate-300 font-mono mt-0.5 truncate max-w-full px-1">
+                                {ans.subTitle}
+                              </div>
+                            ) : null}
                           </>
                         ) : (
                           <span className="text-[10px] text-slate-500 italic py-1">Chưa có bài</span>
@@ -2641,7 +2830,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 </button>
                 <button
                   onClick={() => {
+                    doorCardsRef.current = {};
+                    communityCardsRef.current = [];
                     setDoorCards({});
+                    setCommunityCards([]);
                     setCapturedFrame(null);
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-red-900/60 text-slate-200 hover:text-red-300 font-bold text-xs flex items-center space-x-1"
@@ -2655,7 +2847,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 <div className="text-xs text-slate-300 font-medium flex items-center space-x-1">
                   <span className="text-slate-400">Lá tiếp theo:</span>
                   <span className="font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
-                    Cửa {nextTarget.door} (Lá {nextTarget.slot + 1})
+                    {nextTarget.isCommunity
+                      ? `Bài Chung (Lá ${nextTarget.slot + 1})`
+                      : `Cửa ${nextTarget.door} (Lá ${nextTarget.slot + 1})`}
                   </span>
                 </div>
               )}
@@ -2732,7 +2926,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             {nextTarget ? (
               <span className="font-bold text-emerald-400 flex items-center space-x-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>Cửa {nextTarget.door} (Lá {nextTarget.slot + 1})</span>
+                <span>
+                  {nextTarget.isCommunity
+                    ? `Bài Chung (Lá ${nextTarget.slot + 1})`
+                    : `Cửa ${nextTarget.door} (Lá ${nextTarget.slot + 1})`}
+                </span>
               </span>
             ) : (
               <span className="font-bold text-amber-400">Đã đủ bài tất cả cửa!</span>
@@ -3015,10 +3213,10 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
                 {/* CÁC Ô CHỨA LÁ BÀI KÈM HÌNH ẢNH 1080P THEO CỬA */}
                 <div className="space-y-1.5">
-                  {Array.from({ length: cardsPerPlayer }, (_, slotIdx) => {
+                  {Array.from({ length: gameMode === 'phom9' && doorNum === 1 ? 10 : cardsPerPlayer }, (_, slotIdx) => {
                     const cardItem = cards[slotIdx];
                     const cardInfo = cardItem ? formatCardItem(cardItem.code) : null;
-                    const isActiveSlot = nextTarget?.door === doorNum && nextTarget?.slot === slotIdx;
+                    const isActiveSlot = !nextTarget?.isCommunity && nextTarget?.door === doorNum && nextTarget?.slot === slotIdx;
 
                     return (
                       <div
@@ -3127,22 +3325,40 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         target={pickerTarget}
         numGroups={playerCount}
         onSelectCard={(val, targetGroup) => {
-          setDoorCards((prev) => {
-            const current = [...(prev[targetGroup] || [])];
-            const newCardItem: Mode2CardItem = {
-              code: val,
-              timestamp: new Date().toLocaleTimeString('vi-VN')
-            };
-            if (pickerTarget.mode === 'edit' && pickerTarget.slotIndex !== undefined) {
-              current[pickerTarget.slotIndex] = {
-                ...current[pickerTarget.slotIndex],
-                code: val
-              };
-            } else {
-              current.push(newCardItem);
-            }
-            return { ...prev, [targetGroup]: current };
-          });
+          const newCardItem: Mode2CardItem = {
+            code: val,
+            timestamp: new Date().toLocaleTimeString('vi-VN')
+          };
+          if (targetGroup === 0) {
+            setCommunityCards((prev) => {
+              const current = [...prev];
+              if (pickerTarget.mode === 'edit' && pickerTarget.slotIndex !== undefined) {
+                current[pickerTarget.slotIndex] = {
+                  ...(current[pickerTarget.slotIndex] || newCardItem),
+                  code: val
+                };
+              } else if (current.length < 5) {
+                current.push(newCardItem);
+              }
+              communityCardsRef.current = current;
+              return current;
+            });
+          } else {
+            setDoorCards((prev) => {
+              const current = [...(prev[targetGroup] || [])];
+              if (pickerTarget.mode === 'edit' && pickerTarget.slotIndex !== undefined) {
+                current[pickerTarget.slotIndex] = {
+                  ...(current[pickerTarget.slotIndex] || newCardItem),
+                  code: val
+                };
+              } else {
+                current.push(newCardItem);
+              }
+              const nextMap = { ...prev, [targetGroup]: current };
+              doorCardsRef.current = nextMap;
+              return nextMap;
+            });
+          }
           setPickerOpen(false);
         }}
       />

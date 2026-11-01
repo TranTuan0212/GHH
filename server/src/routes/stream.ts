@@ -3,7 +3,7 @@ import { db, CardEntry, GpsLog, StreamSession } from '../db';
 import { authMiddleware, adminMiddleware, AuthRequest } from './auth';
 import { cleanupStreamSession, stopFfmpegOnly, getCleanupStatus, runCronCleanupOnce } from '../mediaServer';
 import { resolveRtmpHostForClient } from '../utils/network';
-import { getLatestReticleRoi } from '../index';
+import { getLatestReticleRoi, getEffectiveRoomMode, broadcastRoiWs } from '../index';
 
 export const streamRouter = Router();
 
@@ -55,6 +55,18 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
   };
 
   db.createStreamSession(newStream);
+  const fullUserForMode = db.getUserById(roomId);
+  const effModeOnStart = getEffectiveRoomMode(roomId);
+  broadcastRoiWs({
+    type: 'mode_changed',
+    data: {
+      userId: roomId,
+      username: req.user.username,
+      allowedMode: fullUserForMode?.allowedMode || 'all',
+      effectiveMode: effModeOnStart,
+      isAiEnabled: effModeOnStart === 'mode2'
+    }
+  });
 
   if (globalIo) {
     globalIo.to(`room_${roomId}`).emit('stream_status_changed', { roomId, status: 'LIVE', session: newStream });
@@ -66,7 +78,10 @@ streamRouter.post('/start', authMiddleware, (req: AuthRequest, res: Response) =>
     stream: newStream,
     rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
     streamKey,
-    roi: getLatestReticleRoi()
+    roi: getLatestReticleRoi(),
+    allowedMode: db.getUserById(roomId)?.allowedMode || 'all',
+    effectiveMode: getEffectiveRoomMode(roomId),
+    isAiEnabled: getEffectiveRoomMode(roomId) === 'mode2'
   });
 });
 

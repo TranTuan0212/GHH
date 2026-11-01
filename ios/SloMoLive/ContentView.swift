@@ -302,7 +302,7 @@ struct ContentView: View {
                         let viewW = geo.size.width
                         let viewH = geo.size.height
 
-                        if roiSync.isRoiVisible && roiSync.isActive {
+                        if networkManager.isAiModeEnabled && roiSync.isRoiVisible && roiSync.isActive {
                             let orient = cameraManager.currentCaptureOrientation
                             let isFront = (cameraManager.currentDevicePosition == .front)
                             let isLandscape = (orient == .landscapeLeft || orient == .landscapeRight)
@@ -491,6 +491,9 @@ struct ContentView: View {
                                     Text("Hạn: \(networkManager.getRemainingTimeText())")
                                         .font(.system(size: 10, weight: .bold))
                                     Text("| User: \(networkManager.currentUsername ?? "")")
+                                    Text(networkManager.isAiModeEnabled ? "• MODE 2 (AI)" : "• MODE 1")
+                                        .font(.system(size: 10, weight: .black))
+                                        .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .orange)
                                         .font(.system(size: 10))
                                         .foregroundColor(.white.opacity(0.7))
                                 }
@@ -593,7 +596,8 @@ struct ContentView: View {
                                                 .stroke(cameraManager.isFocusLocked ? Color.green : Color.white.opacity(0.2), lineWidth: 1)
                                         )
                                     }
-                                    // 5. Nút Bật/Tắt Ô Soi Debug trên màn hình iPhone
+                                    // 5. Nút Bật/Tắt Ô Soi Debug trên màn hình iPhone (Chỉ hiện khi bật AI Chế độ 2)
+                                    if networkManager.isAiModeEnabled {
                                     Button(action: {
                                         roiSync.toggleVisibility()
                                     }) {
@@ -612,6 +616,11 @@ struct ContentView: View {
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 10)
                                                 .stroke(roiSync.isRoiVisible ? Color.red : Color.white.opacity(0.2), lineWidth: 1)
+                                        )
+                                    }
+                                    }
+                                    if false { EmptyView().padding(0
+                                    //
                                         )
                                     }
 
@@ -1076,6 +1085,22 @@ public class RoiSyncManager: ObservableObject {
 
         listenForMessages()
         startPingTimer()
+        sendClientRegistration()
+        startPingTimer()
+    }
+
+    public func sendClientRegistration() {
+        let uid = NetworkManager.shared.currentUserId ?? ""
+        let uname = NetworkManager.shared.currentUsername ?? ""
+        let payload: [String: Any] = [
+            "type": "register_ios_client",
+            "userId": uid,
+            "username": uname
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let str = String(data: data, encoding: .utf8) {
+            webSocketTask?.send(.string(str)) { _ in }
+        }
     }
 
     private func startPingTimer() {
@@ -1192,6 +1217,27 @@ public class RoiSyncManager: ObservableObject {
                 }
 
             case "cards_cleared":
+                self.detectedCard = nil
+                self.hasRecentDetection = false
+                self.clearDetectionWorkItem?.cancel()
+
+            case "mode_changed":
+                if let modeData = json["data"] as? [String: Any] {
+                    let targetUid = (modeData["userId"] as? String) ?? ""
+                    let targetUname = (modeData["username"] as? String) ?? ""
+                    let myUid = NetworkManager.shared.currentUserId ?? ""
+                    let myUname = NetworkManager.shared.currentUsername ?? ""
+                    if targetUid.isEmpty || myUid.isEmpty || targetUid == myUid || (!targetUname.isEmpty && targetUname == myUname) {
+                        let allowed = modeData["allowedMode"] as? String
+                        let effective = modeData["effectiveMode"] as? String
+                        NetworkManager.shared.applyAccountMode(allowed: allowed, effective: effective)
+                        if !NetworkManager.shared.isAiModeEnabled {
+                            self.detectedCard = nil
+                            self.hasRecentDetection = false
+                            self.liveDebugScan = ""
+                        }
+                    }
+                }
                 self.detectedCard = nil
                 self.hasRecentDetection = false
                 self.clearDetectionWorkItem?.cancel()
