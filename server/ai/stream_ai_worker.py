@@ -72,7 +72,7 @@ CORNER_ONNX_PATH = os.path.join(MODEL_DIR, "cards_corner_yolo.onnx")
 
 NUM_AI_CHANNELS = 4  # 4 Kênh AI chuyên biệt 4 góc: Kênh #1 (0°), Kênh #2 (-22°), Kênh #3 (+22°), Kênh #4 (Phối cảnh 1.35x)
 
-MIN_CONFIDENCE = 0.58  # Ngưỡng chống nhiễu >= 58% (loại bỏ hoàn toàn kích hoạt giả 46% trên hàng rào/kính xe)
+MIN_CONFIDENCE = 0.42  # Ngưỡng bắt dính nhạy 42% cho luồng 120fps đa góc
 
 
 
@@ -865,6 +865,8 @@ def on_stream_status_changed(data):
             if global_aggregator is not None:
 
                 global_aggregator.reset()
+                browser_scanned_cache['code'] = None
+                browser_scanned_cache['ts'] = 0.0
 
         elif status == 'ENDED':
 
@@ -905,6 +907,8 @@ def on_cards_cleared(data):
     if global_aggregator is not None:
 
         global_aggregator.reset()
+        browser_scanned_cache['code'] = None
+        browser_scanned_cache['ts'] = 0.0
 
 
 
@@ -946,6 +950,8 @@ def on_reticle_roi_updated(data):
 
 
 
+
+browser_scanned_cache = {'code': None, 'ts': 0.0, 'sharpness': 0.0}
 instant_engine = None
 
 instant_corner_engine = None
@@ -965,6 +971,8 @@ def on_reset_session_ram(data=None):
         if global_aggregator:
 
             global_aggregator.reset()
+        browser_scanned_cache['code'] = None
+        browser_scanned_cache['ts'] = 0.0
 
         print("[AI Worker] 🧹 ĐÃ XÓA SẠCH BỘ ĐỆM RAM (locked_cards & spatial_clusters), SẴN SÀNG TEST PHIÊN MỚI!")
 
@@ -1126,7 +1134,43 @@ def on_scan_exact_frame_request(data):
 
             c_code = card_dict.get('code', 'CARD')
 
-            print(f"[AI Worker] 🎯 [FRAME {time_str}] Quét trúng: {card_title} | Nét={sharpness}")
+            now_scan = time.time()
+
+            is_same_recent = (
+
+                browser_scanned_cache.get('code') == c_code
+
+                and (now_scan - browser_scanned_cache.get('ts', 0.0)) < 0.85
+
+            )
+
+            update_only = False
+
+            if is_same_recent:
+
+                if sharpness > browser_scanned_cache.get('sharpness', 0.0) * 1.12:
+
+                    update_only = True
+
+                    browser_scanned_cache['sharpness'] = sharpness
+
+                    browser_scanned_cache['ts'] = now_scan
+
+                else:
+
+                    return
+
+            else:
+
+                browser_scanned_cache['code'] = c_code
+
+                browser_scanned_cache['ts'] = now_scan
+
+                browser_scanned_cache['sharpness'] = sharpness
+
+            tag = " (Update Nét)" if update_only else ""
+
+            print(f"[AI Worker] 🎯 [FRAME {time_str}] Quét trúng: {card_title} | Nét={sharpness}{tag}")
 
             sio.emit('server_card_detected', {
 
@@ -1148,7 +1192,7 @@ def on_scan_exact_frame_request(data):
 
                 'roomId': room_id,
 
-                'updateFrameOnly': False
+                'updateFrameOnly': update_only
 
             })
 
@@ -1499,9 +1543,9 @@ class BestFrameCardAggregator:
                     # 2. Kiểm tra nếu vị trí (cx, cy) này trùng với 1 lá bài vừa chốt cách đây < 0.45s
                     is_dup_recent = False
                     for l_code, l_info in self.locked_cards.items():
-                        if (now - l_info['last_seen']) < 0.45:
+                        if (now - l_info['last_seen']) < 0.25:
                             dist_locked = math.hypot(cx - l_info.get('cx', -999), cy - l_info.get('cy', -999))
-                            if dist_locked < 85.0 and best_card.get('rank') == l_info['card'].get('rank'):
+                            if dist_locked < 70.0 and best_card.get('rank') == l_info['card'].get('rank'):
                                 l_info['last_seen'] = now
                                 is_dup_recent = True
                                 break
@@ -1584,7 +1628,7 @@ class BestFrameCardAggregator:
 
             # Bỏ qua nếu chỉ xuất hiện 1 frame yếu và đã rời đi
 
-            if cl['total_frames'] < 2 and winner['conf'] < 0.70:
+            if cl['total_frames'] < 2 and winner['conf'] < 0.60:
 
                 if idle <= 0.080:
 
@@ -1598,9 +1642,9 @@ class BestFrameCardAggregator:
 
             # Cửa sổ 150ms đủ để frame nét nhất (3♣ 94%) đè bẹp frame mờ lúc mới vào (3♠/5♠ 75%)
 
-            ready_by_window = (winner['count'] >= 2 and (age >= 0.150 or winner['count'] >= 4 or idle >= 0.060))
+            ready_by_window = (winner['count'] >= 2 and (age >= 0.100 or winner['count'] >= 3 or idle >= 0.040))
 
-            ready_by_high_conf = (winner['count'] >= 2 and winner['conf'] >= 0.82 and winner['sharpness'] >= 60.0 and age >= 0.090)
+            ready_by_high_conf = (winner['count'] >= 1 and winner['conf'] >= 0.76 and age >= 0.050)
 
 
 
@@ -1616,11 +1660,11 @@ class BestFrameCardAggregator:
 
                 for l_code, l_info in self.locked_cards.items():
 
-                    if (now - l_info['last_seen']) < 2.0:
+                    if (now - l_info['last_seen']) < 0.35:
 
                         dist = math.hypot(cl['cx'] - l_info.get('cx', -999), cl['cy'] - l_info.get('cy', -999))
 
-                        if dist < 120.0 and winner['card'].get('rank') == l_info['card'].get('rank'):
+                        if dist < 80.0 and winner['card'].get('rank') == l_info['card'].get('rank'):
 
                             same_rank_code = l_code
 
@@ -1682,7 +1726,7 @@ class BestFrameCardAggregator:
 
 
 
-                if w_code not in self.locked_cards and winner['conf'] >= 0.74:
+                if w_code not in self.locked_cards and winner['conf'] >= 0.65:
 
                     self.locked_cards[w_code] = {
 
@@ -1954,7 +1998,7 @@ class MultiChannelFrameBuffer120Fps:
 
 
 
-def rotate_image_and_map_boxes(reticle_crop, angle_deg, main_engine, pad=68):
+def rotate_image_and_map_boxes(reticle_crop, angle_deg, main_engine, pad=16):
 
     """
 
@@ -2072,7 +2116,7 @@ def detect_multi_angle_on_channel(channel_id, main_engine, sub_raw, crop_box, ro
 
     if channel_id == 0:
 
-        pad = 74
+        pad = 8
 
         padded = cv2.copyMakeBorder(reticle_crop, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(38, 38, 38))
 
@@ -2108,17 +2152,17 @@ def detect_multi_angle_on_channel(channel_id, main_engine, sub_raw, crop_box, ro
 
     elif channel_id == 1:
 
-        boxes_in_crop = rotate_image_and_map_boxes(reticle_crop, -22.0, main_engine, pad=68)
+        boxes_in_crop = rotate_image_and_map_boxes(reticle_crop, -22.0, main_engine, pad=16)
 
     elif channel_id == 2:
 
-        boxes_in_crop = rotate_image_and_map_boxes(reticle_crop, +22.0, main_engine, pad=68)
+        boxes_in_crop = rotate_image_and_map_boxes(reticle_crop, +22.0, main_engine, pad=16)
 
     else:
 
-        fy_scale = 1.45
+        fy_scale = 1.35
 
-        pad = 65
+        pad = 12
 
         stretched = cv2.resize(reticle_crop, None, fx=1.0, fy=fy_scale, interpolation=cv2.INTER_LINEAR)
 
@@ -2306,6 +2350,7 @@ def debug_crop_broadcaster_loop():
 
     """
 
+    last_sent_ts = 0.0
     while not stop_worker.is_set():
 
         time.sleep(1.0)

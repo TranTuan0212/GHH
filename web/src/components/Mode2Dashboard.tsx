@@ -1023,9 +1023,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
               next[idx] = frameData;
               return next;
             }
-            return prev;
           }
-          return prev.length > 0 ? [frameData, ...prev.slice(1)] : [frameData];
+          return prev;
         });
         return;
       }
@@ -1042,7 +1041,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           }
           return prev;
         }
-        return [frameData, ...prev.slice(0, 8)];
+        return [frameData, ...prev.filter((item) => item.cardName !== cardTitle).slice(0, 7)];
       });
       addCardToActiveDoor(best.code, data.image, sharp, conf, false);
     };
