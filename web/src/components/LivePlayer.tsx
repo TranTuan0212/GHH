@@ -1039,14 +1039,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             try {
               const anyReceiver = receiver as any;
               if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
-                anyReceiver.playoutDelayHint = 0.55;
+                anyReceiver.playoutDelayHint = 0.10;
               }
               if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
-                anyReceiver.jitterBufferTarget = 550;
+                anyReceiver.jitterBufferTarget = 100;
               }
             } catch {}
             if (cancelled || !streams[0]) return;
-            receivedVideoTrack = true;
+            if (event.track.kind === 'video') {
+              receivedVideoTrack = true;
+            }
             video.srcObject = streams[0];
             video.muted = isMuted;
             setHasLiveFrame(true);
@@ -1140,7 +1142,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peer = null;
           peerConnectionRef.current = null;
           console.log(`[LivePlayer] WHEP chưa sẵn sàng (lần ${attempt}, sẽ thử lại):`, error);
-          await new Promise((resolve) => window.setTimeout(resolve, 350));
+          await new Promise((resolve) => window.setTimeout(resolve, 150));
         }
       }
     };

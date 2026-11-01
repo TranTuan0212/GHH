@@ -1628,9 +1628,9 @@ class BestFrameCardAggregator:
 
             # Bỏ qua nếu chỉ xuất hiện 1 frame yếu và đã rời đi
 
-            if cl['total_frames'] < 2 and winner['conf'] < 0.60:
+            if cl['total_frames'] < 2 and winner['conf'] < 0.52:
 
-                if idle <= 0.080:
+                if idle <= 0.120:
 
                     remaining.append(cl)
 
@@ -1642,13 +1642,15 @@ class BestFrameCardAggregator:
 
             # Cửa sổ 150ms đủ để frame nét nhất (3♣ 94%) đè bẹp frame mờ lúc mới vào (3♠/5♠ 75%)
 
-            ready_by_window = (winner['count'] >= 2 and (age >= 0.100 or winner['count'] >= 3 or idle >= 0.040))
+            ready_by_fast = (winner['count'] >= 1 and winner['conf'] >= 0.62 and winner['sharpness'] >= 45.0 and (age >= 0.035 or idle >= 0.025))
 
-            ready_by_high_conf = (winner['count'] >= 1 and winner['conf'] >= 0.76 and age >= 0.050)
+            ready_by_window = (winner['count'] >= 2 and (age >= 0.075 or winner['count'] >= 3 or idle >= 0.030))
+
+            ready_by_high_conf = (winner['count'] >= 1 and winner['conf'] >= 0.72 and age >= 0.030)
 
 
 
-            if ready_by_window or ready_by_high_conf:
+            if ready_by_fast or ready_by_window or ready_by_high_conf:
 
                 w_code = winner['code']
 
@@ -1810,7 +1812,7 @@ class MultiChannelFrameBuffer120Fps:
 
     def __init__(self, src):
 
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "fflags;nobuffer|flags;low_delay|probesize;32|analyzeduration;0|threads;4"
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|probesize;32|analyzeduration;0|threads;2"
 
         self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
 
@@ -2785,19 +2787,19 @@ def stream_coordinator_loop(aggregator):
 
 
 
-            reader = MultiChannelFrameBuffer120Fps(f"{RTMP_BASE_URL}/{s_key}")
-
-            if not reader.is_opened:
-
-                reader.release()
-
-                reader = MultiChannelFrameBuffer120Fps(f"{RTSP_BASE_URL}/live/{s_key}")
+            reader = MultiChannelFrameBuffer120Fps(f"{RTSP_BASE_URL}/live/{s_key}")
 
             if not reader.is_opened:
 
                 reader.release()
 
                 reader = MultiChannelFrameBuffer120Fps(f"{RTSP_BASE_URL}/{s_key}")
+
+            if not reader.is_opened:
+
+                reader.release()
+
+                reader = MultiChannelFrameBuffer120Fps(f"{RTMP_BASE_URL}/{s_key}")
 
 
 
