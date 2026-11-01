@@ -1380,8 +1380,10 @@ public class CardDetector: NSObject, ObservableObject {
     private var isPassActive = false
     private var passStartTime: TimeInterval = 0.0
     private var passLastSeenTime: TimeInterval = 0.0
-    private var passBestSharpness: Double = 0.0
-    private var passBestImageBase64: String? = nil
+    private var passBestConf: Int = 0
+    private var passBestPixelBuffer: CVPixelBuffer? = nil
+    private var passBestRoiRect: CGRect = .zero
+    private var passBestIsFront: Bool = false
     private var passBestCard: String? = nil
     private var lastLockedCard: String? = nil
     private var lockCooldownUntil: TimeInterval = 0.0
@@ -1533,7 +1535,7 @@ public class CardDetector: NSObject, ObservableObject {
                 }
             }
         }
-        request.imageCropAndScaleOption = .scaleFill
+        request.imageCropAndScaleOption = .scaleFit
         try? handler.perform([request])
         return (detected, rawBest)
     }
@@ -1542,26 +1544,29 @@ public class CardDetector: NSObject, ObservableObject {
         let now = Date().timeIntervalSince1970
         guard isPassActive else { return }
 
-        // Khi lá bài đã lướt ra khỏi ô soi (không thấy >= 0.12s / ~14 frame 120fps)
-        if (now - passLastSeenTime) >= 0.12 {
+        // Khi lá bài đã lướt ra khỏi ô soi (không thấy >= 0.10s / ~12 frame 120fps)
+        if (now - passLastSeenTime) >= 0.10 {
             isPassActive = false
             // Tìm lá bài chiến thắng đạt điểm tin cậy tích lũy cao nhất
-            if let winner = passVotes.max(by: { $0.value.totalConf < $1.value.totalConf }),
-               winner.value.count >= 2 { // Cần ít nhất 2 frame để triệt tiêu hoàn toàn nhiễu ảo
+            if let winner = passVotes.max(by: { $0.value.totalConf < $1.value.totalConf }) {
+                let voteCount = winner.value.count
+                let peakConf = winner.value.peakConf
                 let winnerCard = winner.key
-                if lastLockedCard != winnerCard || now > lockCooldownUntil {
+                // Bắt cả bài lướt siêu nhanh (1 frame nhưng conf >= 45%) hoặc lướt bình thường (>= 2 frames)
+                if (voteCount >= 2 || peakConf >= 45) && (lastLockedCard != winnerCard || now > lockCooldownUntil) {
                     commitLockedCard(
                         cardCode: winnerCard,
-                        conf: winner.value.peakConf,
-                        sharpness: passBestSharpness,
-                        imageBase64: passBestImageBase64
+                        conf: peakConf,
+                        fallbackPixelBuffer: passBestPixelBuffer,
+                        roiRect: passBestRoiRect,
+                        isFront: passBestIsFront
                     )
                 }
             }
             passVotes.removeAll()
             passBestCard = nil
-            passBestImageBase64 = nil
-            passBestSharpness = 0.0
+            passBestPixelBuffer = nil
+            passBestConf = 0
             RoiSyncManager.shared.clearLiveScanDebug()
         }
     }
@@ -1574,23 +1579,24 @@ public class CardDetector: NSObject, ObservableObject {
             isPassActive = true
             passStartTime = now
             passVotes.removeAll()
-            passBestSharpness = 0.0
-            passBestImageBase64 = nil
+            passBestConf = 0
+            passBestPixelBuffer = nil
             passBestCard = nil
         }
 
-        // Tích lũy điểm voting trong suốt chu kỳ bài lướt qua ô
+        // Tích lũy điểm voting trong suốt chu kỳ bài lướt qua ô (Cực nhanh: 0.05ms, KHÔNG nén JPEG)
         var vote = passVotes[cardCode] ?? PassVote(count: 0, totalConf: 0, peakConf: 0)
         vote.count += 1
         vote.totalConf += conf
         vote.peakConf = max(vote.peakConf, conf)
         passVotes[cardCode] = vote
 
-        // Lấy frame nét nhất (Peak Sharpness Selection)
-        let (base64Image, sharpness) = extractCroppedImageAndSharpness(from: pixelBuffer, roiRect: roiRect, isFront: isFront)
-        if sharpness > passBestSharpness {
-            passBestSharpness = sharpness
-            passBestImageBase64 = base64Image
+        // Giữ lại pixelBuffer có độ tin cậy cao nhất cho snapshot
+        if conf >= passBestConf {
+            passBestConf = conf
+            passBestPixelBuffer = pixelBuffer
+            passBestRoiRect = roiRect
+            passBestIsFront = isFront
             passBestCard = cardCode
         }
 
@@ -1599,18 +1605,28 @@ public class CardDetector: NSObject, ObservableObject {
             commitLockedCard(
                 cardCode: cardCode,
                 conf: vote.peakConf,
-                sharpness: passBestSharpness,
-                imageBase64: passBestImageBase64
+                fallbackPixelBuffer: pixelBuffer,
+                roiRect: roiRect,
+                isFront: isFront
             )
         }
     }
 
-    private func commitLockedCard(cardCode: String, conf: Int, sharpness: Double, imageBase64: String?) {
+    private func commitLockedCard(cardCode: String, conf: Int, fallbackPixelBuffer: CVPixelBuffer?, roiRect: CGRect, isFront: Bool) {
         let now = Date().timeIntervalSince1970
         lastLockedCard = cardCode
         lockCooldownUntil = now + 0.35 // Chống chia trùng lặp trong 350ms
 
-        NSLog("[CardDetector] 🎯 120fps PASS-THROUGH CHỐT BÀI LƯỚT: %@ (%d%%) | Nét=%.1f", cardCode, conf, sharpness)
+        // CHỈ nén JPEG ĐÚNG 1 LẦN DUY NHẤT khi CHỐT BÀI (Zero-Drop trong toàn bộ chu kỳ 120fps trước đó)
+        var imageBase64: String? = nil
+        var sharpness: Double = 85.0
+        if let pb = fallbackPixelBuffer ?? passBestPixelBuffer {
+            let res = extractCroppedImageAndSharpness(from: pb, roiRect: roiRect.isEmpty ? passBestRoiRect : roiRect, isFront: isFront)
+            imageBase64 = res.base64
+            sharpness = res.sharpness
+        }
+
+        NSLog("[CardDetector] 🎯 120fps CHỐT BÀI: %@ (%d%%) | Nét=%.1f", cardCode, conf, sharpness)
         DispatchQueue.main.async {
             RoiSyncManager.shared.notifyCardDetected(
                 cardCode: cardCode,
