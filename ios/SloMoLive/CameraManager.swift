@@ -20,9 +20,17 @@ import CoreMotion
 /// - Khi user tua lại / slow-mo, hls.js chỉ cần seek vào timestamp trong playlist, server trả nguyên
 ///   file .ts tương ứng — không cần dựng lại ảnh, không tốn CPU từ frame rời.
 public class CameraManager: NSObject, ObservableObject {
-    @Published public var isStreaming = false
+    @Published public var isStreaming = false {
+        didSet {
+            RoiSyncManager.shared.isStreaming = isStreaming
+        }
+    }
     @Published public private(set) var isConnecting = false
-    @Published public var currentFPS: Double = 240.0
+    @Published public var currentFPS: Double = 240.0 {
+        didSet {
+            RoiSyncManager.shared.currentFPS = currentFPS
+        }
+    }
     @Published public var errorMessage: String? = nil
 
     /// URL ingest RTMP. App iOS nhận `serverUrl` (LAN IP + port 1935) và `streamKey` từ backend

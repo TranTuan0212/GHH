@@ -237,6 +237,8 @@ function parseCardMeta(cardCode: string) {
 
 
 
+let lastDeviceTelemetry: any = null;
+
 roiWss.on('connection', (ws) => {
 
   roiWsClients.add(ws);
@@ -289,6 +291,11 @@ roiWss.on('connection', (ws) => {
             }
           }));
         }
+        return;
+      }
+      if (msg.type === 'device_telemetry' && msg.data) {
+        lastDeviceTelemetry = msg.data;
+        io.emit('device_telemetry', msg.data);
         return;
       }
       if (msg.type === 'card_detected_from_ios' && msg.data) {
@@ -1224,6 +1231,16 @@ io.on('connection', (socket) => {
   const user = (socket as any).user;
 
   console.log(`[Socket] Client connected: ${socket.id} | User: ${user ? `${user.username} (${user.role})` : 'Anonymous'}`);
+
+  if (lastDeviceTelemetry) {
+    socket.emit('device_telemetry', lastDeviceTelemetry);
+  }
+
+  socket.on('ping_check', (callback) => {
+    if (typeof callback === 'function') {
+      callback();
+    }
+  });
 
 
 

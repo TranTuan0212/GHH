@@ -994,6 +994,33 @@ public class RoiSyncManager: ObservableObject {
     @Published public var normH: CGFloat = 0.40
     @Published public var isActive: Bool = true
 
+    // Telemetry & Network Status
+    public var currentFPS: Double = 120.0
+    public var isStreaming: Bool = false
+
+    public func sendTelemetry(pingMs: Int) {
+        let uid = NetworkManager.shared.currentUserId ?? ""
+        let uname = NetworkManager.shared.currentUsername ?? ""
+        let bitrateStr = isStreaming ? "10.4" : "0.0"
+        let fpsInt = isStreaming ? Int(currentFPS) : 0
+        let payload: [String: Any] = [
+            "type": "device_telemetry",
+            "data": [
+                "userId": uid,
+                "username": uname,
+                "fps": fpsInt,
+                "bitrate": bitrateStr,
+                "ping": pingMs,
+                "isStreaming": isStreaming,
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let str = String(data: data, encoding: .utf8) {
+            webSocketTask?.send(.string(str)) { _ in }
+        }
+    }
+
     // AI Detection State
     @Published public var detectedCard: String? = nil
     @Published public var detectedConfidence: Int = 0
@@ -1070,8 +1097,9 @@ public class RoiSyncManager: ObservableObject {
     private func startPingTimer() {
         stopPingTimer()
         DispatchQueue.main.async { [weak self] in
-            self?.pingTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            self?.pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 guard let self = self, self.isConnected else { return }
+                let pingStart = Date()
                 self.webSocketTask?.sendPing { [weak self] error in
                     if let error = error {
                         print("[RoiSyncManager] WS Ping failed: \(error.localizedDescription)")
@@ -1079,6 +1107,9 @@ public class RoiSyncManager: ObservableObject {
                             self?.isConnected = false
                             self?.scheduleReconnect()
                         }
+                    } else {
+                        let pingMs = max(1, Int(Date().timeIntervalSince(pingStart) * 1000))
+                        self?.sendTelemetry(pingMs: pingMs)
                     }
                 }
             }

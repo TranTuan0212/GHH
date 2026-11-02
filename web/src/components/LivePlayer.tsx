@@ -150,6 +150,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Độ phân giải thực tế của video stream nhận được (WebRTC Live hoặc HLS Replay)
   const [streamDimensions, setStreamDimensions] = useState<{ width: number; height: number } | null>(null);
 
+  // Đo tốc độ mạng & Ping (iPhone -> Server & Web <- Server)
+  const [phoneStats, setPhoneStats] = useState<{ fps: number; bitrate: string; ping: number; isStreaming: boolean } | null>(null);
+  const [webPing, setWebPing] = useState<number | null>(null);
+  const [webBitrate, setWebBitrate] = useState<number | null>(null);
+
   const toggleFlip = () => {
     setIsFlipped((prev) => {
       const next = !prev;
@@ -914,14 +919,71 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       handleRoundFinishedRef.current();
     };
 
+    const onDeviceTelemetry = (data: any) => {
+      if (data) {
+        setPhoneStats(data);
+      }
+    };
+
     socket.on('initial_state', handleInitialState);
     socket.on('round_finished', onRoundFinished);
+    socket.on('device_telemetry', onDeviceTelemetry);
 
     return () => {
       socket.off('initial_state', handleInitialState);
       socket.off('round_finished', onRoundFinished);
+      socket.off('device_telemetry', onDeviceTelemetry);
     };
   }, [socket, roomId, stream?.streamKey, stream?.status]);
+
+  // Định kỳ đo Ping và Bitrate từ Web tới Server
+  useEffect(() => {
+    let timer: number | null = null;
+    let lastBytes = 0;
+    let lastTime = performance.now();
+
+    const measureStats = async () => {
+      const pc = peerConnectionRef.current;
+      if (pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected')) {
+        try {
+          const stats = await pc.getStats();
+          stats.forEach((report) => {
+            if (report.type === 'candidate-pair' && (report.state === 'succeeded' || (report as any).nominated)) {
+              if (typeof report.currentRoundTripTime === 'number') {
+                setWebPing(Math.max(1, Math.round(report.currentRoundTripTime * 1000)));
+              }
+            }
+            if (report.type === 'inbound-rtp' && report.kind === 'video') {
+              const now = performance.now();
+              const bytes = (report as any).bytesReceived || 0;
+              if (lastBytes > 0 && now > lastTime) {
+                const bitRate = ((bytes - lastBytes) * 8) / ((now - lastTime) / 1000) / (1024 * 1024);
+                if (bitRate >= 0 && bitRate < 200) {
+                  setWebBitrate(bitRate);
+                }
+              }
+              lastBytes = bytes;
+              lastTime = now;
+            }
+          });
+        } catch {}
+      } else {
+        if (socket && socket.connected) {
+          const t0 = performance.now();
+          socket.emit('ping_check', () => {
+            const rtt = Math.round(performance.now() - t0);
+            setWebPing(Math.max(1, rtt));
+          });
+        }
+      }
+    };
+
+    timer = window.setInterval(measureStats, 1500);
+    measureStats();
+    return () => {
+      if (timer) window.clearInterval(timer);
+    };
+  }, [socket]);
 
   // Khi phiên stream kết thúc hoặc được mở ở trạng thái ENDED:
   // Tự động chuyển sang chế độ Replay để người dùng có thể xem lại toàn bộ video/DVR
@@ -1375,6 +1437,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => {
         const fragments = data.details?.fragments || [];
         console.log('[LivePlayer][hls.js] LEVEL_LOADED — số segment trong playlist:', fragments.length, '| live:', data.details?.live);
+        if ((data as any)?.stats) {
+          const st = (data as any).stats;
+          const dur = (st.loaded - st.loading) / 1000;
+          if (dur > 0 && st.total > 0) {
+            const mbps = (st.total * 8) / dur / (1024 * 1024);
+            if (mbps > 0 && mbps < 500) setWebBitrate(mbps);
+          }
+        }
         // MSE video.seekable is empty on some Chromium/HLS combinations. The HLS playlist
         // itself is authoritative: each fragment carries its ordered start PTS + duration.
         if (fragments.length > 0) {
@@ -2609,7 +2679,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
-            imageRendering: '-webkit-optimize-contrast' as any,
+            imageRendering: 'auto' as any,
+            willChange: 'transform',
             filter: isSharpBoost ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
           }}
           playsInline
@@ -2651,7 +2722,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
                 : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
               transition: 'transform 0.1s ease-out',
-              imageRendering: '-webkit-optimize-contrast' as any,
+              imageRendering: 'auto' as any,
+            willChange: 'transform',
               filter: isSharpBoost && isLive ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
             }}
             playsInline
@@ -2830,6 +2902,42 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 {streamDimensions.width}x{streamDimensions.height}
               </span>
             )}
+
+            {/* Thanh đo tốc độ mạng & Ping 2 chặng: iPhone -> Server & Web <- Server */}
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              {/* Chặng 1: iPhone -> Server */}
+              <div 
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 border border-slate-700/60 text-[10px] sm:text-[11px] font-mono font-bold shadow-sm"
+                title="Tốc độ đẩy luồng và độ trễ từ iPhone tới Server"
+              >
+                <span className={`w-2 h-2 rounded-full ${
+                  !phoneStats || !phoneStats.isStreaming ? 'bg-slate-500' :
+                  (phoneStats.ping < 60 ? 'bg-emerald-400' : (phoneStats.ping < 120 ? 'bg-amber-400' : 'bg-red-500 animate-pulse'))
+                }`} />
+                <span className="text-slate-400">📱 iPhone:</span>
+                <span className="text-white">{phoneStats && phoneStats.isStreaming ? `${phoneStats.bitrate} Mbps` : 'Sẵn sàng'}</span>
+                {phoneStats && phoneStats.isStreaming && (
+                  <>
+                    <span className="text-amber-400 font-extrabold">• {phoneStats.fps} FPS</span>
+                    <span className="text-cyan-400 font-extrabold">• {phoneStats.ping}ms</span>
+                  </>
+                )}
+              </div>
+
+              {/* Chặng 2: Web <- Server */}
+              <div 
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 border border-slate-700/60 text-[10px] sm:text-[11px] font-mono font-bold shadow-sm"
+                title="Tốc độ tải video và độ trễ từ Web tới Server"
+              >
+                <span className={`w-2 h-2 rounded-full ${
+                  webPing === null ? 'bg-slate-500' :
+                  (webPing < 60 ? 'bg-emerald-400' : (webPing < 120 ? 'bg-amber-400' : 'bg-red-500'))
+                }`} />
+                <span className="text-slate-400">💻 Web:</span>
+                <span className="text-white">{webBitrate !== null ? `${webBitrate.toFixed(1)} Mbps` : '--'}</span>
+                <span className="text-cyan-400 font-extrabold">{webPing !== null ? `• ${webPing}ms` : ''}</span>
+              </div>
+            </div>
           </div>
           {!isLive && (
             <button
