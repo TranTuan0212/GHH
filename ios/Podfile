@@ -64,16 +64,14 @@ post_install do |installer|
         File.write(video_cfg, cfg_patched) if cfg_patched != cfg_source
       end
 
-      # Prevent LFStreamingBuffer (located in 'publish/LFStreamingBuffer.m' in LFLiveKit 2.6)
-      # from prematurely deleting unsent P/I frames during 4G network jitter at 120fps.
-      # Increase max unsent buffer to 4800 packets (~25s elastic RAM buffer on 4G).
+      # Tối ưu LFStreamingBuffer: Giữ độ trễ real-time < 1.5s, không để tích lũy lag trong RAM.
       ['publish', 'buffer'].each do |subdir|
         streaming_buf = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', subdir, 'LFStreamingBuffer.m')
         if File.exist?(streaming_buf)
           buf_source = File.read(streaming_buf)
           buf_patched = buf_source.gsub(
             'defaultSendBufferMaxCount = 600;',
-            'defaultSendBufferMaxCount = 4800;'
+            'defaultSendBufferMaxCount = 300;'
           ).gsub(
             'defaultSortBufferMaxCount = 5;',
             'defaultSortBufferMaxCount = 2;'
