@@ -131,6 +131,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [hasFrame, setHasFrame] = useState(false);
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
   const [bufferedRanges, setBufferedRanges] = useState<Array<{ start: number; end: number }>>([]);
+  // Tính năng: Hẹn giờ Slow-mo tự động khi HLS nạp tới mốc Live
+  interface ScheduledSlow {
+    targetTime: number;
+    speed: number;
+    scheduledAt: number;
+  }
+  const [scheduledSlow, setScheduledSlow] = useState<ScheduledSlow | null>(null);
+  const scheduledSlowRef = useRef<ScheduledSlow | null>(null);
+  const [autoSlowSpeed, setAutoSlowSpeed] = useState<number>(0.25);
   const hasLiveFrameRef = useRef<boolean>(false);
   hasLiveFrameRef.current = hasLiveFrame;
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -1683,6 +1692,20 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           list.push({ start: b.start(i), end: b.end(i) });
         }
         setBufferedRanges(list);
+
+        // Kiểm tra xem Chấm Vàng HLS đã nạp tới Cờ Hẹn Slow chưa
+        const lastHlsEnd = b.end(b.length - 1);
+        if (scheduledSlowRef.current && isLiveRef.current) {
+          const sched = scheduledSlowRef.current;
+          if (lastHlsEnd >= sched.targetTime - 0.25) {
+            console.log('[LivePlayer] 🎯 HLS đã nạp tới Cờ Hẹn -> Tự động kích hoạt Slow:', sched);
+            const targetTime = sched.targetTime;
+            const speed = sched.speed;
+            scheduledSlowRef.current = null;
+            setScheduledSlow(null);
+            switchToSlowAtTime(targetTime, speed);
+          }
+        }
       }
     };
 
@@ -1896,6 +1919,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     updateFrozenTimeline(null);
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
+    scheduledSlowRef.current = null;
+    setScheduledSlow(null);
 
     // 1. Kích hoạt và bật tiếng cho luồng trực tiếp Live WebRTC
     const liveVid = liveVideoRef.current;
@@ -2010,6 +2035,71 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       handleRoundFinished();
     }
   }, [finishRoundTrigger]);
+
+  // Hàm chuyển Slow tại đúng mốc thời gian chỉ định (phục vụ tự động kích hoạt mốc hẹn)
+  const switchToSlowAtTime = (targetTime: number, speed: number) => {
+    isLiveRef.current = false;
+    setIsLive(false);
+    setPlaybackRate(speed);
+    playbackRateRef.current = speed;
+    setIsPlaying(!isDraggingSeekRef.current);
+
+    if (liveVideoRef.current) {
+      liveVideoRef.current.muted = isMuted;
+      liveVideoRef.current.play().catch(() => {});
+    }
+
+    const video = replayVideoRef.current;
+    if (video) {
+      if (hlsRef.current) {
+        hlsRef.current.config.liveMaxLatencyDuration = 86400;
+      }
+      video.playbackRate = speed;
+      video.muted = true;
+      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+      const start = Math.max(0, latestEdge - 180);
+      const end = Math.max(start + 0.1, latestEdge);
+      updateFrozenTimeline({ start, end });
+
+      const safeTime = Math.max(start, Math.min(end, targetTime));
+      isSeekingRef.current = false;
+      targetSeekTimeRef.current = null;
+      video.currentTime = safeTime;
+      setCurrentTime(safeTime);
+      if (!isDraggingSeekRef.current) {
+        video.play().catch(() => {});
+      }
+    }
+
+    showModeNotice(
+      'slow',
+      `⚡ ĐÃ KÍCH HOẠT SLOW ${speed}x TỰ ĐỘNG!`,
+      `Đã chạm mốc cờ hẹn! Đang phát quay chậm mượt mà 120 FPS`,
+      'Bấm [🔴 VỀ LIVE] hoặc phím [Enter] để quay lại trực tiếp'
+    );
+  };
+
+  // Bật / tắt hẹn giờ Slow tự động khi HLS nạp tới mốc
+  const toggleScheduledSlow = (customSpeed?: number) => {
+    if (scheduledSlowRef.current) {
+      scheduledSlowRef.current = null;
+      setScheduledSlow(null);
+      showModeNotice('live', 'ĐÃ HỦY CỜ HẸN SLOW', 'Đã hủy lệnh tự động quay chậm', '');
+      return;
+    }
+    const speed = customSpeed ?? autoSlowSpeed;
+    const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+    const targetTime = latestEdge > 0 ? latestEdge : currentTime;
+    const item = { targetTime, speed, scheduledAt: Date.now() };
+    scheduledSlowRef.current = item;
+    setScheduledSlow(item);
+    showModeNotice(
+      'slow',
+      `🎯 ĐÃ CẮM CỜ HẸN SLOW ${speed}x (Phím S)`,
+      'Khi Chấm Vàng HLS nạp tới mốc này, video sẽ TỰ ĐỘNG chuyển sang Slow-Motion!',
+      'Bấm phím [S] lần nữa để hủy hẹn'
+    );
+  };
 
   const switchToSlow = (speed: number, keepCurrentPosition = false) => {
     isLiveRef.current = false;
@@ -2246,6 +2336,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       e.preventDefault();
       toggleFlip();
       return;
+    }
+
+    if (e.key === 's' || e.key === 'S') {
+      if (isLiveRef.current) {
+        e.preventDefault();
+        toggleScheduledSlow();
+        return;
+      }
     }
 
     if (e.key === 'f' || e.key === 'F') {
@@ -2546,6 +2644,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ? Math.max(0, Math.min(1, (currentTime - timelineStart) / totalSpan))
             : 0));
   const seekFillRatio = dragRatio !== null ? dragRatio : currentVideoRatio;
+
+  // Tính toán vị trí Chấm Vàng HLS và Cờ Hẹn trên thanh timeline
+  const lastHlsEnd = bufferedRanges.length > 0 ? bufferedRanges[bufferedRanges.length - 1].end : 0;
+  const hlsBufferRatio = totalSpan > 0 ? Math.max(0, Math.min(1, (lastHlsEnd - timelineStart) / totalSpan)) : 0;
+  const flagMarkerRatio = (scheduledSlow && totalSpan > 0) ? Math.max(0, Math.min(1, (scheduledSlow.targetTime - timelineStart) / totalSpan)) : null;
 
   // Thời gian hiển thị ở đầu bên trái: đi theo tay kéo mượt mà, khi Live luôn hiện mốc mới nhất
   const displayCurrentTime = (!hasStreamData || activeDuration === 0)
@@ -2965,32 +3068,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             <div className="absolute inset-x-0 rounded-full overflow-hidden transition-all"
               style={{ height: isDraggingSeek || seekHoverTime !== null ? 6 : 4, top: '50%', transform: 'translateY(-50%)' }}>
               {/* Grey track */}
-              <div className="absolute inset-0 bg-slate-700/80" />
-              {/* Buffer Ranges: Vùng video đã lưu sẵn 100% trong RAM */}
-              {bufferedRanges.map((b, idx) => {
-                const bStart = Math.max(timelineStart, Math.min(timelineEnd, b.start));
-                const bEnd = Math.max(timelineStart, Math.min(timelineEnd, b.end));
-                if (bEnd <= bStart) return null;
-                const leftPct = ((bStart - timelineStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
-                const widthPct = ((bEnd - bStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
-                return (
-                  <div
-                    key={idx}
-                    className="absolute top-0 h-full bg-white/35 rounded-full pointer-events-none"
-                    style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                    title="Vùng video đã nạp sẵn trong RAM"
-                  />
-                );
-              })}
-              {/* Progress fill */}
+              <div className="absolute inset-0 bg-slate-800/90 border border-slate-700/50" />
+              
+              {/* Dải HLS Buffer: Toàn bộ vùng đã nạp sẵn trong RAM (nổi bật màu vàng hổ phách) */}
               <div
-                className="absolute left-0 top-0 h-full rounded-full shadow-sm"
-                style={{
-                  width: `${seekFillRatio * 100}%`,
-                  background: isLive ? '#ef4444' : '#6366f1',
-                  transition: isDraggingSeek ? 'none' : 'width 0.1s linear'
-                }}
+                className="absolute left-0 top-0 h-full bg-gradient-to-r from-indigo-500/30 via-amber-400/40 to-amber-400/70 rounded-full pointer-events-none transition-all duration-300"
+                style={{ width: `${hlsBufferRatio * 100}%` }}
+                title="Vùng video HLS nét căng đã lưu sẵn trong RAM"
               />
+
+              {/* Progress fill: Khi live chỉ chạy tới mép Live, khi replay chạy tới điểm tua */}
+              {!isLive && (
+                <div
+                  className="absolute left-0 top-0 h-full rounded-full shadow-sm bg-indigo-500"
+                  style={{
+                    width: `${seekFillRatio * 100}%`,
+                    transition: isDraggingSeek ? 'none' : 'width 0.1s linear'
+                  }}
+                />
+              )}
               {/* Hover preview */}
               {seekHoverTime !== null && seekbarRef.current && (
                 <div
@@ -3003,7 +3099,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
-            {/* Thumb - chỉ hiện khi hover/drag */}
+            {/* Thumb chỉ hiện khi hover/drag hoặc đang ở chế độ Replay */}
             <div
               className="absolute rounded-full shadow-lg pointer-events-none transition-transform"
               style={{
@@ -3012,12 +3108,51 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 left: `${seekFillRatio * 100}%`,
                 top: '50%',
                 transform: 'translate(-50%, -50%)',
-                background: isLive ? '#ef4444' : '#818cf8',
-                opacity: seekHoverTime !== null || isDraggingSeek ? 1 : 0,
+                background: !isLive ? '#818cf8' : '#ef4444',
+                opacity: (!isLive || seekHoverTime !== null || isDraggingSeek) ? 1 : 0,
                 boxShadow: isDraggingSeek ? '0 0 0 4px rgba(99,102,241,0.3)' : 'none',
                 transition: isDraggingSeek ? 'none' : 'opacity 0.15s, width 0.1s, height 0.1s',
               }}
             />
+
+            {/* 1. CỜ HẸN SLOW (Marker xanh neon) nếu người dùng đã bấm hẹn */}
+            {flagMarkerRatio !== null && (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 pointer-events-none z-10 flex flex-col items-center"
+                style={{ left: `${flagMarkerRatio * 100}%`, transform: 'translate(-50%, -50%)' }}
+              >
+                <span className="px-1.5 py-0.2 rounded bg-cyan-400 text-slate-950 font-black text-[9px] shadow-lg animate-pulse mb-0.5 whitespace-nowrap">
+                  🚩 HẸN {scheduledSlow?.speed}x
+                </span>
+                <span className="w-1 h-4 bg-cyan-300 rounded-full shadow-md shadow-cyan-400/80"></span>
+              </div>
+            )}
+
+            {/* 2. CHẤM MÀU VÀNG: HLS ĐÃ NẠP TỚI ĐÂU (Hiện kể cả khi đang xem Live) */}
+            {hlsBufferRatio > 0 && (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 pointer-events-none z-10 transition-all duration-300"
+                style={{ left: `${hlsBufferRatio * 100}%`, transform: 'translate(-50%, -50%)' }}
+                title="HLS đã tải tới đây (sẵn sàng tua lại 0ms)"
+              >
+                <div className="relative flex items-center justify-center">
+                  <span className="w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-white shadow-lg animate-pulse"></span>
+                </div>
+              </div>
+            )}
+
+            {/* 3. CHẤM MÀU ĐỎ LIVE: Mép video thời gian thực */}
+            {isLive && (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 pointer-events-none z-10 transition-all duration-200"
+                style={{ left: `100%`, transform: 'translate(-50%, -50%)' }}
+              >
+                <div className="relative flex items-center justify-center">
+                  <span className="absolute w-4 h-4 rounded-full bg-red-500 opacity-75 animate-ping"></span>
+                  <span className="relative w-3 h-3 rounded-full bg-red-500 border-2 border-white shadow-lg"></span>
+                </div>
+              </div>
+            )}
 
             {/* Tooltip thời gian hover với độ chính xác phần trăm giây */}
             {seekHoverTime !== null && (
@@ -3635,6 +3770,58 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </button>
       )}
 
+      {/* CỤM NÚT NỔI: HẸN SLOW TỰ ĐỘNG TẠI FULLSCREEN */}
+      {isFullscreen && (
+        <div className="absolute top-4 right-4 z-[999990] flex items-center gap-2">
+          {isLive ? (
+            <>
+              <button
+                type="button"
+                onClick={() => toggleScheduledSlow()}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer ${
+                  scheduledSlow
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-300 animate-pulse ring-2 ring-cyan-400/50'
+                    : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300'
+                }`}
+                title="Bấm để hẹn tự động quay chậm khi HLS nạp tới khoảnh khắc này (Phím tắt: S)"
+              >
+                <span>{scheduledSlow ? '⏳' : '🎯'}</span>
+                <span>{scheduledSlow ? 'ĐANG CHỜ HLS...' : `HẸN SLOW ${autoSlowSpeed}x (S)`}</span>
+              </button>
+
+              <div className="bg-slate-900/95 border border-white/20 rounded-xl p-0.5 flex items-center gap-0.5 text-[11px] font-mono font-bold shadow-xl">
+                {[0.1, 0.25, 0.5].map((spd) => (
+                  <button
+                    key={spd}
+                    type="button"
+                    onClick={() => {
+                      setAutoSlowSpeed(spd);
+                      if (scheduledSlow) toggleScheduledSlow(spd);
+                    }}
+                    className={`px-2 py-1 rounded-lg transition-all ${
+                      autoSlowSpeed === spd
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {spd}x
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => jumpToLive()}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-red-600 hover:bg-red-500 text-white border-red-400 animate-pulse"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>VỀ LIVE (Enter)</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Bảng nhập số nổi truyền realtime về app CHỈ hiển thị khi phóng to màn hình live */}
       {isFullscreen && (
         <LiveFloatingKeypad
@@ -3647,27 +3834,45 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         />
       )}
 
-      {/* Thanh Buffer Bar mảnh ở đáy màn hình khi Fullscreen */}
+      {/* Thanh Buffer Bar ở đáy màn hình khi Fullscreen (chiều cao 5px hiển thị Chấm Vàng & Chấm Đỏ) */}
       {isFullscreen && (
-        <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/60 pointer-events-none z-[999980] overflow-hidden">
-          {bufferedRanges.map((b, idx) => {
-            const bStart = Math.max(timelineStart, Math.min(timelineEnd, b.start));
-            const bEnd = Math.max(timelineStart, Math.min(timelineEnd, b.end));
-            if (bEnd <= bStart) return null;
-            const leftPct = ((bStart - timelineStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
-            const widthPct = ((bEnd - bStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
-            return (
-              <div
-                key={idx}
-                className="absolute top-0 h-full bg-white/40"
-                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-              />
-            );
-          })}
+        <div className="absolute bottom-0 inset-x-0 h-1.5 bg-slate-900 border-t border-slate-800 pointer-events-none z-[999980]">
+          {/* Dải HLS Buffer màu hổ phách */}
           <div
-            className="absolute top-0 h-full bg-indigo-500 shadow-sm"
-            style={{ width: `${seekFillRatio * 100}%` }}
+            className="absolute left-0 top-0 h-full bg-amber-400/60 transition-all duration-300"
+            style={{ width: `${hlsBufferRatio * 100}%` }}
           />
+          {/* Vạch phát khi Replay */}
+          {!isLive && (
+            <div
+              className="absolute left-0 top-0 h-full bg-indigo-500 shadow-sm"
+              style={{ width: `${seekFillRatio * 100}%` }}
+            />
+          )}
+
+          {/* Cờ Hẹn tại đáy Fullscreen */}
+          {flagMarkerRatio !== null && (
+            <div
+              className="absolute bottom-0 -translate-x-1/2 w-1.5 h-3 bg-cyan-400 shadow-lg shadow-cyan-400/80"
+              style={{ left: `${flagMarkerRatio * 100}%` }}
+            />
+          )}
+
+          {/* Chấm Vàng HLS tại đáy Fullscreen */}
+          {hlsBufferRatio > 0 && (
+            <div
+              className="absolute bottom-[-1px] -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-amber-400 border border-white shadow"
+              style={{ left: `${hlsBufferRatio * 100}%` }}
+            />
+          )}
+
+          {/* Chấm Đỏ Live tại đáy Fullscreen */}
+          {isLive && (
+            <div
+              className="absolute bottom-[-1px] -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-red-500 border border-white shadow animate-pulse"
+              style={{ left: `100%` }}
+            />
+          )}
         </div>
       )}
     </div>
