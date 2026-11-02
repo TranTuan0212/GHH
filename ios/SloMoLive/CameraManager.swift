@@ -60,6 +60,47 @@ public class CameraManager: NSObject, ObservableObject {
     private let motionManager = CMMotionManager()
 
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
+    public enum FlatPlacementMode: String, CaseIterable {
+        case auto = "Tự Động 📱"
+        case faceUp = "Máy: NGỬA 📖"
+        case faceDown = "Máy: ÚP 📱"
+    }
+
+    @Published public var flatPlacementMode: FlatPlacementMode = .auto
+
+    public func cycleFlatPlacementMode() {
+        switch flatPlacementMode {
+        case .auto:
+            flatPlacementMode = .faceUp
+        case .faceUp:
+            flatPlacementMode = .faceDown
+        case .faceDown:
+            flatPlacementMode = .auto
+        }
+        applyOrientationForPlacementMode()
+    }
+
+    public func applyOrientationForPlacementMode() {
+        let isFront = (self.cameraPosition == .front)
+        let newOrientation: AVCaptureVideoOrientation
+        switch flatPlacementMode {
+        case .auto:
+            return
+        case .faceUp:
+            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+        case .faceDown:
+            newOrientation = isFront ? .landscapeRight : .landscapeLeft
+        }
+
+        if newOrientation != currentCaptureOrientation {
+            currentCaptureOrientation = newOrientation
+            updateVideoOrientation()
+            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                rebuildLiveSession()
+            }
+        }
+    }
+
     @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
 
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
@@ -209,7 +250,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     @objc private func deviceOrientationDidChange() {
-        guard !isStreamingAtomic && !isConnecting else { return }
+        guard !isStreamingAtomic && !isConnecting && flatPlacementMode == .auto else { return }
         let isFront = (self.cameraPosition == .front)
         let newOrientation: AVCaptureVideoOrientation
         switch UIDevice.current.orientation {
@@ -235,7 +276,7 @@ public class CameraManager: NSObject, ObservableObject {
     /// Nhận biết chính xác điện thoại đang nằm ngang hay đứng bất kể góc ngửa trên tripod hay khóa xoay iOS.
     private func handleAcceleration(_ acceleration: CMAcceleration) {
         // Trong lúc live stream: KHÔNG đổi orientation giữa chừng để tránh vỡ SPS/PPS của H.264 encoder
-        guard !isStreamingAtomic && !isConnecting else { return }
+        guard !isStreamingAtomic && !isConnecting && flatPlacementMode == .auto else { return }
 
         let x = acceleration.x
         let y = acceleration.y
@@ -1495,6 +1536,21 @@ public class CardDetector: NSObject, ObservableObject {
             var detected = eval.detected
             var bestLiveCandidate = eval.rawBest
             var bestAngle = "0°"
+
+            // 2b. Nếu pass 0° chưa bắt được (khi đặt camera bên cạnh bàn, lá bài bị xoay ngang 90°/270°):
+            // Quét nhanh hướng xoay ngang (~1.8ms trên Apple Neural Engine) để bắt dính bài tức thì
+            if detected == nil {
+                let sideOrient: CGImagePropertyOrientation = isFront ? .leftMirrored : .right
+                let sideHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: sideOrient, options: [:])
+                let sideEval = self.evaluateVisionHandler(sideHandler)
+                if let sDet = sideEval.detected {
+                    detected = sDet
+                    bestAngle = "90°"
+                } else if let sRb = sideEval.rawBest, (bestLiveCandidate == nil || sRb.conf > (bestLiveCandidate?.conf ?? 0)) {
+                    bestLiveCandidate = sRb
+                    bestAngle = "90°"
+                }
+            }
 
             // 2b. Hỗ trợ góc nghiêng 3D: CHỈ kích hoạt khi pass 0° chưa bắt được bài nhưng có tín hiệu lá bài mờ (bestLiveCandidate conf >= 20%).
             // Giữ cho khung hình trống xử lý siêu tốc ~1.8ms trên Apple Neural Engine (không rớt bất kỳ frame nào ở 120 FPS).

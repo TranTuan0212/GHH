@@ -464,38 +464,31 @@ struct ContentView: View {
                                         )
                                     }
 
-                                    // 3. Nút Bật / Tắt AI On-Device
+                                    // 3. Nút Đặt Máy (Úp / Ngửa / Tự Động - cho máy đặt cạnh bàn)
                                     Button(action: {
-                                        networkManager.isAiModeEnabled.toggle()
-                                        roiSync.isActive = networkManager.isAiModeEnabled
-                                        if !networkManager.isAiModeEnabled {
-                                            roiSync.detectedCard = nil
-                                            roiSync.hasRecentDetection = false
-                                            roiSync.liveDebugScan = ""
-                                            CardDetector.shared.resetState()
-                                        }
+                                        cameraManager.cycleFlatPlacementMode()
                                     }) {
                                         HStack(spacing: 3) {
-                                            Image(systemName: networkManager.isAiModeEnabled ? "cpu.fill" : "cpu")
+                                            Image(systemName: cameraManager.flatPlacementMode == .auto ? "iphone" : (cameraManager.flatPlacementMode == .faceUp ? "book.closed.fill" : "iphone.slash"))
                                                 .font(.system(size: 11, weight: .bold))
-                                            Text(networkManager.isAiModeEnabled ? "AI: BẬT ⚡" : "AI: TẮT 💤")
+                                            Text(cameraManager.flatPlacementMode.rawValue)
                                                 .font(.caption2)
                                                 .fontWeight(.bold)
                                         }
-                                        .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .gray)
+                                        .foregroundColor(cameraManager.flatPlacementMode == .auto ? .white : .yellow)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 6)
-                                        .background(networkManager.isAiModeEnabled ? Color.cyan.opacity(0.18) : Color.black.opacity(0.6))
+                                        .background(cameraManager.flatPlacementMode == .auto ? Color.black.opacity(0.6) : Color.black.opacity(0.85))
                                         .cornerRadius(10)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 10)
-                                                .stroke(networkManager.isAiModeEnabled ? Color.cyan : Color.white.opacity(0.2), lineWidth: 1)
+                                                .stroke(cameraManager.flatPlacementMode == .auto ? Color.white.opacity(0.2) : Color.yellow, lineWidth: 1)
                                         )
                                     }
                                 }
 
                                 HStack(spacing: 6) {
-                                    // 3. Nút Bật/Tắt Shutter Thông Minh (Auto Sáng 1/120s vs 1/240s)
+                                    // 1. Nút Bật/Tắt Shutter Thông Minh (Auto Sáng 1/120s vs 1/240s)
                                     Button(action: {
                                         cameraManager.toggleActionShutter()
                                     }) {
@@ -517,7 +510,7 @@ struct ContentView: View {
                                         )
                                     }
 
-                                    // 4. Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
+                                    // 2. Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
                                     Button(action: {
                                         cameraManager.toggleFocusLock()
                                     }) {
@@ -538,33 +531,65 @@ struct ContentView: View {
                                                 .stroke(cameraManager.isFocusLocked ? Color.green : Color.white.opacity(0.2), lineWidth: 1)
                                         )
                                     }
-                                    // 5. Nút Bật/Tắt Ô Soi Debug trên màn hình iPhone (Chỉ hiện khi bật AI Chế độ 2)
-                                    if networkManager.isAiModeEnabled {
-                                    Button(action: {
-                                        roiSync.toggleVisibility()
-                                    }) {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: roiSync.isRoiVisible ? "viewfinder.circle.fill" : "viewfinder.circle")
-                                                .font(.system(size: 11, weight: .bold))
-                                            Text(roiSync.isRoiVisible ? "Ô Soi: BẬT 🎯" : "Ô Soi: ẨN 👁️")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
+
+                                    // 3. Nút Bật / Tắt AI On-Device (Chỉ hiển thị với tài khoản có quyền AI)
+                                    if networkManager.allowedMode != "mode1" {
+                                        Button(action: {
+                                            networkManager.isAiModeEnabled.toggle()
+                                            roiSync.isActive = networkManager.isAiModeEnabled
+                                            if !networkManager.isAiModeEnabled {
+                                                roiSync.isRoiVisible = false
+                                                roiSync.detectedCard = nil
+                                                roiSync.hasRecentDetection = false
+                                                roiSync.liveDebugScan = ""
+                                                CardDetector.shared.resetState()
+                                            } else {
+                                                roiSync.isRoiVisible = true
+                                            }
+                                        }) {
+                                            HStack(spacing: 3) {
+                                                Image(systemName: networkManager.isAiModeEnabled ? "cpu.fill" : "cpu")
+                                                    .font(.system(size: 11, weight: .bold))
+                                                Text(networkManager.isAiModeEnabled ? "AI: BẬT ⚡" : "AI: TẮT 💤")
+                                                    .font(.caption2)
+                                                    .fontWeight(.bold)
+                                            }
+                                            .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .gray)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 6)
+                                            .background(networkManager.isAiModeEnabled ? Color.cyan.opacity(0.18) : Color.black.opacity(0.6))
+                                            .cornerRadius(10)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .stroke(networkManager.isAiModeEnabled ? Color.cyan : Color.white.opacity(0.2), lineWidth: 1)
+                                            )
                                         }
-                                        .foregroundColor(roiSync.isRoiVisible ? .red : .white.opacity(0.7))
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.7))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(roiSync.isRoiVisible ? Color.red : Color.white.opacity(0.2), lineWidth: 1)
-                                        )
+
+                                        // 4. Nút Bật/Tắt Ô Soi Debug trên màn hình iPhone (Chỉ hiện khi bật AI)
+                                        if networkManager.isAiModeEnabled {
+                                            Button(action: {
+                                                roiSync.toggleVisibility()
+                                            }) {
+                                                HStack(spacing: 3) {
+                                                    Image(systemName: roiSync.isRoiVisible ? "viewfinder.circle.fill" : "viewfinder.circle")
+                                                        .font(.system(size: 11, weight: .bold))
+                                                    Text(roiSync.isRoiVisible ? "Ô Soi: BẬT 🎯" : "Ô Soi: ẨN 👁️")
+                                                        .font(.caption2)
+                                                        .fontWeight(.bold)
+                                                }
+                                                .foregroundColor(roiSync.isRoiVisible ? .red : .white.opacity(0.7))
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 6)
+                                                .background(Color.black.opacity(0.7))
+                                                .cornerRadius(10)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 10)
+                                                        .stroke(roiSync.isRoiVisible ? Color.red : Color.white.opacity(0.2), lineWidth: 1)
+                                                )
+                                            }
+                                        }
                                     }
-                                    }
-                                    if false { EmptyView().padding(0
-                                    //
-                                        )
-                                    }
+
 
                                 }
 
