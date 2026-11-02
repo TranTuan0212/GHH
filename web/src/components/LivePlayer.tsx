@@ -1414,8 +1414,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Cấu hình tối ưu cho Live-Edge DVR Buffer:
         // Đệm 6s phía trước và giữ 20s phía sau con trỏ phát trong RAM để tua ngược 5-10s tức thì
         // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
-        maxBufferLength: 15,
-        maxMaxBufferLength: 30,
+        // Mở rộng bộ đệm 90s - 180s nạp liên tục một mạch, loại bỏ triệt để hiện tượng đứt đoạn / lủng lỗ:
+        maxBufferLength: 90,
+        maxMaxBufferLength: 180,
         maxBufferSize: 512 * 1024 * 1024,
         backBufferLength: 180,
         maxBufferHole: 0.05,
@@ -1423,10 +1424,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         nudgeMaxRetry: 3,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
         highBufferWatchdogPeriod: 0,
-        liveSyncDuration: 1.0,
-        // Khi đang xem Live: Cho phép HLS tự động bám sát mép Live trong khoảng 1-2.5s
-        liveMaxLatencyDuration: 2.5,
-        maxLiveSyncPlaybackRate: 1.1,
+        // Bám sát mép Live chỉ 0.8s để Chấm Vàng HLS đuổi kịp sát nút Chấm Đỏ:
+        liveSyncDuration: 0.8,
+        liveMaxLatencyDuration: 2.0,
+        maxLiveSyncPlaybackRate: 1.15,
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
@@ -2093,10 +2094,24 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const item = { targetTime, speed, scheduledAt: Date.now() };
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
+
+    // TỐI ƯU CỰC MẠNH: Bỏ hết các file cũ trước mốc hẹn 5s,
+    // dồn 100% băng thông tải ngay đệm 5s an toàn trước cú chia bài và phi nước đại bám Live!
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.stopLoad();
+        const priorityStart = Math.max(0, targetTime - 5.0);
+        hlsRef.current.startLoad(priorityStart);
+        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã cắt bỏ tải cũ, nạp ưu tiên đệm 5s an toàn từ: ${priorityStart.toFixed(2)}s`);
+      } catch (err) {
+        console.warn('[LivePlayer] Lỗi hls.startLoad ưu tiên:', err);
+      }
+    }
+
     showModeNotice(
       'slow',
-      `🎯 ĐÃ CẮM CỜ HẸN SLOW ${speed}x (Phím S)`,
-      'Khi Chấm Vàng HLS nạp tới mốc này, video sẽ TỰ ĐỘNG chuyển sang Slow-Motion!',
+      `🎯 ĐÃ CẮM CỜ HẸN SLOW ${speed}x (ĐỆM 5S AN TOÀN)`,
+      'Đã dồn 100% tốc độ nạp đệm 5s trước khoảnh khắc lật bài, sẵn sàng tự kích hoạt Slow!',
       'Bấm phím [S] lần nữa để hủy hẹn'
     );
   };
@@ -3037,13 +3052,28 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             </div>
           </div>
           {!isLive && (
-            <button
-              type="button"
-              onClick={() => jumpToLive()}
-              className="px-3 py-1 rounded-full bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold transition-all active:scale-95"
-            >
-              VỀ LIVE
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => toggleScheduledSlow()}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer ${
+                  scheduledSlow
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-300 animate-pulse ring-1 ring-cyan-400'
+                    : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300 shadow-sm'
+                }`}
+                title="Hẹn Slow tự động với đệm 5s an toàn (Phím tắt: S)"
+              >
+                <span>{scheduledSlow ? '⏳' : '🎯'}</span>
+                <span>{scheduledSlow ? 'Chờ HLS...' : `Hẹn Slow ${autoSlowSpeed}x (S)`}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => jumpToLive()}
+                className="px-3 py-1 rounded-full bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold transition-all active:scale-95"
+              >
+                VỀ LIVE
+              </button>
+            </div>
           )}
         </div>
 
