@@ -11,6 +11,8 @@ import {
   Layers,
   Sparkles,
   Maximize2,
+  Maximize,
+  Minimize,
   Volume2,
   VolumeX,
   Play,
@@ -243,14 +245,48 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   // Tăng sáng và tương phản video
   const [isBrightBoost, setIsBrightBoost] = useState<boolean>(false);
-  // Chế độ phóng to lấp đầy màn hình (Fill/Cover vs Contain)
+  // Chế độ phóng to lấp đầy màn hình (Fill/Cover vs Contain) - mặc định bật phóng to tràn viền
   const [isFillMode, setIsFillMode] = useState<boolean>(() => {
-    return localStorage.getItem('mode2_video_fill') === 'true';
+    const saved = localStorage.getItem('mode2_video_fill');
+    return saved !== null ? saved === 'true' : true;
   });
 
   useEffect(() => {
     localStorage.setItem('mode2_video_fill', isFillMode.toString());
   }, [isFillMode]);
+
+  // Chế độ xem Toàn màn hình (Fullscreen)
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  const toggleFullscreen = useCallback(() => {
+    const elem = videoContainerRef.current;
+    if (!elem) return;
+    if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
+      if (elem.requestFullscreen) {
+        elem.requestFullscreen().catch(() => {});
+      } else if ((elem as any).webkitRequestFullscreen) {
+        (elem as any).webkitRequestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if ((document as any).webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement || (document as any).webkitFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
+  }, []);
 
 
   // Tọa độ chuẩn hóa của Khung ngắm AI (gắn chết theo Video Frame gốc 0.0 - 1.0)
@@ -2139,7 +2175,20 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 title="Bấm để Phóng to lấp đầy màn hình (loại bỏ viền đen) hoặc xem vừa vặn"
               >
                 <Maximize2 className="w-3 h-3" />
-                <span>{isFillMode ? 'Phóng to ⛶' : 'Vừa vặn'}</span>
+                <span>{isFillMode ? 'Tràn viền ✓' : 'Vừa vặn'}</span>
+              </button>
+
+              {/* Nút Toàn màn hình (Fullscreen) */}
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center space-x-1 transition ${
+                  isFullscreen ? 'bg-emerald-600 text-white shadow ring-1 ring-emerald-400' : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title="Bật/Tắt chế độ xem Toàn màn hình trên điện thoại hoặc máy tính"
+              >
+                {isFullscreen ? <Minimize className="w-3 h-3" /> : <Maximize className="w-3 h-3" />}
+                <span>{isFullscreen ? 'Thu nhỏ' : 'Toàn màn hình'}</span>
               </button>
 
 
@@ -2266,7 +2315,12 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           {/* VÙNG CHỨA VIDEO & KHUNG NGẮM AI ĐỎ (CỐ ĐỊNH THEO TỶ LỆ VIDEO LIVE GỐC) */}
           <div
             ref={videoContainerRef}
-            className="relative w-full h-[360px] sm:h-[420px] md:h-[480px] bg-black overflow-hidden select-none group flex items-center justify-center"
+            onDoubleClick={toggleFullscreen}
+            className={`${
+              isFullscreen
+                ? 'fixed inset-0 z-50 w-screen h-screen max-h-none rounded-none'
+                : 'relative w-full aspect-video sm:aspect-auto sm:h-[480px] md:h-[560px] lg:h-[640px] max-h-[82vh] rounded-xl'
+            } bg-black overflow-hidden select-none group flex items-center justify-center transition-all`}
           >
             {/* Thẻ 1: Live WebRTC WHEP (Siêu mượt, Độ trễ <0.2s, 0 khựng giật) */}
             <video
