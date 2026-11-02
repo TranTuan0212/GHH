@@ -1001,7 +1001,7 @@ public class RoiSyncManager: ObservableObject {
     public func sendTelemetry(pingMs: Int) {
         let uid = NetworkManager.shared.currentUserId ?? ""
         let uname = NetworkManager.shared.currentUsername ?? ""
-        let bitrateStr = isStreaming ? "16.0" : "0.0"
+        let bitrateStr = isStreaming ? "12.0" : "0.0"
         let fpsInt = isStreaming ? Int(currentFPS) : 0
         let payload: [String: Any] = [
             "type": "device_telemetry",
@@ -1046,6 +1046,7 @@ public class RoiSyncManager: ObservableObject {
     private var isConnecting: Bool = false
     private var reconnectTimer: Timer?
     private var pingTimer: Timer?
+    private var smoothedPing: Double = 0.0
     private var clearDetectionWorkItem: DispatchWorkItem?
 
     public init() {
@@ -1108,8 +1109,17 @@ public class RoiSyncManager: ObservableObject {
                             self?.scheduleReconnect()
                         }
                     } else {
-                        let pingMs = max(1, Int(Date().timeIntervalSince(pingStart) * 1000))
-                        self?.sendTelemetry(pingMs: pingMs)
+                        let rawPing = max(1, Int(Date().timeIntervalSince(pingStart) * 1000))
+                        // Bộ lọc làm mịn Exponential Moving Average (EMA) triệt tiêu nhiễu burst mạng
+                        if let s = self {
+                            if s.smoothedPing == 0.0 {
+                                s.smoothedPing = Double(rawPing)
+                            } else {
+                                s.smoothedPing = 0.35 * Double(rawPing) + 0.65 * s.smoothedPing
+                            }
+                            let displayPing = max(1, Int(s.smoothedPing.rounded()))
+                            s.sendTelemetry(pingMs: displayPing)
+                        }
                     }
                 }
             }

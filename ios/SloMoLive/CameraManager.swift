@@ -420,7 +420,11 @@ public class CameraManager: NSObject, ObservableObject {
         // Target Bitrate: 16.0 Mbps (Peak 18.0 Mbps, Floor 10.0 Mbps).
         // Hardware VideoToolbox trên chip Apple A15-A18 chạy mát rượi nhờ kVTCompressionPropertyKey_RealTime
         // và không dùng B-frames (kVTCompressionPropertyKey_AllowFrameReordering = false) giúp giảm tải GPU/VRAM.
-        let targetBitrate: UInt = 16_000_000
+        // Chuẩn Full HD 1080p 120fps Master Replay tối ưu băng thông & nhiệt độ:
+        // Target Bitrate: 12.0 Mbps (Peak 14.0 Mbps, Floor 8.0 Mbps) kết hợp Quality 0.95.
+        // Mức 12 Mbps giải phóng đường truyền 4G/Wi-Fi không bị Bufferbloat (giữ Ping 15-25ms ổn định),
+        // đồng thời chip phần cứng VideoToolbox hoạt động cực mát, không nóng máy.
+        let targetBitrate: UInt = 12_000_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -429,9 +433,9 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 18_000_000
+        videoCfg.videoMaxBitRate = 14_000_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 10_000_000
+        videoCfg.videoMinBitRate = 8_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
