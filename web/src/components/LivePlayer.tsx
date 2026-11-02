@@ -2028,14 +2028,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.playbackRate = speed;
       } else {
         // Khi chuyển từ Live sang Slow:
-        // Lùi lại 2.8s vào vùng an toàn đã nạp sẵn 100% trong RAM buffer:
-        // 1. Video hiện lên tức thì trong 0ms (không bị khựng hay chờ nạp mạng).
-        // 2. Có sẵn 2.8s đệm phía trước, video phát chậm 0.25x/0.5x cực kỳ êm ái, không chạm mép rỗng, không giật!
-        const safeRewind = Math.max(start, end - 2.8);
-        isSeekingRef.current = false;
-        targetSeekTimeRef.current = null;
-        video.currentTime = safeRewind;
-        setCurrentTime(safeRewind);
+        // DÍNH NGAY SÁT MÉP LIVE:
+        // Nếu video HLS ngầm đang bám sát mép Live (khoảng cách 0.1s - 1.5s):
+        // Hãm tốc độ trực tiếp (không cần seek) để hình ảnh chuyển động chậm ngay tức thì 0ms tại đúng khoảnh khắc mắt đang nhìn!
+        const lag = end - video.currentTime;
+        if (video.readyState >= 2 && lag >= 0.1 && lag <= 1.5) {
+          isSeekingRef.current = false;
+          targetSeekTimeRef.current = null;
+          setCurrentTime(video.currentTime);
+        } else {
+          // Bắt dính ngay sát mép Live (cách mép chỉ 0.35s)
+          const liveStickTime = Math.max(start, end - 0.35);
+          isSeekingRef.current = false;
+          targetSeekTimeRef.current = null;
+          video.currentTime = liveStickTime;
+          setCurrentTime(liveStickTime);
+        }
         video.playbackRate = speed;
       }
 
