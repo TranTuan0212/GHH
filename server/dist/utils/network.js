@@ -81,8 +81,9 @@ function resolveRtmpHostForClient(req) {
         rawHostHeader.endsWith('.pinggy.link') ||
         rawHostHeader.endsWith('.pinggy.online') ||
         (rawHostHeader.includes('.') && !/^\d+\.\d+\.\d+\.\d+$/.test(rawHostHeader) && rawHostHeader !== 'localhost')) {
-        console.log('[Network] Host header là tunnel/domain (' + rawHostHeader + '), trả lại cho RTMP.');
-        return { rtmpHost: rawHostHeader, rtmpPort: overridePort || 1935 };
+        const vpsIp = process.env.VPS_PUBLIC_IP || '157.66.100.10';
+        console.log('[Network] Host header là tunnel/domain (' + rawHostHeader + ') -> Chuyển hướng RTMP sang VPS IP trực tiếp (' + vpsIp + ':1935).');
+        return { rtmpHost: vpsIp, rtmpPort: overridePort || 1935 };
     }
     const isIpv4Pattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
     if (isIpv4Pattern.test(rawHostHeader) && rawHostHeader !== '127.0.0.1') {

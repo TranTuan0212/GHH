@@ -1001,7 +1001,7 @@ public class RoiSyncManager: ObservableObject {
     public func sendTelemetry(pingMs: Int) {
         let uid = NetworkManager.shared.currentUserId ?? ""
         let uname = NetworkManager.shared.currentUsername ?? ""
-        let bitrateStr = isStreaming ? "10.4" : "0.0"
+        let bitrateStr = isStreaming ? "16.0" : "0.0"
         let fpsInt = isStreaming ? Int(currentFPS) : 0
         let payload: [String: Any] = [
             "type": "device_telemetry",

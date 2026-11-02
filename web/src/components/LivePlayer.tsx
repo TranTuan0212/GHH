@@ -186,7 +186,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   };
 
   // Bước nhảy frame: 60 FPS (~16.6ms) hoặc 120 FPS (~8.3ms)
-  const [stepFps, setStepFps] = useState<60 | 120>(60);
+  const [stepFps, setStepFps] = useState<60 | 120>(120);
 
   // Vị trí & kích thước tuỳ chỉnh của màn hình nhỏ PiP Live (tính theo % x, y từ góc trên-trái và width theo pixel)
   const [pipPos, setPipPos] = useState<{ xPercent: number; yPercent: number } | null>(null);
@@ -1403,10 +1403,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const hls = new Hls({
         // Cấu hình tối ưu cho Live-Edge DVR Buffer:
         // Đệm 6s phía trước và giữ 20s phía sau con trỏ phát trong RAM để tua ngược 5-10s tức thì
-        maxBufferLength: 6,
-        maxMaxBufferLength: 12,
-        maxBufferSize: 128 * 1024 * 1024,
-        backBufferLength: 20,
+        // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
+        maxBufferLength: 15,
+        maxMaxBufferLength: 30,
+        maxBufferSize: 512 * 1024 * 1024,
+        backBufferLength: 180,
         maxBufferHole: 0.05,
         nudgeOffset: 0.01,
         nudgeMaxRetry: 3,
@@ -1597,6 +1598,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             stallTimer = window.setTimeout(() => {
               if (!video.paused && video.readyState < 3) {
                 if (!isLiveRef.current) {
+                  // Khi xem lại hoặc slow-motion (0.25x, 0.5x), TUYỆT ĐỐI KHÔNG nhảy cóc để không bị rớt frame
+                  if (video.playbackRate < 1.0) {
+                    return;
+                  }
                   // Kiểm tra xem currentTime có đang nằm trong vùng đã nạp buffer hay không;
                   // Nếu đang nằm trong vùng buffer (hoặc đang đợi tải segment kế tiếp ở mép cuối), TUYỆT ĐỐI KHÔNG nhảy cóc làm mất frame!
                   let insideBuffered = false;
@@ -2912,7 +2917,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               >
                 <span className={`w-2 h-2 rounded-full ${
                   !phoneStats || !phoneStats.isStreaming ? 'bg-slate-500' :
-                  (phoneStats.ping < 60 ? 'bg-emerald-400' : (phoneStats.ping < 120 ? 'bg-amber-400' : 'bg-red-500 animate-pulse'))
+                  (phoneStats.ping < 80 ? 'bg-emerald-400' : (phoneStats.ping < 180 ? 'bg-amber-400' : 'bg-red-500 animate-pulse'))
                 }`} />
                 <span className="text-slate-400">📱 iPhone:</span>
                 <span className="text-white">{phoneStats && phoneStats.isStreaming ? `${phoneStats.bitrate} Mbps` : 'Sẵn sàng'}</span>
@@ -2931,7 +2936,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               >
                 <span className={`w-2 h-2 rounded-full ${
                   webPing === null ? 'bg-slate-500' :
-                  (webPing < 60 ? 'bg-emerald-400' : (webPing < 120 ? 'bg-amber-400' : 'bg-red-500'))
+                  (webPing < 80 ? 'bg-emerald-400' : (webPing < 180 ? 'bg-amber-400' : 'bg-red-500'))
                 }`} />
                 <span className="text-slate-400">💻 Web:</span>
                 <span className="text-white">{webBitrate !== null ? `${webBitrate.toFixed(1)} Mbps` : '--'}</span>

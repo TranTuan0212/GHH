@@ -416,7 +416,11 @@ public class CameraManager: NSObject, ObservableObject {
         //   để bấm Replay ăn ngay tức khắc tại mép Live không bị trễ nhịp.
         // - Target Bitrate: 6.0 Mbps (Peak 7.5 Mbps, Floor 4.5 Mbps): mỗi segment 0.5s chỉ ~350KB giúp đẩy qua 4G
         //   và tải qua Cloudflare Tunnel trong ~120ms (nhanh gấp 4 lần thời gian thực) mà vẫn giữ độ nét căng Full HD.
-        let targetBitrate: UInt = 10_000_000
+        // Chuẩn Full HD 1080p 120fps Master Replay tốc độ cao, hình ảnh siêu nét không vỡ hạt:
+        // Target Bitrate: 16.0 Mbps (Peak 18.0 Mbps, Floor 10.0 Mbps).
+        // Hardware VideoToolbox trên chip Apple A15-A18 chạy mát rượi nhờ kVTCompressionPropertyKey_RealTime
+        // và không dùng B-frames (kVTCompressionPropertyKey_AllowFrameReordering = false) giúp giảm tải GPU/VRAM.
+        let targetBitrate: UInt = 16_000_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -425,9 +429,9 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 12_500_000
+        videoCfg.videoMaxBitRate = 18_000_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 6_000_000
+        videoCfg.videoMinBitRate = 10_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
