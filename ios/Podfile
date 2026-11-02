@@ -51,6 +51,27 @@ post_install do |installer|
         File.write(session_file, sess_patched) if sess_patched != sess_source
       end
 
+      # Adaptive bitrate gốc của LFLiveKit chỉ +50 kbps / -100 kbps mỗi lần LFStreamingBuffer báo trạng thái
+      # (khoảng 5 giây/lần) → hạ từ 20 xuống 12 Mbps mất hàng phút, không kịp chống giật khi 4G tụt.
+      # Vá: giảm 1 Mbps (không thấp hơn videoMinBitRate), tăng 0.25 Mbps (không vượt videoMaxBitRate).
+      # Nếu chuỗi gốc không khớp (bản LFLiveKit khác) thì gsub không đổi gì — an toàn, giữ hành vi cũ.
+      if File.exist?(session_file)
+        abr_source = File.read(session_file)
+        abr_patched = abr_source.gsub(
+          'videoBitRate = videoBitRate + 50 * 1000;',
+          'videoBitRate = MIN(videoBitRate + 250 * 1000, _videoConfiguration.videoMaxBitRate);'
+        ).gsub(
+          'videoBitRate = videoBitRate - 100 * 1000;',
+          'videoBitRate = (videoBitRate > self.videoConfiguration.videoMinBitRate + 1000 * 1000) ? (videoBitRate - 1000 * 1000) : self.videoConfiguration.videoMinBitRate;'
+        )
+        if abr_patched != abr_source
+          File.write(session_file, abr_patched)
+          puts '[Podfile] Patched LFLiveSession adaptive bitrate steps (-1 Mbps / +0.25 Mbps)'
+        else
+          puts '[Podfile] WARNING: LFLiveSession adaptive bitrate step pattern not found, left unchanged'
+        end
+      end
+
       # Prevent LFLiveVideoConfiguration from creating a dummy AVCaptureSession attached to
       # AVCaptureDevicePositionFront, which resets the front camera's activeFormat (1080p 120fps)
       # back to 720p 30fps whenever defaultConfiguration is called.

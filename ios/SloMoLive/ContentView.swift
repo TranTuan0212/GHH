@@ -76,6 +76,9 @@ struct ContentView: View {
     @State private var showFocusBox = false
     @State private var focusBoxPulse = false
 
+    /// Thu gọn lưới nút điều khiển để nhìn camera rộng hơn
+    @State private var isControlsCollapsed = false
+
     // Tự động kiểm tra server ngay khi mở app — giúp user biết IP LAN đúng và có cảnh báo sớm
     // về tình huống mạng (LAN / Cloudflare / 5G).
     private func checkServerOnAppear() {
@@ -186,6 +189,8 @@ struct ContentView: View {
                         .cornerRadius(24)
                     }
                     .padding()
+                    .frame(maxWidth: 440)
+                    .frame(maxWidth: .infinity)
                 }
             } else {
                 // Live Stream Camera Preview View
@@ -359,353 +364,23 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                     }
 
-                    // Overlay Status Bar
-                    VStack {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(cameraManager.isStreaming ? Color.red : Color.gray)
-                                        .frame(width: 10, height: 10)
-                                    Text(cameraManager.isStreaming ? "LIVE" : "SẴN SÀNG")
-                                        .font(.system(size: 11, weight: .black))
-                                        .foregroundColor(cameraManager.isStreaming ? .red : .white)
+                    // Overlay: thanh trạng thái (trên) + lưới điều khiển & nút live (dưới).
+                    // Co giãn theo bề ngang màn hình và tôn trọng safe area (tai thỏ / Dynamic Island / iPhone SE).
+                    VStack(spacing: 8) {
+                        liveStatusCard
 
-                                    // Nút chuyển đổi nhanh camera ở góc trái
-                                    Button(action: {
-                                        cameraManager.switchCamera()
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "camera.rotate.fill")
-                                                .font(.system(size: 10))
-                                            Text(cameraManager.currentDevicePosition == .front ? "CAM TRƯỚC" : "CAM SAU")
-                                                .font(.system(size: 11, weight: .bold))
-                                        }
-                                        .foregroundColor(.cyan)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.cyan.opacity(0.2))
-                                        .cornerRadius(6)
-                                    }
-
-                                    // Hiển thị FPS
-                                    Text("\(Int(cameraManager.currentFPS)) FPS")
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.yellow)
-                                        .padding(.horizontal, 4)
-                                        .padding(.vertical, 1)
-                                        .background(Color.yellow.opacity(0.15))
-                                        .cornerRadius(4)
-                                }
-
-                                HStack(spacing: 4) {
-                                    Image(systemName: "hourglass")
-                                        .font(.system(size: 9))
-                                    Text("Hạn: \(networkManager.getRemainingTimeText())")
-                                        .font(.system(size: 10, weight: .bold))
-                                    Text("| User: \(networkManager.currentUsername ?? "")")
-                                    Text(networkManager.isAiModeEnabled ? "• MODE 2 (AI)" : "• MODE 1")
-                                        .font(.system(size: 10, weight: .black))
-                                        .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .orange)
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.white.opacity(0.7))
-                                }
-                                .foregroundColor(networkManager.getRemainingTimeText().contains("hết hạn") ? .red : .green)
-                            }
-                            .padding(10)
-                            .background(Color.black.opacity(0.75))
-                            .cornerRadius(14)
-
-                            Spacer()
-
-                            VStack(alignment: .trailing, spacing: 6) {
-                                HStack(spacing: 6) {
-                                    // 1. Nút Đổi Camera
-                                    Button(action: {
-                                        cameraManager.switchCamera()
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
-                                                .font(.system(size: 11, weight: .bold))
-                                            Text(cameraManager.currentDevicePosition == .back ? "Cam Sau" : "Cam Trước")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                        }
-                                        .foregroundColor(.cyan)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.75))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(Color.cyan.opacity(0.5), lineWidth: 1)
-                                        )
-                                    }
-
-                                    // 2. Nút Bù Sáng EV (Tăng sáng phòng)
-                                    Button(action: {
-                                        cameraManager.cycleExposureBias()
-                                    }) {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: cameraManager.exposureBiasLevel > 0 ? "sun.max.fill" : "sun.min")
-                                                .font(.system(size: 11, weight: .bold))
-                                            Text(cameraManager.exposureBiasText)
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                        }
-                                        .foregroundColor(cameraManager.exposureBiasLevel > 0 ? .orange : .white)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(cameraManager.exposureBiasLevel > 0 ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(cameraManager.exposureBiasLevel > 0 ? Color.orange : Color.white.opacity(0.2), lineWidth: 1)
-                                        )
-                                    }
-
-                                    // 3. Nút Đặt Máy (Úp / Ngửa / Tự Động - cho máy đặt cạnh bàn)
-                                    Button(action: {
-                                        cameraManager.cycleFlatPlacementMode()
-                                    }) {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: cameraManager.flatPlacementMode == .auto ? "iphone" : (cameraManager.flatPlacementMode == .faceUp ? "book.closed.fill" : "iphone.slash"))
-                                                .font(.system(size: 11, weight: .bold))
-                                            Text(cameraManager.flatPlacementMode.rawValue)
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                        }
-                                        .foregroundColor(cameraManager.flatPlacementMode == .auto ? .white : .yellow)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(cameraManager.flatPlacementMode == .auto ? Color.black.opacity(0.6) : Color.black.opacity(0.85))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(cameraManager.flatPlacementMode == .auto ? Color.white.opacity(0.2) : Color.yellow, lineWidth: 1)
-                                        )
-                                    }
-                                }
-
-                                HStack(spacing: 6) {
-                                    // 1. Nút Bật/Tắt Shutter Thông Minh (Auto Sáng 1/120s vs 1/240s)
-                                    Button(action: {
-                                        cameraManager.toggleActionShutter()
-                                    }) {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: cameraManager.isActionShutterEnabled ? "bolt.fill" : "bolt.slash.fill")
-                                                .font(.system(size: 11, weight: .bold))
-                                            Text(cameraManager.isActionShutterEnabled ? cameraManager.currentShutterText : "Auto Sáng")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                        }
-                                        .foregroundColor(cameraManager.isActionShutterEnabled ? .yellow : .white)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(cameraManager.isActionShutterEnabled ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(cameraManager.isActionShutterEnabled ? Color.yellow : Color.white.opacity(0.2), lineWidth: 1)
-                                        )
-                                    }
-
-                                    // 2. Nút Khóa Nét / Mở Khóa Nét Mặt Bàn
-                                    Button(action: {
-                                        cameraManager.toggleFocusLock()
-                                    }) {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: cameraManager.isFocusLocked ? "lock.fill" : "lock.open.fill")
-                                                .font(.system(size: 11, weight: .bold))
-                                            Text(cameraManager.isFocusLocked ? "Nét: KHÓA 🔒" : "Nét: AUTO 🔄")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                        }
-                                        .foregroundColor(cameraManager.isFocusLocked ? .green : .white)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(cameraManager.isFocusLocked ? Color.black.opacity(0.85) : Color.black.opacity(0.6))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(cameraManager.isFocusLocked ? Color.green : Color.white.opacity(0.2), lineWidth: 1)
-                                        )
-                                    }
-
-                                    // 3. Nút Bật / Tắt AI On-Device (Chỉ hiển thị với tài khoản có quyền AI)
-                                    if networkManager.allowedMode != "mode1" {
-                                        Button(action: {
-                                            networkManager.isAiModeEnabled.toggle()
-                                            roiSync.isActive = networkManager.isAiModeEnabled
-                                            if !networkManager.isAiModeEnabled {
-                                                roiSync.isRoiVisible = false
-                                                roiSync.detectedCard = nil
-                                                roiSync.hasRecentDetection = false
-                                                roiSync.liveDebugScan = ""
-                                                CardDetector.shared.resetState()
-                                            } else {
-                                                roiSync.isRoiVisible = true
-                                            }
-                                        }) {
-                                            HStack(spacing: 3) {
-                                                Image(systemName: networkManager.isAiModeEnabled ? "cpu.fill" : "cpu")
-                                                    .font(.system(size: 11, weight: .bold))
-                                                Text(networkManager.isAiModeEnabled ? "AI: BẬT ⚡" : "AI: TẮT 💤")
-                                                    .font(.caption2)
-                                                    .fontWeight(.bold)
-                                            }
-                                            .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .gray)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 6)
-                                            .background(networkManager.isAiModeEnabled ? Color.cyan.opacity(0.18) : Color.black.opacity(0.6))
-                                            .cornerRadius(10)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .stroke(networkManager.isAiModeEnabled ? Color.cyan : Color.white.opacity(0.2), lineWidth: 1)
-                                            )
-                                        }
-
-                                        // 4. Nút Bật/Tắt Ô Soi Debug trên màn hình iPhone (Chỉ hiện khi bật AI)
-                                        if networkManager.isAiModeEnabled {
-                                            Button(action: {
-                                                roiSync.toggleVisibility()
-                                            }) {
-                                                HStack(spacing: 3) {
-                                                    Image(systemName: roiSync.isRoiVisible ? "viewfinder.circle.fill" : "viewfinder.circle")
-                                                        .font(.system(size: 11, weight: .bold))
-                                                    Text(roiSync.isRoiVisible ? "Ô Soi: BẬT 🎯" : "Ô Soi: ẨN 👁️")
-                                                        .font(.caption2)
-                                                        .fontWeight(.bold)
-                                                }
-                                                .foregroundColor(roiSync.isRoiVisible ? .red : .white.opacity(0.7))
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 6)
-                                                .background(Color.black.opacity(0.7))
-                                                .cornerRadius(10)
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 10)
-                                                        .stroke(roiSync.isRoiVisible ? Color.red : Color.white.opacity(0.2), lineWidth: 1)
-                                                )
-                                            }
-                                        }
-                                    }
-
-
-                                }
-
-                                // GPS Indicator
-                                if let loc = locationManager.lastKnownLocation {
-                                    VStack(alignment: .trailing) {
-                                        Text("GPS Active")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .foregroundColor(.green)
-                                        Text("\(String(format: "%.4f", loc.latitude)), \(String(format: "%.4f", loc.longitude))")
-                                            .font(.system(size: 9, design: .monospaced))
-                                            .foregroundColor(.white)
-                                    }
-                                    .padding(8)
-                                    .background(Color.black.opacity(0.7))
-                                    .cornerRadius(12)
-                                }
-                            }
-                    }
-                    .padding()
-
-                        Spacer()
-
-
-                        // Controls Bar
-                        VStack(spacing: 16) {
-                            Button(action: {
-                                if cameraManager.isStreaming || cameraManager.isConnecting {
-                                    cameraManager.stopLiveStream()
-                                    locationManager.stopTracking()
-                                    networkManager.stopStream()
-                                } else {
-                                    networkManager.startStream { ok in
-                                        guard ok else {
-                                            DispatchQueue.main.async {
-                                                networkManager.errorMessage = "Không khởi tạo được phiên live trên server."
-                                            }
-                                            return
-                                        }
-                                        // Bắt buộc phải có ingestUrl từ server. Nếu server trả về localhost
-                                        // mà thiết bị đang 5G, vẫn tiếp tục nhưng sẽ fail ở LFLiveKit và báo
-                                        // lỗi rõ ràng qua delegate.
-                                        guard let ingestUrl = networkManager.rtmpIngestUrl,
-                                              let key = networkManager.streamKey,
-                                              !ingestUrl.isEmpty, !key.isEmpty else {
-                                            DispatchQueue.main.async {
-                                                networkManager.errorMessage = "Server không trả về RTMP ingest URL. Kiểm tra server có trả field 'rtmpIngestUrl' trong /api/stream/start."
-                                            }
-                                            return
-                                        }
-                                        // ingestUrl dạng "rtmp://<host>:1935/live" -> tách ra host + port
-                                        // rồi truyền cho CameraManager để khởi tạo LFLiveSession.
-                                        let stripped = ingestUrl
-                                            .replacingOccurrences(of: "rtmp://", with: "")
-                                            .replacingOccurrences(of: "/live", with: "")
-                                        let parts = stripped.split(separator: ":")
-                                        let host = String(parts[0])
-                                        let port = parts.count > 1 ? Int(parts[1]) ?? 1935 : 1935
-                                        cameraManager.configureRtmp(serverHost: host, port: port, streamKey: key)
-                                        cameraManager.startLiveStream()
-                                        locationManager.startTracking()
-                                        locationManager.onGpsUpdated = { lat, lng in
-                                            networkManager.sendGPS(lat: lat, lng: lng)
-                                        }
-                                    }
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: (cameraManager.isStreaming || cameraManager.isConnecting) ? "stop.fill" : "play.fill")
-                                    Text(cameraManager.isStreaming ? "DỪNG PHÁT LIVE" : (cameraManager.isConnecting ? "ĐANG KẾT NỐI — BẤM ĐỂ HỦY" : "BẮT ĐẦU LIVE 120FPS"))
-                                        .fontWeight(.bold)
-                                }
-                                .font(.title3)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 32)
-                                .padding(.vertical, 16)
-                                .background((cameraManager.isStreaming || cameraManager.isConnecting) ? Color.red : Color.indigo)
-                                .cornerRadius(20)
-                                .shadow(radius: 10)
-                            }
-
-                            // Fake Lock / Stealth Screen Saver Button
-                            Button(action: {
-                                showFakeBlackScreen()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "lock.fill")
-                                    Text("KHÓA MÀN HÌNH ĐEN (LIVE ẨN)")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                }
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 18)
-                                .padding(.vertical, 10)
-                                .background(Color.black.opacity(0.8))
-                                .cornerRadius(14)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14)
-                                        .stroke(Color.gray.opacity(0.4), lineWidth: 1)
-                                )
-                            }
-
-                            Button(action: {
-                                networkManager.logout()
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                                    Text("Đăng xuất tài khoản")
-                                }
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            }
+                        if let err = cameraManager.errorMessage ?? networkManager.errorMessage {
+                            errorBanner(err)
                         }
-                        .padding(.bottom, 40)
+
+                        Spacer(minLength: 0)
+
+                        liveControlsPanel
                     }
+                    .frame(maxWidth: 520)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
                 }
             }
         }
@@ -747,6 +422,460 @@ struct ContentView: View {
     func hideFakeBlackScreen() {
         isFakeLocked = false
         BlackScreenManager.shared.hide()
+    }
+}
+
+// MARK: - Giao diện màn hình live (co giãn theo kích thước màn hình)
+extension ContentView {
+    private var liveStatusText: String {
+        if cameraManager.isStreaming { return "LIVE" }
+        if cameraManager.isConnecting { return "ĐANG KẾT NỐI" }
+        return "SẴN SÀNG"
+    }
+
+    private var liveStatusColor: Color {
+        if cameraManager.isStreaming { return .red }
+        if cameraManager.isConnecting { return .orange }
+        return .gray
+    }
+
+    private var networkChipInfo: (icon: String, text: String, color: Color) {
+        switch networkMonitor.currentInterface {
+        case .wifi: return ("wifi", "Wi-Fi", .green)
+        case .cellular: return ("antenna.radiowaves.left.and.right", "4G/5G", .orange)
+        case .wired: return ("cable.connector", "LAN", .blue)
+        case .offline: return ("wifi.slash", "Mất mạng", .red)
+        case .unknown: return ("questionmark.circle", "Mạng ?", .gray)
+        }
+    }
+
+    private var placementTitle: String {
+        switch cameraManager.flatPlacementMode {
+        case .auto: return "Đặt: Tự động"
+        case .faceUp: return "Máy: Ngửa"
+        case .faceDown: return "Máy: Úp"
+        }
+    }
+
+    private var placementIcon: String {
+        switch cameraManager.flatPlacementMode {
+        case .auto: return "iphone"
+        case .faceUp: return "book.closed.fill"
+        case .faceDown: return "iphone.slash"
+        }
+    }
+
+    /// Thẻ trạng thái trên cùng: LIVE · FPS · bitrate · mạng · GPS + hạn dùng / user / mode.
+    private var liveStatusCard: some View {
+        let net = networkChipInfo
+        let remaining = networkManager.getRemainingTimeText()
+        let remainingColor: Color = remaining.contains("hết hạn") ? .red : .green
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(liveStatusColor)
+                    .frame(width: 9, height: 9)
+                Text(liveStatusText)
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundColor(cameraManager.isStreaming ? .red : .white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .layoutPriority(1)
+                Spacer(minLength: 2)
+                StatusChip(text: "\(Int(cameraManager.currentFPS)) FPS", color: .yellow)
+                StatusChip(text: "\(cameraManager.selectedBitrateMbps)M", color: .mint)
+                StatusChip(icon: net.icon, text: net.text, color: net.color)
+                if locationManager.lastKnownLocation != nil {
+                    StatusChip(icon: "location.fill", color: .green)
+                }
+            }
+
+            HStack(spacing: 4) {
+                Image(systemName: "hourglass")
+                    .font(.system(size: 9))
+                    .foregroundColor(remainingColor)
+                Text("Hạn: \(remaining)")
+                    .foregroundColor(remainingColor)
+                Text("· \(networkManager.currentUsername ?? "")")
+                    .foregroundColor(.white.opacity(0.75))
+                Text(networkManager.isAiModeEnabled ? "· MODE 2 (AI)" : "· MODE 1")
+                    .fontWeight(.black)
+                    .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .orange)
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.72))
+        .cornerRadius(14)
+    }
+
+    /// Thông báo lỗi gọn (trước đây lỗi khi bấm live không hiện trên màn hình camera).
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.yellow)
+            Text(message)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: {
+                cameraManager.errorMessage = nil
+                networkManager.errorMessage = nil
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.white.opacity(0.6))
+            }
+        }
+        .padding(8)
+        .background(Color.red.opacity(0.35))
+        .cornerRadius(10)
+    }
+
+    /// Cụm dưới: nút thu gọn + lưới điều khiển + nút live + màn đen / đăng xuất.
+    private var liveControlsPanel: some View {
+        VStack(spacing: 10) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isControlsCollapsed.toggle()
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: isControlsCollapsed ? "chevron.up" : "chevron.down")
+                    Text(isControlsCollapsed ? "Hiện điều khiển" : "Thu gọn")
+                }
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(.white.opacity(0.8))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 5)
+                .background(Color.black.opacity(0.55))
+                .clipShape(Capsule())
+            }
+
+            if !isControlsCollapsed {
+                controlsGrid
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            liveButton
+
+            HStack(spacing: 10) {
+                Button(action: {
+                    showFakeBlackScreen()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.fill")
+                        Text("MÀN HÌNH ĐEN (LIVE ẨN)")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(Color.black.opacity(0.75))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.gray.opacity(0.4), lineWidth: 1)
+                    )
+                }
+
+                Button(action: {
+                    networkManager.logout()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                        Text("Đăng xuất")
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.gray)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(Color.black.opacity(0.55))
+                    .cornerRadius(14)
+                }
+            }
+        }
+    }
+
+    /// Lưới nút đều nhau: số cột tự tính theo bề ngang (4 cột trên iPhone thường, nhiều hơn trên iPad).
+    private var controlsGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 74), spacing: 8)], spacing: 8) {
+            // Đổi camera
+            Button(action: {
+                cameraManager.switchCamera()
+            }) {
+                ControlTile(
+                    icon: "arrow.triangle.2.circlepath.camera.fill",
+                    title: cameraManager.currentDevicePosition == .back ? "Cam sau" : "Cam trước",
+                    tint: .cyan,
+                    isActive: true
+                )
+            }
+
+            // Bù sáng EV
+            Button(action: {
+                cameraManager.cycleExposureBias()
+            }) {
+                ControlTile(
+                    icon: cameraManager.exposureBiasLevel > 0 ? "sun.max.fill" : "sun.min",
+                    title: cameraManager.exposureBiasText,
+                    tint: .orange,
+                    isActive: cameraManager.exposureBiasLevel > 0
+                )
+            }
+
+            // Đặt máy (Úp / Ngửa / Tự động)
+            Button(action: {
+                cameraManager.cycleFlatPlacementMode()
+            }) {
+                ControlTile(
+                    icon: placementIcon,
+                    title: placementTitle,
+                    tint: .yellow,
+                    isActive: cameraManager.flatPlacementMode != .auto
+                )
+            }
+
+            // Shutter thông minh
+            Button(action: {
+                cameraManager.toggleActionShutter()
+            }) {
+                ControlTile(
+                    icon: cameraManager.isActionShutterEnabled ? "bolt.fill" : "bolt.slash.fill",
+                    title: cameraManager.isActionShutterEnabled ? cameraManager.currentShutterText : "Auto sáng",
+                    tint: .yellow,
+                    isActive: cameraManager.isActionShutterEnabled
+                )
+            }
+
+            // Khóa nét
+            Button(action: {
+                cameraManager.toggleFocusLock()
+            }) {
+                ControlTile(
+                    icon: cameraManager.isFocusLocked ? "lock.fill" : "lock.open.fill",
+                    title: cameraManager.isFocusLocked ? "Nét: Khóa" : "Nét: Auto",
+                    tint: .green,
+                    isActive: cameraManager.isFocusLocked
+                )
+            }
+
+            // Chọn bitrate
+            bitrateMenu
+
+            // AI On-Device (chỉ tài khoản có quyền AI)
+            if networkManager.allowedMode != "mode1" {
+                Button(action: {
+                    toggleAiMode()
+                }) {
+                    ControlTile(
+                        icon: networkManager.isAiModeEnabled ? "cpu.fill" : "cpu",
+                        title: networkManager.isAiModeEnabled ? "AI: Bật" : "AI: Tắt",
+                        tint: .cyan,
+                        isActive: networkManager.isAiModeEnabled
+                    )
+                }
+
+                // Ô soi debug (chỉ khi bật AI)
+                if networkManager.isAiModeEnabled {
+                    Button(action: {
+                        roiSync.toggleVisibility()
+                    }) {
+                        ControlTile(
+                            icon: roiSync.isRoiVisible ? "viewfinder.circle.fill" : "viewfinder.circle",
+                            title: roiSync.isRoiVisible ? "Ô soi: Bật" : "Ô soi: Ẩn",
+                            tint: .red,
+                            isActive: roiSync.isRoiVisible
+                        )
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(10)
+        .background(Color.black.opacity(0.6))
+        .cornerRadius(18)
+    }
+
+    /// Menu chọn bitrate tối đa + bật/tắt tự hạ khi mạng yếu.
+    private var bitrateMenu: some View {
+        Menu {
+            Section("Bitrate tối đa") {
+                ForEach(CameraManager.bitratePresets, id: \.self) { preset in
+                    Button(action: {
+                        cameraManager.setBitrate(preset.mbps)
+                    }) {
+                        if preset.mbps == cameraManager.selectedBitrateMbps {
+                            Label(preset.label, systemImage: "checkmark")
+                        } else {
+                            Text(preset.label)
+                        }
+                    }
+                }
+            }
+            Section {
+                Toggle(isOn: Binding(
+                    get: { cameraManager.isAdaptiveBitrateEnabled },
+                    set: { cameraManager.setAdaptiveBitrate($0) }
+                )) {
+                    Label("Tự hạ khi mạng yếu (chống giật)", systemImage: "waveform.path.ecg")
+                }
+            }
+            if cameraManager.isStreaming || cameraManager.isConnecting {
+                Section {
+                    Text("Đổi khi đang live: kết nối lại ~1–2 giây")
+                }
+            }
+        } label: {
+            ControlTile(
+                icon: "dot.radiowaves.up.forward",
+                title: cameraManager.isAdaptiveBitrateEnabled
+                    ? "\(cameraManager.selectedBitrateMbps)M · Auto"
+                    : "\(cameraManager.selectedBitrateMbps)M",
+                tint: .mint,
+                isActive: true
+            )
+        }
+    }
+
+    private var liveButton: some View {
+        let active = cameraManager.isStreaming || cameraManager.isConnecting
+        return Button(action: toggleLive) {
+            HStack(spacing: 8) {
+                Image(systemName: active ? "stop.fill" : "play.fill")
+                Text(cameraManager.isStreaming ? "DỪNG PHÁT LIVE" : (cameraManager.isConnecting ? "ĐANG KẾT NỐI — BẤM ĐỂ HỦY" : "BẮT ĐẦU LIVE 120FPS"))
+                    .fontWeight(.bold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .font(.headline)
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .padding(.horizontal, 12)
+            .background(active ? Color.red : Color.indigo)
+            .cornerRadius(18)
+            .shadow(radius: 8)
+        }
+    }
+
+    private func toggleAiMode() {
+        networkManager.isAiModeEnabled.toggle()
+        roiSync.isActive = networkManager.isAiModeEnabled
+        if !networkManager.isAiModeEnabled {
+            roiSync.isRoiVisible = false
+            roiSync.detectedCard = nil
+            roiSync.hasRecentDetection = false
+            roiSync.liveDebugScan = ""
+            CardDetector.shared.resetState()
+        } else {
+            roiSync.isRoiVisible = true
+        }
+    }
+
+    private func toggleLive() {
+        if cameraManager.isStreaming || cameraManager.isConnecting {
+            cameraManager.stopLiveStream()
+            locationManager.stopTracking()
+            networkManager.stopStream()
+        } else {
+            networkManager.startStream { ok in
+                guard ok else {
+                    DispatchQueue.main.async {
+                        networkManager.errorMessage = "Không khởi tạo được phiên live trên server."
+                    }
+                    return
+                }
+                // Bắt buộc phải có ingestUrl từ server. Nếu server trả về localhost
+                // mà thiết bị đang 5G, vẫn tiếp tục nhưng sẽ fail ở LFLiveKit và báo
+                // lỗi rõ ràng qua delegate.
+                guard let ingestUrl = networkManager.rtmpIngestUrl,
+                      let key = networkManager.streamKey,
+                      !ingestUrl.isEmpty, !key.isEmpty else {
+                    DispatchQueue.main.async {
+                        networkManager.errorMessage = "Server không trả về RTMP ingest URL. Kiểm tra server có trả field 'rtmpIngestUrl' trong /api/stream/start."
+                    }
+                    return
+                }
+                // ingestUrl dạng "rtmp://<host>:1935/live" -> tách ra host + port
+                // rồi truyền cho CameraManager để khởi tạo LFLiveSession.
+                let stripped = ingestUrl
+                    .replacingOccurrences(of: "rtmp://", with: "")
+                    .replacingOccurrences(of: "/live", with: "")
+                let parts = stripped.split(separator: ":")
+                let host = String(parts[0])
+                let port = parts.count > 1 ? Int(parts[1]) ?? 1935 : 1935
+                cameraManager.configureRtmp(serverHost: host, port: port, streamKey: key)
+                cameraManager.startLiveStream()
+                locationManager.startTracking()
+                locationManager.onGpsUpdated = { lat, lng in
+                    networkManager.sendGPS(lat: lat, lng: lng)
+                }
+            }
+        }
+    }
+}
+
+/// Ô nút trong lưới điều khiển: icon trên, chữ ngắn dưới, chữ tự co để không tràn trên màn nhỏ.
+private struct ControlTile: View {
+    let icon: String
+    let title: String
+    var tint: Color = .white
+    var isActive: Bool = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .bold))
+                .frame(height: 18)
+            Text(title)
+                .font(.system(size: 10, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .foregroundColor(isActive ? tint : .white.opacity(0.85))
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .padding(.horizontal, 3)
+        .background(isActive ? tint.opacity(0.16) : Color.white.opacity(0.06))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isActive ? tint.opacity(0.85) : Color.white.opacity(0.15), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+    }
+}
+
+/// Nhãn nhỏ trên thẻ trạng thái (FPS, bitrate, mạng, GPS).
+private struct StatusChip: View {
+    var icon: String? = nil
+    var text: String? = nil
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if let icon = icon {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+            }
+            if let text = text {
+                Text(text)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.16))
+        .cornerRadius(5)
     }
 }
 
@@ -997,11 +1126,13 @@ public class RoiSyncManager: ObservableObject {
     // Telemetry & Network Status
     public var currentFPS: Double = 120.0
     public var isStreaming: Bool = false
+    /// Bitrate tối đa đang cấu hình cho encoder (Mbps), CameraManager cập nhật khi dựng phiên live.
+    public var currentBitrateMbps: Double = Double(CameraManager.defaultBitrateMbps)
 
     public func sendTelemetry(pingMs: Int) {
         let uid = NetworkManager.shared.currentUserId ?? ""
         let uname = NetworkManager.shared.currentUsername ?? ""
-        let bitrateStr = isStreaming ? "8.5" : "0.0"
+        let bitrateStr = isStreaming ? String(format: "%.1f", currentBitrateMbps) : "0.0"
         let fpsInt = isStreaming ? Int(currentFPS) : 0
         let payload: [String: Any] = [
             "type": "device_telemetry",

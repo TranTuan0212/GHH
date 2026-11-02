@@ -129,6 +129,71 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var debugEncoderInfo: String = ""
     @Published public var debugPushedFrames: Int = 0
 
+    // MARK: - Bitrate do người dùng chọn (lưu UserDefaults)
+
+    /// Một mức bitrate hiển thị trong menu chọn của giao diện.
+    public struct BitratePreset: Hashable {
+        public let mbps: Int
+        public let label: String
+    }
+
+    /// Các mức bitrate cho phép chọn. Mức chọn là MỨC TỐI ĐA; khi bật tự hạ, encoder có thể
+    /// giảm xuống tối thiểu `minBitrateRatio` × mức chọn lúc mạng yếu để live không bị giật.
+    public static let bitratePresets: [BitratePreset] = [
+        BitratePreset(mbps: 8, label: "8 Mbps – Tiết kiệm"),
+        BitratePreset(mbps: 12, label: "12 Mbps – Cân bằng"),
+        BitratePreset(mbps: 16, label: "16 Mbps"),
+        BitratePreset(mbps: 20, label: "20 Mbps – Khuyên dùng"),
+        BitratePreset(mbps: 25, label: "25 Mbps – Siêu nét"),
+        BitratePreset(mbps: 30, label: "30 Mbps – Cực nét (mạng mạnh)")
+    ]
+    public static let defaultBitrateMbps = 20
+    private static let minBitrateRatio = 0.6
+    private static let bitrateDefaultsKey = "SloMoLive.streamBitrateMbps"
+    private static let adaptiveDefaultsKey = "SloMoLive.streamAdaptiveBitrate"
+
+    /// Bitrate tối đa người dùng đã chọn (Mbps).
+    @Published public private(set) var selectedBitrateMbps: Int = {
+        let saved = UserDefaults.standard.integer(forKey: CameraManager.bitrateDefaultsKey)
+        return CameraManager.bitratePresets.contains(where: { $0.mbps == saved }) ? saved : CameraManager.defaultBitrateMbps
+    }()
+
+    /// Tự hạ bitrate khi mạng yếu (chống giật). Mặc định bật.
+    @Published public private(set) var isAdaptiveBitrateEnabled: Bool =
+        (UserDefaults.standard.object(forKey: CameraManager.adaptiveDefaultsKey) as? Bool) ?? true
+
+    /// Đổi mức bitrate. Nếu đang live sẽ kết nối lại RTMP (~1–2 giây) để áp dụng ngay.
+    public func setBitrate(_ mbps: Int) {
+        guard CameraManager.bitratePresets.contains(where: { $0.mbps == mbps }), mbps != selectedBitrateMbps else { return }
+        selectedBitrateMbps = mbps
+        UserDefaults.standard.set(mbps, forKey: CameraManager.bitrateDefaultsKey)
+        applyBitrateChange()
+    }
+
+    /// Bật/tắt tự hạ bitrate khi mạng yếu. Nếu đang live sẽ kết nối lại RTMP để áp dụng ngay.
+    public func setAdaptiveBitrate(_ enabled: Bool) {
+        guard enabled != isAdaptiveBitrateEnabled else { return }
+        isAdaptiveBitrateEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: CameraManager.adaptiveDefaultsKey)
+        applyBitrateChange()
+    }
+
+    private func applyBitrateChange() {
+        RoiSyncManager.shared.currentBitrateMbps = Double(selectedBitrateMbps)
+        if isStreaming || isConnecting {
+            // rebuildLiveSession() khi đang live chỉ thay object session mà không dừng/khởi động
+            // lại RTMP, nên phải dừng hẳn rồi phát lại với cùng stream key (giống khi 4G reconnect).
+            print("[CameraManager] 🔁 Đổi bitrate khi đang live → kết nối lại RTMP với \(selectedBitrateMbps) Mbps")
+            stopLiveStream()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard let self = self, !self.isStreaming, !self.isConnecting else { return }
+                self.startLiveStream()
+            }
+        } else if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+            rebuildLiveSession()
+        }
+    }
+
     /// FPS thực tế đang cấu hình trên phần cứng (đồng bộ tức thì trên sessionQueue để rebuildLiveSession đọc chính xác)
     private var activeCaptureFPS: Double = 120.0
 
@@ -428,7 +493,11 @@ public class CameraManager: NSObject, ObservableObject {
         // Target Bitrate: 8.5 Mbps (Peak 10.5 Mbps, Floor 6.0 Mbps) kết hợp Quality 0.95.
         // Mức 8.5 Mbps loại bỏ hoàn toàn Bufferbloat sóng di động, giữ Ping ổn định 15-25ms,
         // đồng thời phần cứng camera và chip nén chạy mát rượi suốt cả ngày.
-        let targetBitrate: UInt = 8_500_000
+        // Bitrate do người dùng chọn trên giao diện (mặc định 20 Mbps). Mức chọn là mức TỐI ĐA;
+        // sàn = 60% mức chọn, chỉ dùng khi bật tự hạ bitrate lúc mạng yếu.
+        let targetBitrate: UInt = UInt(selectedBitrateMbps) * 1_000_000
+        let maxBitrate: UInt = targetBitrate
+        let minBitrate: UInt = UInt(Double(targetBitrate) * CameraManager.minBitrateRatio)
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -437,14 +506,14 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 10_500_000
+        videoCfg.videoMaxBitRate = maxBitrate
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 6_000_000
+        videoCfg.videoMinBitRate = minBitrate
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
         }
-        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Peak: 7.5Mbps, Floor: 4.5Mbps)")
+        print("[CameraManager] 🎬 LFLive encoder configured: [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")] \(targetFps)fps, size: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)), 0.5s GOP Keyframe (\(gopFrames)f), bitrate \(Double(targetBitrate) / 1_000_000)Mbps (Max: \(Double(maxBitrate) / 1_000_000)Mbps, Floor: \(Double(minBitrate) / 1_000_000)Mbps, adaptive: \(isAdaptiveBitrateEnabled))")
 
         // Kích hoạt thu âm thanh từ micro bằng .captureMaskAudioInputVideo (LFLiveKit tự thu Audio qua mic, Video nhận từ AVCaptureVideoDataOutput).
         // LFLiveSession(...) là initializer failable -> trả về LFLiveSession?. Phải unwrap trước khi dùng.
@@ -474,6 +543,10 @@ public class CameraManager: NSObject, ObservableObject {
         // Tự động kết nối lại khi sóng 4G/5G bị ngắt quãng (thử lại mỗi 2s, tối đa 15 lần = 30s chịu đựng mất sóng)
         session.reconnectInterval = 2
         session.reconnectCount = 15
+        // Tự hạ bitrate khi bộ đệm gửi RTMP dồn lại (mạng yếu) thay vì bỏ khung hình → live không giật.
+        // Bước tăng/giảm đã được vá trong Podfile (giảm 1 Mbps, tăng 0.25 Mbps mỗi lần) để phản ứng kịp.
+        session.adaptiveBitrate = isAdaptiveBitrateEnabled
+        RoiSyncManager.shared.currentBitrateMbps = Double(selectedBitrateMbps)
 
         liveSession = session
     }
@@ -1363,6 +1436,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 /// hoặc session:didFailWithError được fire.
 extension CameraManager: LFLiveSessionDelegate {
     public func liveSession(_ session: LFLiveSession?, liveStateDidChange state: LFLiveState) {
+        // Bỏ qua callback trễ của phiên LFLiveSession CŨ (ví dụ sau khi đổi bitrate khi đang live:
+        // phiên cũ bắn .stop sau khi phiên mới đã start) để không tắt nhầm luồng đang phát.
+        if let s = session, let current = liveSession, s !== current {
+            print("[LFLive] Bỏ qua state \(state.rawValue) từ phiên cũ")
+            return
+        }
         switch state {
         case .ready:
             print("[LFLive] Ready — chưa push")
