@@ -884,46 +884,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
           ) : (
             /* CHẾ ĐỘ 3 LÁ & 2 LÁ */
             <div className="space-y-1">
-              {/* DÃY CHẤT RÔ ♦ */}
-              <div className="bg-slate-950/90 p-1 rounded-xl border border-rose-500/40 shadow-inner space-y-0.5">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[10px] font-black text-rose-400 flex items-center space-x-1">
-                    <span className="text-xs">♦</span>
-                    <span>DÃY CHẤT RÔ (ĐỎ) • CÙNG ĐIỂM LUÔN LỚN HƠN</span>
-                  </span>
-                  <span className="text-[9px] text-rose-300 font-mono font-bold bg-rose-950/80 px-1 py-0.2 rounded border border-rose-500/30">1♦ ➔ 13♦</span>
-                </div>
-                <div className="grid grid-cols-7 gap-1">
-                  {RO_CARDS.map((card) => {
-                    const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
-                    return (
-                      <button
-                        key={card.rank}
-                        type="button"
-                        onClick={() => handleCardClick(card.rank)}
-                        className={`h-7 sm:h-8 rounded-lg flex items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
-                          card.bg
-                        } ${card.border} ${
-                          isCurrent
-                            ? 'ring-2 ring-rose-400 border-rose-400 scale-105 z-10 shadow-rose-500/40'
-                            : 'hover:scale-105 hover:border-rose-400'
-                        }`}
-                      >
-                        <span className={`text-xs leading-none font-black ${card.color} flex items-center gap-0.5`}>
-                          <span>{card.num}</span>
-                          <span className="text-[10px] text-rose-500">♦</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                  <div className="h-7 sm:h-8 rounded-lg border border-rose-500/30 bg-rose-950/40 flex flex-col items-center justify-center text-center p-0.5 select-none">
-                    <span className="text-[9px] font-black text-rose-300 leading-tight">Ưu Tiên</span>
-                    <span className="text-[8px] text-rose-400 font-bold leading-tight">Chất Rô ♦</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* DÃY SỐ THƯỜNG */}
+{/* DÃY SỐ THƯỜNG */}
               <div className="bg-slate-950/80 p-1 rounded-xl border border-white/10 shadow-inner space-y-0.5">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[10px] font-bold text-slate-300">

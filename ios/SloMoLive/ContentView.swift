@@ -463,6 +463,35 @@ struct ContentView: View {
                                                 .stroke(cameraManager.exposureBiasLevel > 0 ? Color.orange : Color.white.opacity(0.2), lineWidth: 1)
                                         )
                                     }
+
+                                    // 3. Nút Bật / Tắt AI On-Device
+                                    Button(action: {
+                                        networkManager.isAiModeEnabled.toggle()
+                                        roiSync.isActive = networkManager.isAiModeEnabled
+                                        if !networkManager.isAiModeEnabled {
+                                            roiSync.detectedCard = nil
+                                            roiSync.hasRecentDetection = false
+                                            roiSync.liveDebugScan = ""
+                                            CardDetector.shared.resetState()
+                                        }
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: networkManager.isAiModeEnabled ? "cpu.fill" : "cpu")
+                                                .font(.system(size: 11, weight: .bold))
+                                            Text(networkManager.isAiModeEnabled ? "AI: BẬT ⚡" : "AI: TẮT 💤")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .gray)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(networkManager.isAiModeEnabled ? Color.cyan.opacity(0.18) : Color.black.opacity(0.6))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(networkManager.isAiModeEnabled ? Color.cyan : Color.white.opacity(0.2), lineWidth: 1)
+                                        )
+                                    }
                                 }
 
                                 HStack(spacing: 6) {

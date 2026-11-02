@@ -2022,28 +2022,7 @@ export const DataGroupingUI: React.FC<DataGroupingUIProps> = ({
                 />
               </div>
 
-              {/* Quick Select Buttons - Dãy Rô */}
-              <div className="space-y-1 pt-0.5">
-                <span className="text-[10px] font-bold text-rose-400">♦ Chất Rô (Đỏ):</span>
-                <div className="flex flex-wrap gap-1">
-                  {['1♦', '2♦', '3♦', '4♦', '5♦', '6♦', '7♦', '8♦', '9♦', '10♦', '11♦', '12♦', '13♦'].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setEditCardValue(c)}
-                      className={`px-1.5 py-0.5 rounded-md text-[11px] font-mono font-bold transition-all border ${
-                        editCardValue.trim().toUpperCase() === c
-                          ? 'bg-rose-500 text-white font-black border-rose-300 ring-1 ring-rose-400'
-                          : 'bg-rose-950/60 text-rose-300 border-rose-500/30 hover:border-rose-400'
-                      }`}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Quick Select Buttons - Thường */}
+{/* Quick Select Buttons - Thường */}
               <div className="space-y-1 pt-0.5">
                 <span className="text-[10px] font-bold text-slate-400">Số Thường & Không thấy:</span>
                 <div className="flex flex-wrap gap-1">

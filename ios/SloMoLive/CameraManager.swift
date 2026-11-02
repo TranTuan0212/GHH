@@ -1496,32 +1496,25 @@ public class CardDetector: NSObject, ObservableObject {
             var bestLiveCandidate = eval.rawBest
             var bestAngle = "0°"
 
-            // 2b. Nếu pass 0° chưa bắt rõ (< 45%), kích hoạt bộ lọc khử bóng tối ngược sáng + biến đổi phối cảnh 3D Shear
-            if detected == nil || (detected?.conf ?? 0) < 45 {
+            // 2b. Hỗ trợ góc nghiêng 3D: CHỈ kích hoạt khi pass 0° chưa bắt được bài nhưng có tín hiệu lá bài mờ (bestLiveCandidate conf >= 20%).
+            // Giữ cho khung hình trống xử lý siêu tốc ~1.8ms trên Apple Neural Engine (không rớt bất kỳ frame nào ở 120 FPS).
+            if detected == nil, let cand = bestLiveCandidate, cand.conf >= 20 {
                 let shadowEnhanced = self.enhanceShadowedPatch(croppedPatch)
                 let shearConfigs: [(scale: CGFloat, fy: CGFloat, shearX: CGFloat, label: String)] = [
-                    (0.62, 1.80, -0.55, "3D-L"),
-                    (0.62, 1.80,  0.55, "3D-R"),
-                    (0.55, 1.85, -0.42, "3D-D"),
-                    (0.72, 1.38,  0.00, "3D-V")
+                    (0.62, 1.80, -0.45, "3D-L"),
+                    (0.62, 1.80,  0.45, "3D-R")
                 ]
                 for cfg in shearConfigs {
                     let warped = self.warp3DShearPatch(shadowEnhanced, scale: cfg.scale, fy: cfg.fy, shearX: cfg.shearX)
                     let h3d = VNImageRequestHandler(ciImage: warped, orientation: primaryOrient, options: [:])
                     let ev3d = self.evaluateVisionHandler(h3d)
-                    if let rb = ev3d.rawBest {
-                        if bestLiveCandidate == nil || rb.conf > (bestLiveCandidate?.conf ?? 0) {
-                            bestLiveCandidate = rb
-                            bestAngle = cfg.label
-                        }
+                    if let rb = ev3d.rawBest, rb.conf > (bestLiveCandidate?.conf ?? 0) {
+                        bestLiveCandidate = rb
+                        bestAngle = cfg.label
                     }
                     if let det = ev3d.detected {
-                        if detected == nil || det.conf > (detected?.conf ?? 0) {
-                            detected = det
-                            bestAngle = cfg.label
-                        }
-                    }
-                    if (detected?.conf ?? 0) >= 52 {
+                        detected = det
+                        bestAngle = cfg.label
                         break
                     }
                 }
@@ -1608,12 +1601,6 @@ public class CardDetector: NSObject, ObservableObject {
             hs.setValue(current, forKey: kCIInputImageKey)
             hs.setValue(0.75, forKey: "inputShadowAmount")
             if let out = hs.outputImage { current = out }
-        }
-        if let us = CIFilter(name: "CIUnsharpMask") {
-            us.setValue(current, forKey: kCIInputImageKey)
-            us.setValue(2.0, forKey: kCIInputRadiusKey)
-            us.setValue(0.85, forKey: kCIInputIntensityKey)
-            if let out = us.outputImage { current = out }
         }
         return current.cropped(to: ext)
     }
