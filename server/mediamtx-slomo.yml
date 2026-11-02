@@ -4,7 +4,7 @@ readTimeout: 60s
 writeTimeout: 60s
 writeQueueSize: 16384
 udpMaxPayloadSize: 1472
-udpReadBufferSize: 8388608
+# udpReadBufferSize: default
 
 api: true
 apiAddress: 127.0.0.1:9997
@@ -19,7 +19,7 @@ rtmpEncryption: "no"
 hls: false
 
 webrtc: true
-webrtcAddress: :8889
+webrtcAddress: 127.0.0.1:8888
 webrtcEncryption: false
 
 webrtcLocalUDPAddress: :8189

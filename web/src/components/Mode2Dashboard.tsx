@@ -1086,6 +1086,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
   // Xử lý kéo thả Ô đỏ trực tiếp trên Video
   const handleReticleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
+    if ('cancelable' in e && e.cancelable) {
+      e.preventDefault();
+    }
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
     const rect = getRenderedVideoRect();
@@ -1093,6 +1096,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     const startNormY = normRoi.normY;
 
     const onMove = (moveEv: MouseEvent | TouchEvent) => {
+      if (moveEv.cancelable) {
+        moveEv.preventDefault();
+      }
       const curX = 'touches' in moveEv ? moveEv.touches[0].clientX : (moveEv as MouseEvent).clientX;
       const curY = 'touches' in moveEv ? moveEv.touches[0].clientY : (moveEv as MouseEvent).clientY;
       const dx = curX - clientX;
@@ -1112,13 +1118,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onEnd);
-    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchmove', onMove, { passive: false });
     window.addEventListener('touchend', onEnd);
   };
 
   // Xử lý co giãn kích thước Ô đỏ
   const handleReticleResize = (e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
+    if ('cancelable' in e && e.cancelable) {
+      e.preventDefault();
+    }
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
     const rect = getRenderedVideoRect();
@@ -1126,6 +1135,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     const startNormH = normRoi.normH;
 
     const onMove = (moveEv: MouseEvent | TouchEvent) => {
+      if (moveEv.cancelable) {
+        moveEv.preventDefault();
+      }
       const curX = 'touches' in moveEv ? moveEv.touches[0].clientX : (moveEv as MouseEvent).clientX;
       const curY = 'touches' in moveEv ? moveEv.touches[0].clientY : (moveEv as MouseEvent).clientY;
       const dw = curX - clientX;
@@ -1145,7 +1157,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onEnd);
-    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchmove', onMove, { passive: false });
     window.addEventListener('touchend', onEnd);
   };
 
@@ -2344,7 +2356,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                     height: `${boxH}px`,
                     pointerEvents: 'auto'
                   }}
-                  className={`z-30 border-2 rounded-lg pointer-events-auto transition-colors ${
+                  className={`z-30 border-2 rounded-lg pointer-events-auto touch-none select-none transition-colors ${
                     isAiFlashing
                       ? 'border-emerald-400 bg-emerald-500/15 shadow-[0_0_25px_rgba(52,211,153,0.9)]'
                       : 'border-red-500 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.7)]'
@@ -2354,7 +2366,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   <div
                     onMouseDown={handleReticleDragStart}
                     onTouchStart={handleReticleDragStart}
-                    className="absolute -top-6 left-0 right-0 flex items-center justify-between text-[10px] font-bold text-white bg-black/90 px-2 py-0.5 rounded-t backdrop-blur border-t border-x border-red-500/50 cursor-move whitespace-nowrap shadow select-none"
+                    className="absolute -top-6 left-0 right-0 flex items-center justify-between text-[10px] font-bold text-white bg-black/90 px-2 py-0.5 rounded-t backdrop-blur border-t border-x border-red-500/50 cursor-move whitespace-nowrap shadow select-none touch-none"
                     title="Giữ chuột hoặc chạm kéo thanh này để di chuyển ô đỏ đến đúng vị trí bài"
                   >
                     <span className="flex items-center space-x-1">
@@ -2370,7 +2382,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   <div
                     onMouseDown={handleReticleDragStart}
                     onTouchStart={handleReticleDragStart}
-                    className="absolute inset-0 cursor-move"
+                    className="absolute inset-0 cursor-move touch-none"
                     title="Kéo ô đỏ đến vị trí chia bài"
                   />
 
@@ -2392,7 +2404,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   <div
                     onMouseDown={handleReticleResize}
                     onTouchStart={handleReticleResize}
-                    className="absolute bottom-0 right-0 w-6 h-6 flex items-end justify-end p-0.5 cursor-nwse-resize z-30"
+                    className="absolute bottom-0 right-0 w-6 h-6 flex items-end justify-end p-0.5 cursor-nwse-resize z-30 touch-none"
                     title="Kéo góc để chỉnh kích thước Dài/Rộng"
                   >
                     <div className="w-3 h-3 border-r-2 border-b-2 border-red-400 rounded-br-sm bg-red-500/30" />
