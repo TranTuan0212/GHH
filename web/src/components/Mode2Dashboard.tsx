@@ -1037,9 +1037,8 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       }
     }
 
-    // 4. Gửi ảnh tới AI Worker: Tách sang microtask để 0% ảnh hưởng đến nhịp render 120 FPS (hết đứng hình!)
-    const timeSinceLastAi = now - lastAiSendTimeRef.current;
-    const shouldSendAi = forcedScan || (!isAiBusyRef.current && (hasMotion ? timeSinceLastAi >= 20 : timeSinceLastAi >= 400));
+    // 4. Mọi việc nhận diện do App iOS On-Device AI xử lý trực tiếp ở 120fps -> Web không tự quét canvas để giữ 100% độ mượt Live
+    const shouldSendAi = false;
 
     if (shouldSendAi && socket) {
       isAiBusyRef.current = true;
@@ -1244,18 +1243,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       const sharp = data.sharpness || 0;
 
       if (isHiddenCardCode(best.code)) {
-        if (!autoMarkUnknownRef.current) return;
-        setLastDetectedCard('? (Ẩn)');
-        setAiStatus(`⚠️ AI không thấy rõ lá vừa lướt qua (Độ nét ${sharp}) ➔ Đã điền ? (Không thấy) để giữ đúng thứ tự Cửa!`);
-        const unkFrame = {
-          image: data.image || '',
-          cardName: '? (Không thấy)',
-          confidence: Math.round(conf * 100),
-          sharpness: sharp,
-          timestamp: data.timestamp || new Date().toLocaleTimeString('vi-VN')
-        };
-        setCapturedFrame(unkFrame);
-        addCardToActiveDoor('?', data.image, sharp, conf, false);
+        return;
+      }
+      if (isAllDoorsComplete && !data.updateFrameOnly) {
         return;
       }
 
@@ -2912,17 +2902,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                   <span>Ván Mới</span>
                 </button>
                 <button
-                  onClick={() => {
-                    addCardToActiveDoor('?', capturedFrame?.image, capturedFrame?.sharpness, 0, false);
-                    setAiStatus('⚠️ Đã đánh dấu lá ? (Không thấy / Bỏ) và chuyển sang Cửa tiếp theo.');
-                  }}
-                  disabled={!nextTarget}
-                  className="px-2.5 py-1.5 rounded-lg bg-orange-600/90 hover:bg-orange-500 disabled:opacity-40 text-white font-bold text-xs flex items-center space-x-1 shadow-md shadow-orange-600/20 border border-orange-400/50"
-                  title="Đánh dấu lá hiện tại là Không thấy (?) để bỏ qua và chuyển đúng thứ tự sang Cửa kế tiếp"
-                >
-                  <span>? Không thấy (Bỏ)</span>
-                </button>
-                <button
                   onClick={handleUndo}
                   className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center space-x-1"
                 >
@@ -2942,18 +2921,6 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 >
                   <Trash2 className="w-3.5 h-3.5 text-red-400" />
                   <span>Xóa Ván</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAutoMarkUnknown((prev) => !prev)}
-                  className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition border ${
-                    autoMarkUnknown
-                      ? 'bg-orange-950/80 text-orange-300 border-orange-500/60'
-                      : 'bg-slate-900 text-slate-500 border-slate-700'
-                  }`}
-                  title="Tự động điền ? (Không thấy) khi có lá bài lướt qua ô ngắm mà AI không đọc được tên bài"
-                >
-                  {autoMarkUnknown ? 'Tự báo ?: BẬT' : 'Tự báo ?: TẮT'}
                 </button>
               </div>
 

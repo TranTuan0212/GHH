@@ -1395,11 +1395,11 @@ public class CardDetector: NSObject, ObservableObject {
     private var passBestRoiRect: CGRect = .zero
     private var passBestIsFront: Bool = false
     private var passBestCard: String? = nil
-    private var passWeakFrameCount: Int = 0
-    private var passWeakPeakConf: Int = 0
+
+
     private var lastLockedCard: String? = nil
     private var lockCooldownUntil: TimeInterval = 0.0
-    private var lastUnknownCommitTime: TimeInterval = 0.0
+
 
     @Published public var isModelLoaded: Bool = false
 
@@ -1411,8 +1411,8 @@ public class CardDetector: NSObject, ObservableObject {
             self.passVotes.removeAll()
             self.passBestCard = nil
             self.passBestConf = 0
-            self.passWeakFrameCount = 0
-            self.passWeakPeakConf = 0
+
+
             self.isPassActive = false
             self.passBestPixelBuffer = nil
         }
@@ -1535,8 +1535,7 @@ public class CardDetector: NSObject, ObservableObject {
             // 3. Xử lý Pass-Through Burst Voting khi lá bài lướt qua ô soi
             if let d = detected {
                 self.processCardCandidate(cardCode: d.cardCode, conf: d.conf, pixelBuffer: pixelBuffer, roiRect: roiRect, isFront: isFront)
-            } else if let raw = bestLiveCandidate, raw.conf >= 20 {
-                self.processWeakPassFrame(rawConf: raw.conf, pixelBuffer: pixelBuffer, roiRect: roiRect, isFront: isFront)
+
             } else {
                 self.checkCardDisappeared()
             }
@@ -1601,27 +1600,14 @@ public class CardDetector: NSObject, ObservableObject {
         return (detected, rawBest)
     }
 
-    /// Khử bóng tối ngược sáng trên GPU (CoreImage) giúp nổi bật chữ/chất bài trong bóng râm mà vẫn giữ màu Đỏ/Đen
+    /// Nâng sáng dịu vùng bóng tối bằng CIHighlightShadowAdjust (giữ nguyên 100% màu sắc gốc của chất Đỏ và Đen)
     private func enhanceShadowedPatch(_ input: CIImage) -> CIImage {
         let ext = input.extent
         var current = input
         if let hs = CIFilter(name: "CIHighlightShadowAdjust") {
             hs.setValue(current, forKey: kCIInputImageKey)
-            hs.setValue(1.0, forKey: "inputShadowAmount")
-            hs.setValue(0.85, forKey: "inputHighlightAmount")
+            hs.setValue(0.75, forKey: "inputShadowAmount")
             if let out = hs.outputImage { current = out }
-        }
-        if let exp = CIFilter(name: "CIExposureAdjust") {
-            exp.setValue(current, forKey: kCIInputImageKey)
-            exp.setValue(0.85, forKey: kCIInputEVKey)
-            if let out = exp.outputImage { current = out }
-        }
-        if let cc = CIFilter(name: "CIColorControls") {
-            cc.setValue(current, forKey: kCIInputImageKey)
-            cc.setValue(1.65, forKey: kCIInputContrastKey)
-            cc.setValue(0.06, forKey: kCIInputBrightnessKey)
-            cc.setValue(1.25, forKey: kCIInputSaturationKey)
-            if let out = cc.outputImage { current = out }
         }
         if let us = CIFilter(name: "CIUnsharpMask") {
             us.setValue(current, forKey: kCIInputImageKey)
@@ -1640,30 +1626,6 @@ public class CardDetector: NSObject, ObservableObject {
         return warped.transformed(by: CGAffineTransform(translationX: -wExt.origin.x, y: -wExt.origin.y))
     }
 
-    private func processWeakPassFrame(rawConf: Int, pixelBuffer: CVPixelBuffer, roiRect: CGRect, isFront: Bool) {
-        let now = Date().timeIntervalSince1970
-        passLastSeenTime = now
-        if !isPassActive {
-            isPassActive = true
-            passStartTime = now
-            passVotes.removeAll()
-            passBestConf = 0
-            passWeakFrameCount = 0
-            passWeakPeakConf = 0
-            passBestPixelBuffer = nil
-            passBestCard = nil
-        }
-        passWeakFrameCount += 1
-        if rawConf >= passWeakPeakConf {
-            passWeakPeakConf = rawConf
-            if passBestPixelBuffer == nil {
-                passBestPixelBuffer = pixelBuffer
-                passBestRoiRect = roiRect
-                passBestIsFront = isFront
-            }
-        }
-    }
-
     private func checkCardDisappeared() {
         let now = Date().timeIntervalSince1970
         guard isPassActive else { return }
@@ -1671,7 +1633,6 @@ public class CardDetector: NSObject, ObservableObject {
         // Khi lá bài đã lướt ra khỏi ô soi (không thấy >= 0.10s / ~12 frame 120fps)
         if (now - passLastSeenTime) >= 0.10 {
             isPassActive = false
-            var didCommitRealCard = false
             // Tìm lá bài chiến thắng đạt điểm tin cậy tích lũy cao nhất
             if let winner = passVotes.max(by: { $0.value.totalConf < $1.value.totalConf }) {
                 let voteCount = winner.value.count
@@ -1679,7 +1640,6 @@ public class CardDetector: NSObject, ObservableObject {
                 let winnerCard = winner.key
                 // Bắt cả bài lướt siêu nhanh (1 frame nhưng conf >= 45%) hoặc lướt bình thường (>= 2 frames)
                 if (voteCount >= 2 || peakConf >= 45) && (lastLockedCard != winnerCard || now > lockCooldownUntil) {
-                    didCommitRealCard = true
                     commitLockedCard(
                         cardCode: winnerCard,
                         conf: peakConf,
@@ -1690,26 +1650,10 @@ public class CardDetector: NSObject, ObservableObject {
                 }
             }
 
-            // Nếu có lá bài lướt qua ô soi (có nhiều frame tín hiệu yếu hoặc 1 frame lướt quá mờ) mà không chốt được mã bài -> Báo "?" (Không thấy)
-            let totalFramesInPass = passWeakFrameCount + passVotes.values.reduce(0, { $0 + $1.count })
-            if !didCommitRealCard && totalFramesInPass >= 2 && (now - lastUnknownCommitTime) >= 1.35 && now > lockCooldownUntil {
-                lastUnknownCommitTime = now
-                let weakConf = max(passBestConf, passWeakPeakConf)
-                commitLockedCard(
-                    cardCode: "?",
-                    conf: weakConf,
-                    fallbackPixelBuffer: passBestPixelBuffer,
-                    roiRect: passBestRoiRect,
-                    isFront: passBestIsFront
-                )
-            }
-
             passVotes.removeAll()
             passBestCard = nil
             passBestPixelBuffer = nil
             passBestConf = 0
-            passWeakFrameCount = 0
-            passWeakPeakConf = 0
             RoiSyncManager.shared.clearLiveScanDebug()
         }
     }
@@ -1723,8 +1667,7 @@ public class CardDetector: NSObject, ObservableObject {
             passStartTime = now
             passVotes.removeAll()
             passBestConf = 0
-            passWeakFrameCount = 0
-            passWeakPeakConf = 0
+
             passBestPixelBuffer = nil
             passBestCard = nil
         }
@@ -1760,8 +1703,7 @@ public class CardDetector: NSObject, ObservableObject {
     private func commitLockedCard(cardCode: String, conf: Int, fallbackPixelBuffer: CVPixelBuffer?, roiRect: CGRect, isFront: Bool) {
         let now = Date().timeIntervalSince1970
         lastLockedCard = cardCode
-        lockCooldownUntil = (cardCode == "?") ? (now + 0.15) : (now + 0.35)
-        lastUnknownCommitTime = now
+        lockCooldownUntil = now + 0.35 // Chống chia trùng lặp trong 350ms
 
         // CHỈ nén JPEG ĐÚNG 1 LẦN DUY NHẤT khi CHỐT BÀI (Zero-Drop trong toàn bộ chu kỳ 120fps trước đó)
         var imageBase64: String? = nil

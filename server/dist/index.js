@@ -85,6 +85,17 @@ server.on('upgrade', (request, socket, head) => {
 });
 function parseCardMeta(cardCode) {
     const code = (cardCode || '').toUpperCase().trim();
+    if (code === '?' || code === '0' || code === 'UNKNOWN' || code === '__HIDDEN__') {
+        return {
+            code: '?',
+            rank: '?',
+            suit: 'Ẩn',
+            suitSymbol: '?',
+            color: 'orange',
+            display: '? (Ẩn)',
+            fullName: 'Không thấy (?)'
+        };
+    }
     const suitChar = code.slice(-1);
     const rank = code.slice(0, -1);
     const suitMap = {

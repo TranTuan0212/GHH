@@ -262,27 +262,16 @@ def enhance_low_light_crop(crop_img):
 
 def enhance_shadowed_card_retinex(bgr):
     """
-    Khử bóng tối ngược sáng (Substring Retinex + Bảo toàn chất Đỏ/Đen):
-    - Cân bằng nền giấy bài tối sẫm (BGR ~ [40, 42, 64]) về nền sáng đồng nhất.
-    - Bảo toàn sắc đỏ (♥, ♦) bằng hiệu số màu cục bộ (R - G) - (bg_R - bg_G) mà không làm biến màu chất đen (♠, ♣).
+    Nâng sáng vùng bóng tối ngược sáng bằng cân bằng kênh sáng (LAB L), bảo toàn 100% màu gốc đỏ/đen.
     """
     if bgr is None or bgr.size == 0:
         return bgr
     try:
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        bg_g = cv2.GaussianBlur(gray, (0, 0), 31.0)
-        ratio_g = gray / np.maximum(15.0, bg_g)
-        norm_g = np.where(gray < 24, gray, np.clip((ratio_g - 0.74) * (220.0 / 0.30) + 20.0, 0, 245)).astype(np.uint8)
-        f = bgr.astype(np.float32)
-        bg_c = cv2.GaussianBlur(f, (0, 0), 31.0)
-        rg_diff = (f[..., 2] - f[..., 1]) - (bg_c[..., 2] - bg_c[..., 1])
-        out = cv2.cvtColor(norm_g, cv2.COLOR_GRAY2BGR)
-        red_mask = (rg_diff > 6.5) & (ratio_g < 0.93) & (gray >= 24)
-        if np.any(red_mask):
-            out[red_mask, 2] = np.clip(norm_g[red_mask].astype(np.float32) + rg_diff[red_mask] * 7.5 + 90.0, 175, 245).astype(np.uint8)
-            out[red_mask, 1] = np.clip(norm_g[red_mask].astype(np.float32) * 0.35, 10, 75).astype(np.uint8)
-            out[red_mask, 0] = np.clip(norm_g[red_mask].astype(np.float32) * 0.35, 10, 75).astype(np.uint8)
-        return out
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.8, tileGridSize=(8, 8))
+        l_enh = clahe.apply(l)
+        return cv2.cvtColor(cv2.merge([l_enh, a, b]), cv2.COLOR_LAB2BGR)
     except Exception:
         return bgr
 
@@ -1168,12 +1157,10 @@ def on_scan_exact_frame_request(data):
             if not (all_candidates and max(c[1] for c in all_candidates) >= 0.42):
                 retinex_crop = enhance_shadowed_card_retinex(crop_cv)
                 for sc_val, fy_val, sh_val, label_3d in [
-                    (0.62, 1.80, -0.55, '3D Shear Trái + Retinex'),
-                    (0.62, 1.80, 0.55, '3D Shear Phải + Retinex'),
-                    (0.55, 1.85, -0.42, '3D Dẹt Sâu + Retinex'),
-                    (0.75, 1.35, -0.35, '3D Nghiêng Trái + Retinex'),
-                    (0.75, 1.35, 0.35, '3D Nghiêng Phải + Retinex'),
-                    (0.68, 1.35, 0.0, '3D Dọc + Retinex'),
+                    (0.62, 1.80, -0.55, '3D Shear Trái'),
+                    (0.62, 1.80, 0.55, '3D Shear Phải'),
+                    (0.55, 1.85, -0.42, '3D Dẹt Sâu'),
+                    (0.68, 1.35, 0.0, '3D Dọc'),
                 ]:
                     preds_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, instant_engine, conf_thres=0.22)
                     for cid, cname, conf, rb in preds_3d:
@@ -1273,64 +1260,6 @@ def on_scan_exact_frame_request(data):
 
                 'updateFrameOnly': update_only
             })
-            browser_scanned_cache['missed_burst'] = None
-        else:
-            # CHỈ ghi nhận ứng viên '?' (Không thấy) khi model YOLO thực sự thấy góc bài (0.22 <= weak_conf < 0.42)
-            # Tuyệt đối KHÔNG dùng sharpness đơn thuần để tránh nhận nhầm logo áo, tay hoặc nền phòng (weak_conf == 0%)!
-            now_scan = time.time()
-            weak_conf = float(best[1]) if best is not None else 0.0
-            if 0.22 <= weak_conf < 0.42 and (now_scan - browser_scanned_cache.get('ts', 0.0)) > 1.5:
-                mb = browser_scanned_cache.get('missed_burst')
-                if mb is None or (now_scan - mb.get('last_ts', 0.0)) > 1.2:
-                    mb = {
-                        'first_ts': now_scan,
-                        'last_ts': now_scan,
-                        'count': 1,
-                        'best_conf': weak_conf,
-                        'sharpness': sharpness,
-                        'raw_b64': raw_b64,
-                        'time_str': time_str,
-                        'room_id': room_id,
-                        'emitted': False,
-                    }
-                    browser_scanned_cache['missed_burst'] = mb
-                else:
-                    mb['last_ts'] = now_scan
-                    mb['count'] += 1
-                    if weak_conf >= mb.get('best_conf', 0.0):
-                        mb['best_conf'] = weak_conf
-                        mb['sharpness'] = sharpness
-                        mb['raw_b64'] = raw_b64
-                        mb['time_str'] = time_str
-            else:
-                # Khi lá bài mờ đã lướt ra khỏi khung (weak_conf về 0), nếu nhịp lướt vừa rồi có >= 2 frame thấy góc bài mờ (22%..41%) thì mới chốt '?'
-                mb = browser_scanned_cache.get('missed_burst')
-                if mb is not None and not mb.get('emitted'):
-                    if mb['count'] >= 2 and mb['best_conf'] >= 0.22 and (now_scan - mb.get('last_ts', 0.0)) <= 0.8 and (now_scan - browser_scanned_cache.get('ts', 0.0)) > 1.5:
-                        mb['emitted'] = True
-                        browser_scanned_cache['ts'] = now_scan
-                        browser_scanned_cache['code'] = '?'
-                        print(f"[AI Worker] ❓ [FRAME {mb['time_str']}] Lá bài lướt qua không rõ ({int(round(mb['best_conf']*100))}%) -> Báo '?' (Không thấy)")
-                        sio.emit('server_card_detected', {
-                            'card': {
-                                'code': '?',
-                                'rank': '?',
-                                'suit': 'Ẩn',
-                                'suitSymbol': '?',
-                                'color': 'orange',
-                                'display': '? (Ẩn)',
-                                'fullName': 'Không thấy (?)',
-                                'confidence': round(mb['best_conf'], 3)
-                            },
-                            'confidence': round(mb['best_conf'], 3),
-                            'sharpness': mb['sharpness'],
-                            'image': f"data:image/png;base64,{mb['raw_b64']}" if not mb['raw_b64'].startswith('data:') else mb['raw_b64'],
-                            'timestamp': f"⏱ {mb['time_str']}",
-                            'roomId': mb['room_id'],
-                            'updateFrameOnly': False
-                        })
-                    elif (now_scan - mb.get('last_ts', 0.0)) > 0.8:
-                        browser_scanned_cache['missed_burst'] = None
 
 
 
@@ -2340,8 +2269,7 @@ def detect_multi_angle_on_channel(channel_id, main_engine, sub_raw, crop_box, ro
                 (0.62, 1.80, -0.55),
                 (0.62, 1.80, 0.55),
                 (0.55, 1.85, -0.42),
-                (0.75, 1.35, -0.35),
-                (0.75, 1.35, 0.35),
+                (0.72, 1.38, 0.0),
             ]:
                 boxes_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, main_engine, conf_thres=0.38)
                 if boxes_3d:
