@@ -1001,7 +1001,7 @@ public class RoiSyncManager: ObservableObject {
     public func sendTelemetry(pingMs: Int) {
         let uid = NetworkManager.shared.currentUserId ?? ""
         let uname = NetworkManager.shared.currentUsername ?? ""
-        let bitrateStr = isStreaming ? "12.0" : "0.0"
+        let bitrateStr = isStreaming ? "8.5" : "0.0"
         let fpsInt = isStreaming ? Int(currentFPS) : 0
         let payload: [String: Any] = [
             "type": "device_telemetry",
@@ -1047,6 +1047,7 @@ public class RoiSyncManager: ObservableObject {
     private var reconnectTimer: Timer?
     private var pingTimer: Timer?
     private var smoothedPing: Double = 0.0
+    private var lastPingTimestamp: Int = 0
     private var clearDetectionWorkItem: DispatchWorkItem?
 
     public init() {
@@ -1100,25 +1101,14 @@ public class RoiSyncManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             self?.pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 guard let self = self, self.isConnected else { return }
-                let pingStart = Date()
-                self.webSocketTask?.sendPing { [weak self] error in
-                    if let error = error {
-                        print("[RoiSyncManager] WS Ping failed: \(error.localizedDescription)")
-                        DispatchQueue.main.async {
-                            self?.isConnected = false
-                            self?.scheduleReconnect()
-                        }
-                    } else {
-                        let rawPing = max(1, Int(Date().timeIntervalSince(pingStart) * 1000))
-                        // Bộ lọc làm mịn Exponential Moving Average (EMA) triệt tiêu nhiễu burst mạng
-                        if let s = self {
-                            if s.smoothedPing == 0.0 {
-                                s.smoothedPing = Double(rawPing)
-                            } else {
-                                s.smoothedPing = 0.35 * Double(rawPing) + 0.65 * s.smoothedPing
-                            }
-                            let displayPing = max(1, Int(s.smoothedPing.rounded()))
-                            s.sendTelemetry(pingMs: displayPing)
+                let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+                self.lastPingTimestamp = nowMs
+                let payload: [String: Any] = ["type": "ios_ping", "t": nowMs]
+                if let data = try? JSONSerialization.data(withJSONObject: payload),
+                   let str = String(data: data, encoding: .utf8) {
+                    self.webSocketTask?.send(.string(str)) { error in
+                        if let error = error {
+                            print("[RoiSyncManager] Send ping failed: \(error.localizedDescription)")
                         }
                     }
                 }
@@ -1195,6 +1185,19 @@ public class RoiSyncManager: ObservableObject {
 
         DispatchQueue.main.async {
             switch type {
+            case "ios_pong":
+                if let t = json["t"] as? Int, t > 0 {
+                    let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+                    let rawPing = max(1, nowMs - t)
+                    if self.smoothedPing == 0.0 {
+                        self.smoothedPing = Double(rawPing)
+                    } else {
+                        self.smoothedPing = 0.35 * Double(rawPing) + 0.65 * self.smoothedPing
+                    }
+                    let displayPing = max(1, Int(self.smoothedPing.rounded()))
+                    self.sendTelemetry(pingMs: displayPing)
+                }
+
             case "roi":
                 if let roiData = json["data"] as? [String: Any] {
                     self.updateRoi(data: roiData)

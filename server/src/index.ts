@@ -276,6 +276,12 @@ roiWss.on('connection', (ws) => {
 
       const msg = JSON.parse(raw.toString());
 
+      if (msg.type === 'ios_ping') {
+        try {
+          ws.send(JSON.stringify({ type: 'ios_pong', t: msg.t }));
+        } catch {}
+        return;
+      }
       if (msg.type === 'register_ios_client') {
         const u = msg.userId ? db.getUserById(msg.userId) : (msg.username ? db.getUserByUsername(msg.username) : undefined);
         if (u) {

@@ -2647,7 +2647,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         <video
           ref={replayVideoRef}
           className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
-            (!isLive || !hasLiveFrame) && hasFrame ? 'opacity-100 z-20' : 'opacity-100 z-0 pointer-events-none'
+            !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-100 z-0 pointer-events-none'
           }`}
           style={{
             transform: !isLive

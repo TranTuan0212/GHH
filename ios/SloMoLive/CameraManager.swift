@@ -424,7 +424,11 @@ public class CameraManager: NSObject, ObservableObject {
         // Target Bitrate: 12.0 Mbps (Peak 14.0 Mbps, Floor 8.0 Mbps) kết hợp Quality 0.95.
         // Mức 12 Mbps giải phóng đường truyền 4G/Wi-Fi không bị Bufferbloat (giữ Ping 15-25ms ổn định),
         // đồng thời chip phần cứng VideoToolbox hoạt động cực mát, không nóng máy.
-        let targetBitrate: UInt = 12_000_000
+        // Chuẩn Full HD 1080p 120fps Master Replay tối ưu hoàn hảo cho 4G & mát máy:
+        // Target Bitrate: 8.5 Mbps (Peak 10.5 Mbps, Floor 6.0 Mbps) kết hợp Quality 0.95.
+        // Mức 8.5 Mbps loại bỏ hoàn toàn Bufferbloat sóng di động, giữ Ping ổn định 15-25ms,
+        // đồng thời phần cứng camera và chip nén chạy mát rượi suốt cả ngày.
+        let targetBitrate: UInt = 8_500_000
         let gopFrames: UInt = max(1, targetFps / 2)
 
         // Đặt theo đúng thứ tự guard trong setter của LFLiveVideoConfiguration.m
@@ -433,9 +437,9 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoMinFrameRate = max(1, targetFps - 1)
         // Keyframe 0.5s (targetFps / 2) khớp hoàn hảo với phân đoạn HLS 0.5s
         videoCfg.videoMaxKeyframeInterval = gopFrames
-        videoCfg.videoMaxBitRate = 14_000_000
+        videoCfg.videoMaxBitRate = 10_500_000
         videoCfg.videoBitRate = targetBitrate
-        videoCfg.videoMinBitRate = 8_000_000
+        videoCfg.videoMinBitRate = 6_000_000
         let encStr = "Enc: \(Int(videoCfg.videoSize.width))x\(Int(videoCfg.videoSize.height)) @ \(targetFps)fps (\(Double(targetBitrate) / 1_000_000)M)"
         DispatchQueue.main.async {
             self.debugEncoderInfo = encStr
