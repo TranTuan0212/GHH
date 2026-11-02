@@ -1171,12 +1171,14 @@ def on_scan_exact_frame_request(data):
                     (0.62, 1.80, -0.55, '3D Shear Trái + Retinex'),
                     (0.62, 1.80, 0.55, '3D Shear Phải + Retinex'),
                     (0.55, 1.85, -0.42, '3D Dẹt Sâu + Retinex'),
+                    (0.75, 1.35, -0.35, '3D Nghiêng Trái + Retinex'),
+                    (0.75, 1.35, 0.35, '3D Nghiêng Phải + Retinex'),
                     (0.68, 1.35, 0.0, '3D Dọc + Retinex'),
                 ]:
-                    preds_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, instant_engine, conf_thres=0.36)
+                    preds_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, instant_engine, conf_thres=0.22)
                     for cid, cname, conf, rb in preds_3d:
                         p = parse_card_code(cname)
-                        if p:
+                        if p and validate_card_patch(retinex_crop, rb, p, max(conf, 0.50)):
                             all_candidates.append((p, conf, label_3d))
                     if any(c[1] >= 0.52 for c in all_candidates):
                         break
@@ -1273,9 +1275,11 @@ def on_scan_exact_frame_request(data):
             })
             browser_scanned_cache['missed_burst'] = None
         else:
+            # CHỈ ghi nhận ứng viên '?' (Không thấy) khi model YOLO thực sự thấy góc bài (0.22 <= weak_conf < 0.42)
+            # Tuyệt đối KHÔNG dùng sharpness đơn thuần để tránh nhận nhầm logo áo, tay hoặc nền phòng (weak_conf == 0%)!
             now_scan = time.time()
             weak_conf = float(best[1]) if best is not None else 0.0
-            if (weak_conf >= 0.14 or sharpness >= 45.0) and (now_scan - browser_scanned_cache.get('ts', 0.0)) > 1.35:
+            if 0.22 <= weak_conf < 0.42 and (now_scan - browser_scanned_cache.get('ts', 0.0)) > 1.5:
                 mb = browser_scanned_cache.get('missed_burst')
                 if mb is None or (now_scan - mb.get('last_ts', 0.0)) > 1.2:
                     mb = {
@@ -1293,13 +1297,16 @@ def on_scan_exact_frame_request(data):
                 else:
                     mb['last_ts'] = now_scan
                     mb['count'] += 1
-                    if sharpness >= mb.get('sharpness', 0.0):
+                    if weak_conf >= mb.get('best_conf', 0.0):
+                        mb['best_conf'] = weak_conf
                         mb['sharpness'] = sharpness
                         mb['raw_b64'] = raw_b64
                         mb['time_str'] = time_str
-                    if weak_conf > mb.get('best_conf', 0.0):
-                        mb['best_conf'] = weak_conf
-                    if not mb.get('emitted') and mb['count'] >= 3 and (mb['best_conf'] >= 0.14 or mb['sharpness'] >= 55.0):
+            else:
+                # Khi lá bài mờ đã lướt ra khỏi khung (weak_conf về 0), nếu nhịp lướt vừa rồi có >= 2 frame thấy góc bài mờ (22%..41%) thì mới chốt '?'
+                mb = browser_scanned_cache.get('missed_burst')
+                if mb is not None and not mb.get('emitted'):
+                    if mb['count'] >= 2 and mb['best_conf'] >= 0.22 and (now_scan - mb.get('last_ts', 0.0)) <= 0.8 and (now_scan - browser_scanned_cache.get('ts', 0.0)) > 1.5:
                         mb['emitted'] = True
                         browser_scanned_cache['ts'] = now_scan
                         browser_scanned_cache['code'] = '?'
@@ -1322,6 +1329,8 @@ def on_scan_exact_frame_request(data):
                             'roomId': mb['room_id'],
                             'updateFrameOnly': False
                         })
+                    elif (now_scan - mb.get('last_ts', 0.0)) > 0.8:
+                        browser_scanned_cache['missed_burst'] = None
 
 
 
@@ -2331,6 +2340,8 @@ def detect_multi_angle_on_channel(channel_id, main_engine, sub_raw, crop_box, ro
                 (0.62, 1.80, -0.55),
                 (0.62, 1.80, 0.55),
                 (0.55, 1.85, -0.42),
+                (0.75, 1.35, -0.35),
+                (0.75, 1.35, 0.35),
             ]:
                 boxes_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, main_engine, conf_thres=0.38)
                 if boxes_3d:

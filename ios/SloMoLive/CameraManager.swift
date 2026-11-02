@@ -1535,7 +1535,7 @@ public class CardDetector: NSObject, ObservableObject {
             // 3. Xử lý Pass-Through Burst Voting khi lá bài lướt qua ô soi
             if let d = detected {
                 self.processCardCandidate(cardCode: d.cardCode, conf: d.conf, pixelBuffer: pixelBuffer, roiRect: roiRect, isFront: isFront)
-            } else if let raw = bestLiveCandidate, raw.conf >= 12 {
+            } else if let raw = bestLiveCandidate, raw.conf >= 20 {
                 self.processWeakPassFrame(rawConf: raw.conf, pixelBuffer: pixelBuffer, roiRect: roiRect, isFront: isFront)
             } else {
                 self.checkCardDisappeared()
