@@ -6,7 +6,7 @@ public class NetworkManager: ObservableObject {
     public static let shared = NetworkManager()
 
     // Cấu hình máy chủ gán cứng cố định (Ẩn hoàn toàn khỏi giao diện người dùng)
-    public static let defaultServerURL = "https://slomoview.stream"
+    public static let defaultServerURL = "http://157.66.100.10:4000"
     public static let defaultRtmpHost = "157.66.100.10"
     public static let defaultRtmpPort = "1935"
 
@@ -42,23 +42,14 @@ public class NetworkManager: ObservableObject {
     }
 
     private init() {
-        let savedUrl = UserDefaults.standard.string(forKey: "saved_server_url")
-        if savedUrl == nil || savedUrl?.contains("161.248.146.201") == true || savedUrl?.contains("streamslo.date") == true {
-            self.serverURL = NetworkManager.defaultServerURL
-            UserDefaults.standard.set(NetworkManager.defaultServerURL, forKey: "saved_server_url")
-        } else {
-            self.serverURL = savedUrl ?? NetworkManager.defaultServerURL
-        }
+        self.serverURL = NetworkManager.defaultServerURL
+        UserDefaults.standard.set(NetworkManager.defaultServerURL, forKey: "saved_server_url")
 
-        let savedHost = UserDefaults.standard.string(forKey: "custom_rtmp_host")
-        if savedHost == nil || savedHost == "161.248.146.201" || savedHost?.contains("streamslo.date") == true {
-            self.customRtmpHost = NetworkManager.defaultRtmpHost
-            UserDefaults.standard.set(NetworkManager.defaultRtmpHost, forKey: "custom_rtmp_host")
-        } else {
-            self.customRtmpHost = savedHost ?? NetworkManager.defaultRtmpHost
-        }
+        self.customRtmpHost = NetworkManager.defaultRtmpHost
+        UserDefaults.standard.set(NetworkManager.defaultRtmpHost, forKey: "custom_rtmp_host")
 
-        self.customRtmpPort = UserDefaults.standard.string(forKey: "custom_rtmp_port") ?? NetworkManager.defaultRtmpPort
+        self.customRtmpPort = NetworkManager.defaultRtmpPort
+        UserDefaults.standard.set(NetworkManager.defaultRtmpPort, forKey: "custom_rtmp_port")
 
         // Khôi phục phiên đăng nhập đã lưu (ghi nhớ đăng nhập)
         if let token = UserDefaults.standard.string(forKey: "saved_auth_token"), !token.isEmpty {

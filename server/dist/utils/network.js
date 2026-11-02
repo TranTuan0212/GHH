@@ -94,9 +94,9 @@ function resolveRtmpHostForClient(req) {
         console.log('[Network] Socket Local IP nhận diện được: ' + socketLocalIp + ', sử dụng cho RTMP.');
         return { rtmpHost: socketLocalIp, rtmpPort: 1935 };
     }
-    const primaryIp = getPrimaryIp();
-    console.log('[Network] Sử dụng Primary LAN IP (' + primaryIp + ') cho RTMP.');
-    return { rtmpHost: primaryIp, rtmpPort: 1935 };
+    const vpsIp = process.env.VPS_PUBLIC_IP || '157.66.100.10';
+    console.log('[Network] Sử dụng VPS IP (' + vpsIp + ') cho RTMP.');
+    return { rtmpHost: vpsIp, rtmpPort: 1935 };
 }
 function classifyConnection(hostHeader, primaryIp) {
     if (hostHeader.endsWith('trycloudflare.com') || hostHeader.endsWith('.ngrok.io') || hostHeader.endsWith('.ngrok-free.app')) {
