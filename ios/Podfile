@@ -92,7 +92,7 @@ post_install do |installer|
           buf_source = File.read(streaming_buf)
           buf_patched = buf_source.gsub(
             'defaultSendBufferMaxCount = 600;',
-            'defaultSendBufferMaxCount = 300;'
+            'defaultSendBufferMaxCount = 800;'
           ).gsub(
             'defaultSortBufferMaxCount = 5;',
             'defaultSortBufferMaxCount = 2;'

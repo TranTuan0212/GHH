@@ -130,6 +130,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const [hasFrame, setHasFrame] = useState(false);
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
+  const [bufferedRanges, setBufferedRanges] = useState<Array<{ start: number; end: number }>>([]);
   const hasLiveFrameRef = useRef<boolean>(false);
   hasLiveFrameRef.current = hasLiveFrame;
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -1673,6 +1674,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const liveVid = liveVideoRef.current;
     let lastTimeUiUpdateMs = 0;
 
+    const updateBufferRanges = () => {
+      if (!replayVid) return;
+      const b = replayVid.buffered;
+      if (b && b.length > 0) {
+        const list: Array<{ start: number; end: number }> = [];
+        for (let i = 0; i < b.length; i++) {
+          list.push({ start: b.start(i), end: b.end(i) });
+        }
+        setBufferedRanges(list);
+      }
+    };
+
     const onTime = () => {
       // Đang kéo tua hoặc đang chờ trình duyệt hoàn tất seek: không ghi đè currentTime để tránh mốc tua bị giật lùi
       if (isDraggingSeekRef.current || isSeekingRef.current || targetSeekTimeRef.current !== null) return;
@@ -1683,6 +1696,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         if (!replayVid.paused && now - lastTimeUiUpdateMs < 60) return;
         lastTimeUiUpdateMs = now;
         setCurrentTime(replayVid.currentTime);
+        updateBufferRanges();
         if (isLiveRef.current && Number.isFinite(replayVid.duration)) {
           setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
         }
@@ -1725,6 +1739,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     if (replayVid) {
       replayVid.addEventListener('timeupdate', onTime);
+      replayVid.addEventListener('progress', updateBufferRanges);
       replayVid.addEventListener('durationchange', onDurationChange);
       replayVid.addEventListener('loadeddata', onLoaded);
       replayVid.addEventListener('canplay', onLoaded);
@@ -1739,6 +1754,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     return () => {
       if (replayVid) {
         replayVid.removeEventListener('timeupdate', onTime);
+        replayVid.removeEventListener('progress', updateBufferRanges);
         replayVid.removeEventListener('durationchange', onDurationChange);
         replayVid.removeEventListener('loadeddata', onLoaded);
         replayVid.removeEventListener('canplay', onLoaded);
@@ -2028,22 +2044,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.playbackRate = speed;
       } else {
         // Khi chuyển từ Live sang Slow:
-        // DÍNH NGAY SÁT MÉP LIVE:
-        // Nếu video HLS ngầm đang bám sát mép Live (khoảng cách 0.1s - 1.5s):
-        // Hãm tốc độ trực tiếp (không cần seek) để hình ảnh chuyển động chậm ngay tức thì 0ms tại đúng khoảnh khắc mắt đang nhìn!
-        const lag = end - video.currentTime;
-        if (video.readyState >= 2 && lag >= 0.1 && lag <= 1.5) {
-          isSeekingRef.current = false;
-          targetSeekTimeRef.current = null;
-          setCurrentTime(video.currentTime);
-        } else {
-          // Bắt dính ngay sát mép Live (cách mép chỉ 0.35s)
-          const liveStickTime = Math.max(start, end - 0.35);
-          isSeekingRef.current = false;
-          targetSeekTimeRef.current = null;
-          video.currentTime = liveStickTime;
-          setCurrentTime(liveStickTime);
-        }
+        // Lùi lại 1.8s vào vùng an toàn đã nạp sẵn 100% trong RAM buffer:
+        // 1. Video phát chậm 0.25x/0.5x ngay lập tức trong 0ms (không bị khựng hay chờ nạp mạng).
+        // 2. Có sẵn 1.8s đệm (~4 segment HLS 0.5s) phía trước, tuyệt đối không chạm mép rỗng,
+        //    triệt tiêu 100% hiện tượng Hls.js nudge làm rớt/mất khung hình 120fps!
+        const safeRewind = Math.max(start, end - 1.8);
+        isSeekingRef.current = false;
+        targetSeekTimeRef.current = null;
+        video.currentTime = safeRewind;
+        setCurrentTime(safeRewind);
         video.playbackRate = speed;
       }
 
@@ -2956,10 +2965,26 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             <div className="absolute inset-x-0 rounded-full overflow-hidden transition-all"
               style={{ height: isDraggingSeek || seekHoverTime !== null ? 6 : 4, top: '50%', transform: 'translateY(-50%)' }}>
               {/* Grey track */}
-              <div className="absolute inset-0 bg-slate-600/70" />
+              <div className="absolute inset-0 bg-slate-700/80" />
+              {/* Buffer Ranges: Vùng video đã lưu sẵn 100% trong RAM */}
+              {bufferedRanges.map((b, idx) => {
+                const bStart = Math.max(timelineStart, Math.min(timelineEnd, b.start));
+                const bEnd = Math.max(timelineStart, Math.min(timelineEnd, b.end));
+                if (bEnd <= bStart) return null;
+                const leftPct = ((bStart - timelineStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
+                const widthPct = ((bEnd - bStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
+                return (
+                  <div
+                    key={idx}
+                    className="absolute top-0 h-full bg-white/35 rounded-full pointer-events-none"
+                    style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                    title="Vùng video đã nạp sẵn trong RAM"
+                  />
+                );
+              })}
               {/* Progress fill */}
               <div
-                className="absolute left-0 top-0 h-full rounded-full"
+                className="absolute left-0 top-0 h-full rounded-full shadow-sm"
                 style={{
                   width: `${seekFillRatio * 100}%`,
                   background: isLive ? '#ef4444' : '#6366f1',
@@ -2997,13 +3022,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             {/* Tooltip thời gian hover với độ chính xác phần trăm giây */}
             {seekHoverTime !== null && (
               <div
-                className="absolute pointer-events-none z-20 bottom-full mb-2 px-2 py-0.5 rounded-md bg-slate-900/95 text-white text-[11px] font-mono font-bold border border-white/10 shadow-xl whitespace-nowrap"
+                className="absolute pointer-events-none z-20 bottom-full mb-2 px-2.5 py-1 rounded-lg bg-slate-900/98 text-white text-[11px] font-mono font-bold border border-indigo-500/40 shadow-2xl whitespace-nowrap flex items-center space-x-1.5"
                 style={{
-                  left: Math.max(20, Math.min((seekbarRef.current?.getBoundingClientRect().width ?? 200) - 20, seekHoverX)),
+                  left: Math.max(40, Math.min((seekbarRef.current?.getBoundingClientRect().width ?? 200) - 40, seekHoverX)),
                   transform: 'translateX(-50%)',
                 }}
               >
-                {formatTime(seekHoverTime - timelineStart, true)}
+                <span>{formatTime(seekHoverTime - timelineStart, true)}</span>
+                {bufferedRanges.some(b => seekHoverTime >= b.start - 0.2 && seekHoverTime <= b.end + 0.2) ? (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-sans">Đã nạp RAM</span>
+                ) : (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-700 text-slate-400 font-sans">Chưa có</span>
+                )}
               </div>
             )}
           </div>
@@ -3615,6 +3645,30 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           roomName={roomName}
           container={playerContainerRef.current}
         />
+      )}
+
+      {/* Thanh Buffer Bar mảnh ở đáy màn hình khi Fullscreen */}
+      {isFullscreen && (
+        <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/60 pointer-events-none z-[999980] overflow-hidden">
+          {bufferedRanges.map((b, idx) => {
+            const bStart = Math.max(timelineStart, Math.min(timelineEnd, b.start));
+            const bEnd = Math.max(timelineStart, Math.min(timelineEnd, b.end));
+            if (bEnd <= bStart) return null;
+            const leftPct = ((bStart - timelineStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
+            const widthPct = ((bEnd - bStart) / Math.max(0.1, timelineEnd - timelineStart)) * 100;
+            return (
+              <div
+                key={idx}
+                className="absolute top-0 h-full bg-white/40"
+                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+              />
+            );
+          })}
+          <div
+            className="absolute top-0 h-full bg-indigo-500 shadow-sm"
+            style={{ width: `${seekFillRatio * 100}%` }}
+          />
+        </div>
       )}
     </div>
   );

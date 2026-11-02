@@ -141,7 +141,9 @@ public class CameraManager: NSObject, ObservableObject {
     /// giảm xuống tối thiểu `minBitrateRatio` × mức chọn lúc mạng yếu để live không bị giật.
     public static let bitratePresets: [BitratePreset] = [
         BitratePreset(mbps: 8, label: "8 Mbps – Tiết kiệm"),
+        BitratePreset(mbps: 10, label: "10 Mbps – Tiết kiệm"),
         BitratePreset(mbps: 12, label: "12 Mbps – Cân bằng"),
+        BitratePreset(mbps: 14, label: "14 Mbps – Ổn định"),
         BitratePreset(mbps: 16, label: "16 Mbps"),
         BitratePreset(mbps: 20, label: "20 Mbps – Khuyên dùng"),
         BitratePreset(mbps: 25, label: "25 Mbps – Siêu nét"),
