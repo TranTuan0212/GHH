@@ -213,7 +213,6 @@ def enhance_low_light_crop(crop_img):
     """
 
     if crop_img is None or crop_img.size == 0:
-
         return crop_img
 
     try:
@@ -257,10 +256,71 @@ def enhance_low_light_crop(crop_img):
         unsharp = cv2.addWeighted(enhanced, 1.45, gaussian, -0.45, 0)
 
         return np.clip(unsharp, 0, 255).astype(np.uint8)
-
     except Exception:
-
         return crop_img
+
+
+def enhance_shadowed_card_retinex(bgr):
+    """
+    Khử bóng tối ngược sáng (Substring Retinex + Bảo toàn chất Đỏ/Đen):
+    - Cân bằng nền giấy bài tối sẫm (BGR ~ [40, 42, 64]) về nền sáng đồng nhất.
+    - Bảo toàn sắc đỏ (♥, ♦) bằng hiệu số màu cục bộ (R - G) - (bg_R - bg_G) mà không làm biến màu chất đen (♠, ♣).
+    """
+    if bgr is None or bgr.size == 0:
+        return bgr
+    try:
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        bg_g = cv2.GaussianBlur(gray, (0, 0), 31.0)
+        ratio_g = gray / np.maximum(15.0, bg_g)
+        norm_g = np.where(gray < 24, gray, np.clip((ratio_g - 0.74) * (220.0 / 0.30) + 20.0, 0, 245)).astype(np.uint8)
+        f = bgr.astype(np.float32)
+        bg_c = cv2.GaussianBlur(f, (0, 0), 31.0)
+        rg_diff = (f[..., 2] - f[..., 1]) - (bg_c[..., 2] - bg_c[..., 1])
+        out = cv2.cvtColor(norm_g, cv2.COLOR_GRAY2BGR)
+        red_mask = (rg_diff > 6.5) & (ratio_g < 0.93) & (gray >= 24)
+        if np.any(red_mask):
+            out[red_mask, 2] = np.clip(norm_g[red_mask].astype(np.float32) + rg_diff[red_mask] * 7.5 + 90.0, 175, 245).astype(np.uint8)
+            out[red_mask, 1] = np.clip(norm_g[red_mask].astype(np.float32) * 0.35, 10, 75).astype(np.uint8)
+            out[red_mask, 0] = np.clip(norm_g[red_mask].astype(np.float32) * 0.35, 10, 75).astype(np.uint8)
+        return out
+    except Exception:
+        return bgr
+
+
+def warp_3d_shear_and_map_boxes(reticle_crop, scale, fy, shear_x, main_engine, conf_thres=0.38):
+    """
+    Biến đổi phối cảnh 3D Affine (Khử độ dẹt Pitch fy + Khử độ xiên chéo Shear shear_x)
+    và ánh xạ ngược tọa độ bounding box về ảnh gốc reticle_crop.
+    """
+    ch, cw = reticle_crop.shape[:2]
+    M = np.float32([
+        [scale, shear_x * scale, 208.0 - scale * (cw * 0.5 + shear_x * ch * 0.5)],
+        [0.0, scale * fy, 208.0 - scale * fy * ch * 0.5]
+    ])
+    inv_M = cv2.invertAffineTransform(M)
+    canvas = cv2.warpAffine(
+        reticle_crop,
+        M,
+        (416, 416),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(38, 38, 38)
+    )
+    raw_preds = main_engine.predict(canvas, conf_thres=conf_thres)
+    mapped = []
+    for cid, cname, conf, rb in raw_preds:
+        rcx = 0.5 * (rb[0] + rb[2])
+        rcy = 0.5 * (rb[1] + rb[3])
+        bw = (rb[2] - rb[0]) / max(0.2, scale)
+        bh = (rb[3] - rb[1]) / max(0.2, scale * fy)
+        orig_cx = inv_M[0, 0] * rcx + inv_M[0, 1] * rcy + inv_M[0, 2]
+        orig_cy = inv_M[1, 0] * rcx + inv_M[1, 1] * rcy + inv_M[1, 2]
+        bx1 = max(0, min(cw, int(round(orig_cx - bw * 0.5))))
+        by1 = max(0, min(ch, int(round(orig_cy - bh * 0.5))))
+        bx2 = max(0, min(cw, int(round(orig_cx + bw * 0.5))))
+        by2 = max(0, min(ch, int(round(orig_cy + bh * 0.5))))
+        mapped.append((cid, cname, conf, [bx1, by1, bx2, by2]))
+    return mapped
 
 
 
@@ -308,9 +368,9 @@ def validate_card_patch(crop_img, box, parsed_card, conf):
 
     # Chống bắt nhầm góc ngoài rìa (như hàng rào/kính xe tải góc trái trên trong ảnh lỗi)
 
-    is_near_margin = (bx1 < 0.08 * w or by1 < 0.08 * h or bx2 > 0.92 * w or by2 > 0.92 * h)
+    is_near_margin = (bx1 < 0.02 * w or by1 < 0.02 * h or bx2 > 0.98 * w or by2 > 0.98 * h)
 
-    if is_near_margin and conf < 0.72:
+    if is_near_margin and conf < 0.48:
 
         return False
 
@@ -344,7 +404,7 @@ def validate_card_patch(crop_img, box, parsed_card, conf):
 
         paper_ratio = np.count_nonzero((s < 115) & (v > 105)) / max(1, s.size)
 
-        if paper_ratio < 0.08 and conf < 0.66:
+        if paper_ratio < 0.02 and conf < 0.48:
 
             return False
 
@@ -352,7 +412,7 @@ def validate_card_patch(crop_img, box, parsed_card, conf):
 
         contrast = float(np.percentile(v, 92) - np.percentile(v, 10))
 
-        if contrast < 28.0:
+        if contrast < 10.0:
 
             return False
 
@@ -1104,6 +1164,23 @@ def on_scan_exact_frame_request(data):
 
                     all_candidates.append((p, conf, 'Dọc 1.35x'))
 
+            # 5. Góc nghiêng 3D dẹt sâu + Ngược sáng tối (Retinex + 3D Affine Shear)
+            if not (all_candidates and max(c[1] for c in all_candidates) >= 0.42):
+                retinex_crop = enhance_shadowed_card_retinex(crop_cv)
+                for sc_val, fy_val, sh_val, label_3d in [
+                    (0.62, 1.80, -0.55, '3D Shear Trái + Retinex'),
+                    (0.62, 1.80, 0.55, '3D Shear Phải + Retinex'),
+                    (0.55, 1.85, -0.42, '3D Dẹt Sâu + Retinex'),
+                    (0.68, 1.35, 0.0, '3D Dọc + Retinex'),
+                ]:
+                    preds_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, instant_engine, conf_thres=0.36)
+                    for cid, cname, conf, rb in preds_3d:
+                        p = parse_card_code(cname)
+                        if p:
+                            all_candidates.append((p, conf, label_3d))
+                    if any(c[1] >= 0.52 for c in all_candidates):
+                        break
+
 
 
         all_candidates.sort(key=lambda x: x[1], reverse=True)
@@ -1193,8 +1270,58 @@ def on_scan_exact_frame_request(data):
                 'roomId': room_id,
 
                 'updateFrameOnly': update_only
-
             })
+            browser_scanned_cache['missed_burst'] = None
+        else:
+            now_scan = time.time()
+            weak_conf = float(best[1]) if best is not None else 0.0
+            if (weak_conf >= 0.14 or sharpness >= 45.0) and (now_scan - browser_scanned_cache.get('ts', 0.0)) > 1.35:
+                mb = browser_scanned_cache.get('missed_burst')
+                if mb is None or (now_scan - mb.get('last_ts', 0.0)) > 1.2:
+                    mb = {
+                        'first_ts': now_scan,
+                        'last_ts': now_scan,
+                        'count': 1,
+                        'best_conf': weak_conf,
+                        'sharpness': sharpness,
+                        'raw_b64': raw_b64,
+                        'time_str': time_str,
+                        'room_id': room_id,
+                        'emitted': False,
+                    }
+                    browser_scanned_cache['missed_burst'] = mb
+                else:
+                    mb['last_ts'] = now_scan
+                    mb['count'] += 1
+                    if sharpness >= mb.get('sharpness', 0.0):
+                        mb['sharpness'] = sharpness
+                        mb['raw_b64'] = raw_b64
+                        mb['time_str'] = time_str
+                    if weak_conf > mb.get('best_conf', 0.0):
+                        mb['best_conf'] = weak_conf
+                    if not mb.get('emitted') and mb['count'] >= 3 and (mb['best_conf'] >= 0.14 or mb['sharpness'] >= 55.0):
+                        mb['emitted'] = True
+                        browser_scanned_cache['ts'] = now_scan
+                        browser_scanned_cache['code'] = '?'
+                        print(f"[AI Worker] ❓ [FRAME {mb['time_str']}] Lá bài lướt qua không rõ ({int(round(mb['best_conf']*100))}%) -> Báo '?' (Không thấy)")
+                        sio.emit('server_card_detected', {
+                            'card': {
+                                'code': '?',
+                                'rank': '?',
+                                'suit': 'Ẩn',
+                                'suitSymbol': '?',
+                                'color': 'orange',
+                                'display': '? (Ẩn)',
+                                'fullName': 'Không thấy (?)',
+                                'confidence': round(mb['best_conf'], 3)
+                            },
+                            'confidence': round(mb['best_conf'], 3),
+                            'sharpness': mb['sharpness'],
+                            'image': f"data:image/png;base64,{mb['raw_b64']}" if not mb['raw_b64'].startswith('data:') else mb['raw_b64'],
+                            'timestamp': f"⏱ {mb['time_str']}",
+                            'roomId': mb['room_id'],
+                            'updateFrameOnly': False
+                        })
 
 
 
@@ -1728,7 +1855,7 @@ class BestFrameCardAggregator:
 
 
 
-                if w_code not in self.locked_cards and winner['conf'] >= 0.65:
+                if w_code not in self.locked_cards and winner['conf'] >= 0.42:
 
                     self.locked_cards[w_code] = {
 
@@ -2151,7 +2278,6 @@ def detect_multi_angle_on_channel(channel_id, main_engine, sub_raw, crop_box, ro
             for cid, cname, conf, rb in raw_preds
 
         ]
-
     elif channel_id == 1:
 
         boxes_in_crop = rotate_image_and_map_boxes(reticle_crop, -22.0, main_engine, pad=16)
@@ -2199,6 +2325,18 @@ def detect_multi_angle_on_channel(channel_id, main_engine, sub_raw, crop_box, ro
             for cid, cname, conf, rb in raw_preds
 
         ]
+        if not any(c[2] >= 0.48 for c in boxes_in_crop):
+            retinex_crop = enhance_shadowed_card_retinex(oriented)
+            for sc_val, fy_val, sh_val in [
+                (0.62, 1.80, -0.55),
+                (0.62, 1.80, 0.55),
+                (0.55, 1.85, -0.42),
+            ]:
+                boxes_3d = warp_3d_shear_and_map_boxes(retinex_crop, sc_val, fy_val, sh_val, main_engine, conf_thres=0.38)
+                if boxes_3d:
+                    boxes_in_crop.extend(boxes_3d)
+                if any(c[2] >= 0.52 for c in boxes_in_crop):
+                    break
 
 
 

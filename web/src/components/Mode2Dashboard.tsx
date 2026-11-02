@@ -39,7 +39,8 @@ import {
   Server1GameMode,
   SuitRuleType,
   evaluateAllDoorsServer1,
-  getMaxCardsPerDoor
+  getMaxCardsPerDoor,
+  isHiddenCardCode
 } from '../utils/server1GameEngine';
 import { CardPickerPopup, CardPickerTarget } from './CardPickerPopup';
 
@@ -80,6 +81,7 @@ const SUIT_DISPLAY: Record<string, { symbol: string; color: string; isRed: boole
 
 function getConversionFormula(cards: Mode2CardItem[], gameMode: string): string {
   if (!cards || cards.length === 0) return '';
+  if (cards.some(c => isHiddenCardCode(c.code))) return 'Có bài ẩn (?) ➔ Bỏ xếp hạng';
   if (gameMode !== '3cards' && gameMode !== 'lieng3' && gameMode !== '2cards') return '';
   const parsed = cards.map(c => parseCard(c.code));
   
@@ -104,8 +106,11 @@ function getConversionFormula(cards: Mode2CardItem[], gameMode: string): string 
   return `${values.join('+')}=${sum} ➔ ${pts} Điểm`;
 }
 
-function formatCardItem(raw: string): { rank: string; symbol: string; isRed: boolean; full: string } {
+function formatCardItem(raw: string): { rank: string; symbol: string; isRed: boolean; full: string; isUnknown?: boolean } {
   if (!raw) return { rank: '', symbol: '', isRed: false, full: '' };
+  if (isHiddenCardCode(raw)) {
+    return { rank: '?', symbol: 'Ẩn', isRed: false, full: '? (Không thấy)', isUnknown: true };
+  }
   const s = raw.trim().toUpperCase();
   
   for (const [key, val] of Object.entries(SUIT_DISPLAY)) {
@@ -213,6 +218,15 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
 
   const [dealStrategy, setDealStrategy] = useState<'roundRobin' | 'sequential'>('roundRobin');
   const [selectedDoorFilter, setSelectedDoorFilter] = useState<number | 'all'>('all');
+  const [autoMarkUnknown, setAutoMarkUnknown] = useState<boolean>(() => {
+    return localStorage.getItem('mode2_auto_mark_unknown') !== 'false';
+  });
+  const autoMarkUnknownRef = useRef<boolean>(autoMarkUnknown);
+  useEffect(() => {
+    autoMarkUnknownRef.current = autoMarkUnknown;
+    localStorage.setItem('mode2_auto_mark_unknown', autoMarkUnknown.toString());
+  }, [autoMarkUnknown]);
+  const lastAutoUnknownRef = useRef<{ door: number; slot: number; isCommunity: boolean; ts: number } | null>(null);
 
   // Trạng thái bài của từng Cửa kèm ảnh snapshot 1080p @ 120fps: { [doorIndex 1..N]: Mode2CardItem[] }
   const [doorCards, setDoorCards] = useState<{ [doorIndex: number]: Mode2CardItem[] }>({});
@@ -467,13 +481,17 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       const cap = gameMode === 'phom9' && d === 1 ? 10 : cardsPerPlayer;
       const ev = server1Evals[d - 1];
       const isComplete = ev && ev.score >= 0;
+      const hasUnk = Boolean(ev?.hasUnknown);
       res[d] = {
-        title: isComplete ? ev.title : 'Chờ bài',
+        title: hasUnk ? '??? (Không thấy)' : isComplete ? ev.title : 'Chờ bài',
         subText: ev?.subTitle ? `${ev.subTitle} (${items.length}/${cap})` : `${items.length}/${cap} lá`,
         points: ev?.score ?? -1,
         chiGroups: ev?.chiGroups,
         chiTitles: ev?.chiTitles,
-        highlightClass: isComplete
+        hasUnknown: hasUnk,
+        highlightClass: hasUnk
+          ? 'bg-orange-950/90 text-orange-300 border border-orange-500/60'
+          : isComplete
           ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
           : 'bg-slate-800 text-slate-400'
       };
@@ -486,24 +504,32 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
     const baseAnswers = server1Evals.map((ev, idx) => {
       const groupNum = idx + 1;
       const isComplete = ev.score >= 0;
+      const hasUnk = Boolean(ev.hasUnknown);
+      const isFinished = isComplete || ev.score === -2;
       return {
         groupNum,
-        label: isComplete ? ev.title : 'Chờ bài',
+        label: hasUnk ? '??? (Không thấy)' : isComplete ? ev.title : 'Chờ bài',
         subTitle: ev.subTitle || '',
         score: ev.score,
         isComplete,
+        isFinished,
+        hasUnknown: hasUnk,
         rank: undefined as number | undefined,
         chiGroups: ev.chiGroups,
         chiTitles: ev.chiTitles,
-        highlightClass: isComplete
+        highlightClass: hasUnk
+          ? 'bg-orange-950/90 text-orange-300 border border-orange-500/60'
+          : isComplete
           ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
           : 'bg-slate-800 text-slate-400'
       };
     });
 
     const completed = baseAnswers
-      .filter((a) => a.isComplete && a.score >= 0)
+      .filter((a) => a.isComplete && a.score >= 0 && !a.hasUnknown)
       .sort((a, b) => b.score - a.score);
+
+    const finishedCount = baseAnswers.filter((a) => a.isFinished).length;
 
     let currentRank = 1;
     for (let i = 0; i < completed.length; i++) {
@@ -523,18 +549,19 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       return {
         ...a,
         rank: rk,
-        highlightClass:
-          rk === 1
-            ? 'bg-amber-500 text-slate-950 font-black shadow'
-            : a.isComplete
-            ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
-            : 'bg-slate-800 text-slate-400'
+        highlightClass: a.hasUnknown
+          ? 'bg-orange-950/90 text-orange-300 border border-orange-500/60'
+          : rk === 1
+          ? 'bg-amber-500 text-slate-950 font-black shadow'
+          : a.isComplete
+          ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+          : 'bg-slate-800 text-slate-400'
       };
     });
 
     const winnerGroupNum = completed.length > 0 ? completed[0].groupNum : null;
     const leaderboardText =
-      completed.length >= 2
+      completed.length >= 1 && finishedCount >= 2
         ? '🏆 Xếp hạng: ' +
           completed
             .map((c) => `Hạng ${c.rank}: Cửa ${c.groupNum} (${c.label})`)
@@ -545,7 +572,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       answers,
       sortedComplete: completed,
       winnerGroupNum,
-      completeGroupsCount: completed.length,
+      completeGroupsCount: finishedCount,
       leaderboardText
     };
   }, [server1Evals]);
@@ -599,12 +626,51 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         return true;
       }
 
+      const isUnk = isHiddenCardCode(cardCode);
+      const normalizedCode = isUnk ? '?' : cardCode;
       const currentCards = doorCardsRef.current;
       const currentComm = communityCardsRef.current;
-      const alreadyDealt =
-        Object.values(currentCards).some((cards) => Array.isArray(cards) && cards.some((c) => c.code === cardCode)) ||
-        currentComm.some((c) => c.code === cardCode);
-      if (alreadyDealt) return false;
+
+      if (!isUnk) {
+        const alreadyDealt =
+          Object.values(currentCards).some((cards) => Array.isArray(cards) && cards.some((c) => c.code === normalizedCode)) ||
+          currentComm.some((c) => c.code === normalizedCode);
+        if (alreadyDealt) return false;
+
+        // Nếu vừa mới tự động điền '?' cách đây < 2.5s (do bài lúc đầu nghiêng gắt chưa thấy rồi tay chỉnh lại thấy rõ),
+        // tự động nâng cấp đúng ô '?' đó thành lá bài thật mà không đẩy sang Cửa kế tiếp!
+        const recentUnk = lastAutoUnknownRef.current;
+        if (recentUnk && Date.now() - recentUnk.ts < 2500) {
+          lastAutoUnknownRef.current = null;
+          const upgradedItem: Mode2CardItem = {
+            code: normalizedCode,
+            image,
+            sharpness,
+            confidence,
+            timestamp: new Date().toLocaleTimeString('vi-VN')
+          };
+          if (recentUnk.isCommunity) {
+            const nextComm = [...currentComm];
+            if (recentUnk.slot < nextComm.length && isHiddenCardCode(nextComm[recentUnk.slot].code)) {
+              nextComm[recentUnk.slot] = upgradedItem;
+              communityCardsRef.current = nextComm;
+              setCommunityCards(nextComm);
+              playBeepSound();
+              return true;
+            }
+          } else {
+            const doorList = [...(currentCards[recentUnk.door] || [])];
+            if (recentUnk.slot < doorList.length && isHiddenCardCode(doorList[recentUnk.slot].code)) {
+              doorList[recentUnk.slot] = upgradedItem;
+              const updatedMap = { ...currentCards, [recentUnk.door]: doorList };
+              doorCardsRef.current = updatedMap;
+              setDoorCards(updatedMap);
+              playBeepSound();
+              return true;
+            }
+          }
+        }
+      }
 
       const getDoorCap = (d: number) => (gameMode === 'phom9' && d === 1 ? 10 : cardsPerPlayer);
 
@@ -635,7 +701,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       }
 
       const newItem: Mode2CardItem = {
-        code: cardCode,
+        code: normalizedCode,
         image,
         sharpness,
         confidence,
@@ -645,6 +711,9 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       // Nếu là Texas Hold'em và đã chia đủ 2 lá tẩy cho các cửa -> chia tiếp vào 5 lá bài chung
       if (targetDoor === -1) {
         if (gameMode === 'texas5' && currentComm.length < 5) {
+          if (isUnk) {
+            lastAutoUnknownRef.current = { door: 0, slot: currentComm.length, isCommunity: true, ts: Date.now() };
+          }
           const nextComm = [...currentComm, newItem];
           communityCardsRef.current = nextComm;
           setCommunityCards(nextComm);
@@ -654,6 +723,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
           return true;
         }
         return false;
+      }
+
+      const targetSlotIdx = (currentCards[targetDoor] || []).length;
+      if (isUnk) {
+        lastAutoUnknownRef.current = { door: targetDoor, slot: targetSlotIdx, isCommunity: false, ts: Date.now() };
       }
 
       const updatedMap = {
@@ -1168,6 +1242,22 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
       const best = data.card;
       const conf = data.confidence || best.confidence || 0.95;
       const sharp = data.sharpness || 0;
+
+      if (isHiddenCardCode(best.code)) {
+        if (!autoMarkUnknownRef.current) return;
+        setLastDetectedCard('? (Ẩn)');
+        setAiStatus(`⚠️ AI không thấy rõ lá vừa lướt qua (Độ nét ${sharp}) ➔ Đã điền ? (Không thấy) để giữ đúng thứ tự Cửa!`);
+        const unkFrame = {
+          image: data.image || '',
+          cardName: '? (Không thấy)',
+          confidence: Math.round(conf * 100),
+          sharpness: sharp,
+          timestamp: data.timestamp || new Date().toLocaleTimeString('vi-VN')
+        };
+        setCapturedFrame(unkFrame);
+        addCardToActiveDoor('?', data.image, sharp, conf, false);
+        return;
+      }
 
       setLastDetectedCard(best.display || best.code);
       setAiStatus(`🎯 120fps bắt dính: ${best.fullName || best.display} (${Math.round(conf * 100)}% | Độ nét ${sharp})`);
@@ -2812,14 +2902,25 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             </div>
 
             {/* Các nút thao tác ván */}
-            <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
-              <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   onClick={handleNewRound}
                   className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center space-x-1 shadow-md shadow-emerald-600/30"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Ván Mới</span>
+                </button>
+                <button
+                  onClick={() => {
+                    addCardToActiveDoor('?', capturedFrame?.image, capturedFrame?.sharpness, 0, false);
+                    setAiStatus('⚠️ Đã đánh dấu lá ? (Không thấy / Bỏ) và chuyển sang Cửa tiếp theo.');
+                  }}
+                  disabled={!nextTarget}
+                  className="px-2.5 py-1.5 rounded-lg bg-orange-600/90 hover:bg-orange-500 disabled:opacity-40 text-white font-bold text-xs flex items-center space-x-1 shadow-md shadow-orange-600/20 border border-orange-400/50"
+                  title="Đánh dấu lá hiện tại là Không thấy (?) để bỏ qua và chuyển đúng thứ tự sang Cửa kế tiếp"
+                >
+                  <span>? Không thấy (Bỏ)</span>
                 </button>
                 <button
                   onClick={handleUndo}
@@ -2830,6 +2931,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 </button>
                 <button
                   onClick={() => {
+                    lastAutoUnknownRef.current = null;
                     doorCardsRef.current = {};
                     communityCardsRef.current = [];
                     setDoorCards({});
@@ -2840,6 +2942,18 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
                 >
                   <Trash2 className="w-3.5 h-3.5 text-red-400" />
                   <span>Xóa Ván</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutoMarkUnknown((prev) => !prev)}
+                  className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition border ${
+                    autoMarkUnknown
+                      ? 'bg-orange-950/80 text-orange-300 border-orange-500/60'
+                      : 'bg-slate-900 text-slate-500 border-slate-700'
+                  }`}
+                  title="Tự động điền ? (Không thấy) khi có lá bài lướt qua ô ngắm mà AI không đọc được tên bài"
+                >
+                  {autoMarkUnknown ? 'Tự báo ?: BẬT' : 'Tự báo ?: TẮT'}
                 </button>
               </div>
 
@@ -3324,6 +3438,7 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         onClose={() => setPickerOpen(false)}
         target={pickerTarget}
         numGroups={playerCount}
+        gameMode={gameMode === '3cards' ? '3cards' : 'poker'}
         onSelectCard={(val, targetGroup) => {
           const newCardItem: Mode2CardItem = {
             code: val,

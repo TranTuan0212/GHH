@@ -42,12 +42,19 @@ export interface ParsedCard {
 
 export interface DoorEvaluationResult {
   doorIndex: number; // 1-based
-  score: number;     // Điểm số tuyệt đối để xếp hạng
+  score: number;     // Điểm số tuyệt đối để xếp hạng (-1 = chưa đủ bài, -2 = có lá bài ẩn ?)
   title: string;     // Tên cước / điểm hiển thị trên bàn (VD: "9 Điểm", "Sáp K", "Chi1: Sáp A | Chi2: 9đ | Chi3: 8đ")
   subTitle?: string; // Chi tiết phụ (VD: tổ hợp 5 lá Poker hoặc các bộ Phỏm / Sâm)
   speechText: string;// Câu đọc giọng nói Tiếng Việt
   chiGroups?: string[][]; // Chia nhóm lá bài (3 chi Binh 9, hoặc Phỏm + Rác, hoặc Sâm)
   chiTitles?: string[];   // Nhãn từng chi
+  hasUnknown?: boolean;   // Có quân bài ẩn / không thấy (?)
+}
+
+export function isHiddenCardCode(rawCode: string): boolean {
+  if (!rawCode) return false;
+  const c = rawCode.trim().toUpperCase();
+  return c === '?' || c === '0' || c === '__HIDDEN__' || c === 'UNKNOWN' || c === 'BỎ' || c === 'KHÔNG THẤY';
 }
 
 const RANK_POWER: Record<string, number> = {
@@ -66,7 +73,7 @@ const RO_BONUS_MAP: Record<string, number> = {
 };
 
 export function parseCardCode(rawCode: string): ParsedCard | null {
-  if (!rawCode) return null;
+  if (!rawCode || isHiddenCardCode(rawCode)) return null;
   let clean = rawCode.trim().toUpperCase();
   clean = clean
     .replace(/♥|CƠ|CO/g, 'H')
@@ -75,11 +82,17 @@ export function parseCardCode(rawCode: string): ParsedCard | null {
     .replace(/♠|BÍCH|BICH/g, 'S')
     .replace(/\s+/g, '');
 
-  const m = clean.match(/^(10|[2-9]|[AJQK])([HDCS])$/);
-  if (!m) return null;
+  // Hỗ trợ mã số 1, 11, 12, 13 (như 1♦, 11♦, 12, 13 từ CardPickerPopup) và nhập chay không chất
+  const numSuitMatch = clean.match(/^(1[0-3]|[1-9]|[AJQK])([HDCS])?$/);
+  if (!numSuitMatch) return null;
 
-  const rank = m[1];
-  const suit = m[2];
+  let rank = numSuitMatch[1];
+  if (rank === '1') rank = 'A';
+  else if (rank === '11') rank = 'J';
+  else if (rank === '12') rank = 'Q';
+  else if (rank === '13') rank = 'K';
+
+  const suit = numSuitMatch[2] || 'S';
   const suitSymbol = suit === 'H' ? '♥' : suit === 'D' ? '♦' : suit === 'C' ? '♣' : '♠';
   const isRed = suit === 'H' || suit === 'D';
   const power = RANK_POWER[rank] || 0;
@@ -1188,16 +1201,28 @@ export function evaluateAllDoorsServer1(
   mode: Server1GameMode,
   suitRule: SuitRuleType = 'ro_bonus'
 ): DoorEvaluationResult[] {
+  const commHasUnknown = mode === 'texas5' && communityCards.some(isHiddenCardCode);
+
   // Xử lý đối kháng đặc biệt cho Binh 9 Lá (Có Liêng) và 9 Lá Không Liên
   if (mode === 'binh9' || mode === 'binh9NoStraight') {
     const allowStraight = mode === 'binh9';
-    const arrangedList = doors.map((d) => arrangeBinh9Optimal(d, allowStraight));
+    const arrangedList = doors.map((d) => (d.some(isHiddenCardCode) ? null : arrangeBinh9Optimal(d, allowStraight)));
 
     return doors.map((d, idx) => {
       const doorIndex = idx + 1;
+      const req = mode === 'binh9NoStraight' ? 6 : 9;
+      if (d.some(isHiddenCardCode)) {
+        return {
+          doorIndex,
+          score: d.length >= req ? -2 : -1,
+          title: '??? (Không thấy)',
+          subTitle: `Có quân bài ẩn (?) (${d.length}/9 lá) • Bỏ qua xếp hạng`,
+          speechText: '',
+          hasUnknown: true
+        };
+      }
       const arranged = arrangedList[idx];
       if (!arranged) {
-        const req = mode === 'binh9NoStraight' ? 6 : 9;
         return {
           doorIndex,
           score: -1,
@@ -1241,6 +1266,21 @@ export function evaluateAllDoorsServer1(
 
   return doors.map((d, idx) => {
     const doorIndex = idx + 1;
+    const reqCap = getMaxCardsPerDoor(mode, doorIndex);
+    if (d.some(isHiddenCardCode) || commHasUnknown) {
+      const isDone =
+        mode === 'texas5'
+          ? d.length >= 2 && communityCards.length >= 5
+          : d.length >= reqCap;
+      return {
+        doorIndex,
+        score: isDone ? -2 : -1,
+        title: '??? (Không thấy)',
+        subTitle: `Chưa rõ quân bài (?) (${d.length}/${reqCap}) • Loại khỏi BXH`,
+        speechText: '',
+        hasUnknown: true
+      };
+    }
     switch (mode) {
       case '3cards':
         return evaluateThreeCards(d, doorIndex, '3cards', 'ro_bonus');
