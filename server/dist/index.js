@@ -389,14 +389,39 @@ app.post('/api/whep/:streamKey', express_1.default.text({ type: ['application/sd
             return res.status(400).send('Invalid streamKey');
         }
         const sdpOffer = typeof req.body === 'string' ? req.body : '';
-        const upstream = await fetch(`http://127.0.0.1:8889/live/${streamKey}/whep`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/sdp' },
-            body: sdpOffer
-        });
-        const answerText = await upstream.text();
-        res.status(upstream.status);
-        res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/sdp');
+        // Thử cổng MediaMTX nội bộ 8888 trước (chuẩn cấu hình VPS), nếu không được thì thử 8889
+        const ports = [8888, 8889];
+        let upstreamRes = null;
+        let answerText = '';
+        for (const port of ports) {
+            try {
+                let resp = await fetch(`http://127.0.0.1:${port}/live/${streamKey}/whep`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: sdpOffer
+                });
+                if (resp.status === 404) {
+                    resp = await fetch(`http://127.0.0.1:${port}/${streamKey}/whep`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/sdp' },
+                        body: sdpOffer
+                    });
+                }
+                if (resp.ok || resp.status < 500) {
+                    upstreamRes = resp;
+                    answerText = await resp.text();
+                    break;
+                }
+            }
+            catch (e) {
+                // thử cổng tiếp theo
+            }
+        }
+        if (!upstreamRes) {
+            return res.status(502).send('WHEP upstream unavailable');
+        }
+        res.status(upstreamRes.status);
+        res.setHeader('Content-Type', upstreamRes.headers.get('content-type') || 'application/sdp');
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.send(answerText);
     }

@@ -130,6 +130,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const [hasFrame, setHasFrame] = useState(false);
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
+  const [liveHasAudio, setLiveHasAudio] = useState(false);
   const hasLiveFrameRef = useRef<boolean>(false);
   hasLiveFrameRef.current = hasLiveFrame;
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -954,6 +955,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       loadedStreamKeyRef.current = null;
       setHasFrame(false);
       setHasLiveFrame(false);
+      setLiveHasAudio(false);
       setCurrentTime(0);
       setDuration(0);
       setHlsWindowStart(0);
@@ -982,6 +984,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setPlaybackRate(1.0);
       setHasFrame(false);
       setHasLiveFrame(false);
+      setLiveHasAudio(false);
       video.playbackRate = 1.0;
     }
 
@@ -1052,6 +1055,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             if (cancelled || !streams[0]) return;
             if (event.track.kind === 'video') {
               receivedVideoTrack = true;
+            }
+            if (event.track.kind === 'audio') {
+              setLiveHasAudio(true);
             }
             video.srcObject = streams[0];
             video.muted = isMuted;
@@ -1205,11 +1211,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
-        // Khi đang xem Live: Cho replayVideo chạy ngầm (muted = true) đồng nhịp với luồng live
-        // để hls.js liên tục nạp các segment mới nhất vào RAM.
-        // Nhờ vậy, khi người dùng bấm Slow hoặc tua lại, toàn bộ 60 giây vừa qua đã có sẵn trong RAM -> tua 0ms tức thì!
+        // Khi đang xem Live: Cho replayVideo chạy ngầm đồng nhịp với luồng live
+        // Nếu WebRTC không có audio track, replayVideo (HLS) sẽ gánh phát âm thanh AAC
         if (replayVideoRef.current) {
-          replayVideoRef.current.muted = true;
+          replayVideoRef.current.muted = liveHasAudio ? true : isMuted;
           replayVideoRef.current.playbackRate = 1.0;
           replayVideoRef.current.play().catch(() => {});
         }
@@ -1227,7 +1232,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.play().catch(() => {});
       }
     } else {
-      // Khi tua: Replay video LUÔN LUÔN tắt tiếng (tua không cần âm thanh)
+      // Khi tua: Replay video tắt tiếng để tránh méo tiếng khi chạy chậm
       if (replayVideoRef.current) {
         replayVideoRef.current.muted = true;
         replayVideoRef.current.play().catch(() => {});
@@ -1238,7 +1243,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         liveVideoRef.current.play().catch(() => {});
       }
     }
-  }, [isLive, hasLiveFrame, isMuted]);
+  }, [isLive, hasLiveFrame, isMuted, liveHasAudio]);
 
   // Luôn đồng bộ playbackRate vào replayVideoRef khi chọn tốc độ (kể cả 1.0x) hoặc đổi chế độ
   useEffect(() => {
@@ -2622,7 +2627,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             filter: isSharpBoost ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
           }}
           playsInline
-          muted={true}
+          muted={isLive ? (liveHasAudio ? true : isMuted) : true}
         />
 
         {/* Thẻ 1: Live WebRTC
@@ -2987,11 +2992,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
             <button
               onClick={() => {
-                const v = videoRef.current;
-                if (!v) return;
-                setVolume(isMuted ? 1 : 0);
-                v.muted = !isMuted;
-                setIsMuted(!isMuted);
+                const nextMuted = !isMuted;
+                setVolume(nextMuted ? 0 : 1);
+                setIsMuted(nextMuted);
+                if (liveVideoRef.current) liveVideoRef.current.muted = nextMuted;
+                if (replayVideoRef.current) replayVideoRef.current.muted = (isLive && !liveHasAudio) ? nextMuted : true;
               }}
               className="p-1.5 sm:p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 transition-all flex-shrink-0"
               title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
@@ -3183,6 +3188,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 setIsMuted(nextMuted);
                 if (liveVideoRef.current) {
                   liveVideoRef.current.muted = nextMuted;
+                }
+                if (replayVideoRef.current) {
+                  replayVideoRef.current.muted = (isLive && !liveHasAudio) ? nextMuted : true;
                 }
               }}
               className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
