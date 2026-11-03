@@ -1415,26 +1415,30 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Đệm 6s phía trước và giữ 20s phía sau con trỏ phát trong RAM để tua ngược 5-10s tức thì
         // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
         // Mở rộng bộ đệm 90s - 180s nạp liên tục một mạch, loại bỏ triệt để hiện tượng đứt đoạn / lủng lỗ:
-        maxBufferLength: 90,
-        maxMaxBufferLength: 180,
-        maxBufferSize: 512 * 1024 * 1024,
-        backBufferLength: 180,
+        // Cấu hình đệm tinh gọn, bám sát Live 0.8s, giải phóng triệt để CPU và băng thông server:
+        maxBufferLength: 8,
+        maxMaxBufferLength: 16,
+        maxBufferSize: 128 * 1024 * 1024,
+        backBufferLength: 60,
         maxBufferHole: 0.05,
         nudgeOffset: 0.01,
         nudgeMaxRetry: 3,
-        // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
+        // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo
         highBufferWatchdogPeriod: 0,
-        // Bám sát mép Live chỉ 0.8s để Chấm Vàng HLS đuổi kịp sát nút Chấm Đỏ:
+        // Bám sát mép Live 0.8s để Chấm Vàng HLS đuổi kịp sát nút Chấm Đỏ:
         liveSyncDuration: 0.8,
         liveMaxLatencyDuration: 2.0,
         maxLiveSyncPlaybackRate: 1.15,
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
-        xhrSetup: (xhr) => {
-          try {
-            xhr.setRequestHeader('Cache-Control', 'no-cache');
-          } catch {}
+        xhrSetup: (xhr, url) => {
+          // Chỉ yêu cầu no-cache cho file playlist .m3u8 để cập nhật liên tục, cho phép trình duyệt cache các file .ts để tua tức thì 0ms
+          if (url && (url.endsWith('.m3u8') || url.includes('.m3u8?'))) {
+            try {
+              xhr.setRequestHeader('Cache-Control', 'no-cache');
+            } catch {}
+          }
         },
         debug: false
       });

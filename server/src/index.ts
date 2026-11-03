@@ -22,7 +22,6 @@ import { adminRouter } from './routes/admin';
 
 import { streamRouter, setSocketServer } from './routes/stream';
 
-import { aiRouter } from './routes/ai';
 
 import { licenseRouter } from './routes/license';
 
@@ -395,24 +394,6 @@ io.use((socket, next) => {
 
 
 
-  if (token === 'internal_ai_worker') {
-
-    (socket as any).user = {
-
-      id: 'ai_worker',
-
-      username: 'Server AI Worker',
-
-      role: 'ADMIN',
-
-      platform: 'SERVER'
-
-    };
-
-    return next();
-
-  }
-
 
 
   if (!token) {
@@ -655,7 +636,6 @@ app.use('/api/license', realtimeUserChanges, licenseRouter);
 
 app.use('/api/stream', streamRouter);
 
-app.use('/api/ai', aiRouter);
 
 // Vietnamese TTS Audio Proxy (đảm bảo đọc tiếng Việt rõ ràng trên mọi trình duyệt / Windows thiếu gói giọng đọc vi-VN)
 app.get('/api/tts', async (req, res) => {
@@ -882,7 +862,7 @@ app.use('/replay', express.static(path.join(MEDIA_ROOT, 'replay'), {
 
       // Đặt no-cache để trình duyệt luôn tải file .ts mới của phiên mới, không bao giờ dùng lại cache cũ từ phiên trước
 
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
 
       res.setHeader('Content-Type', 'video/MP2T');
 
@@ -912,7 +892,7 @@ app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
 
     } else if (filePath.endsWith('.ts')) {
 
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
 
       res.setHeader('Content-Type', 'video/MP2T');
 
@@ -944,7 +924,7 @@ app.use('/live', express.static(path.join(MEDIA_ROOT, 'replay'), {
 
     } else if (filePath.endsWith('.ts')) {
 
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
 
       res.setHeader('Content-Type', 'video/MP2T');
 
@@ -1685,16 +1665,6 @@ io.on('connection', (socket) => {
   });
 
 
-
-  socket.on('ai_debug_crop', (data) => {
-
-    const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
-
-    io.to(targetRoom).emit('ai_debug_crop', data);
-
-    io.to('room_admin').emit('ai_debug_crop', data);
-
-  });
 
 
 

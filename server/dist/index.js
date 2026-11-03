@@ -19,7 +19,6 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const auth_1 = require("./routes/auth");
 const admin_1 = require("./routes/admin");
 const stream_1 = require("./routes/stream");
-const ai_1 = require("./routes/ai");
 const license_1 = require("./routes/license");
 const db_1 = require("./db");
 const mediaServer_1 = require("./mediaServer");
@@ -232,15 +231,6 @@ io.use((socket, next) => {
     const token = socket.handshake.auth?.token ||
         socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '') ||
         socket.handshake.query?.token;
-    if (token === 'internal_ai_worker') {
-        socket.user = {
-            id: 'ai_worker',
-            username: 'Server AI Worker',
-            role: 'ADMIN',
-            platform: 'SERVER'
-        };
-        return next();
-    }
     if (!token) {
         socket.user = null;
         return next();
@@ -368,7 +358,6 @@ app.use('/api/auth', realtimeUserChanges, auth_1.authRouter);
 app.use('/api/admin', realtimeUserChanges, admin_1.adminRouter);
 app.use('/api/license', realtimeUserChanges, license_1.licenseRouter);
 app.use('/api/stream', stream_1.streamRouter);
-app.use('/api/ai', ai_1.aiRouter);
 // Vietnamese TTS Audio Proxy (đảm bảo đọc tiếng Việt rõ ràng trên mọi trình duyệt / Windows thiếu gói giọng đọc vi-VN)
 app.get('/api/tts', async (req, res) => {
     try {
@@ -530,7 +519,7 @@ app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'rep
         }
         else if (filePath.endsWith('.ts')) {
             // Đặt no-cache để trình duyệt luôn tải file .ts mới của phiên mới, không bao giờ dùng lại cache cũ từ phiên trước
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
@@ -545,7 +534,7 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'live'
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
@@ -561,7 +550,7 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'repla
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
@@ -966,11 +955,6 @@ io.on('connection', (socket) => {
         const effectiveRoomId = (data.roomId && data.roomId !== 'default') ? data.roomId : (activeLive?.userId || 'default');
         const enriched = { ...data, roomId: effectiveRoomId };
         io.emit('card_detected', enriched);
-    });
-    socket.on('ai_debug_crop', (data) => {
-        const targetRoom = data.roomId ? `room_${data.roomId}` : 'room_default';
-        io.to(targetRoom).emit('ai_debug_crop', data);
-        io.to('room_admin').emit('ai_debug_crop', data);
     });
     socket.on('live_remote_card', (data) => {
         if (!user)
