@@ -1126,7 +1126,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               receivedVideoTrack = true;
             }
             video.srcObject = streams[0];
-            video.muted = true;
+            video.muted = isMuted;
             setHasLiveFrame(true);
             setHasFrame(true);
             video.play().catch((err) => {
@@ -1134,9 +1134,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               video.muted = true;
               video.play().catch(() => {});
               const unlockOnGesture = () => {
-                if (replayVideoRef.current) {
-                  replayVideoRef.current.muted = false;
-                  replayVideoRef.current.play().catch(() => {});
+                if (liveVideoRef.current) {
+                  liveVideoRef.current.muted = false;
+                  liveVideoRef.current.play().catch(() => {});
                 }
                 setIsMuted(false);
                 window.removeEventListener('pointerdown', unlockOnGesture, true);
@@ -1274,32 +1274,41 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [whepUrl, webrtcReconnectCount]);
 
-  // Điều khiển play/pause của liveVideo khi chuyển chế độ Live <-> Replay
+  // Điều khiển play/pause và âm thanh khi chuyển chế độ Live <-> Replay
   useEffect(() => {
-    // liveVideoRef (WebRTC) luôn luôn tắt tiếng vì WebRTC không giải mã được AAC từ RTMP
-    if (liveVideoRef.current) {
-      liveVideoRef.current.muted = true;
-      liveVideoRef.current.play().catch(() => {});
-    }
-
-    if (replayVideoRef.current) {
-      // replayVideo (HLS) là nguồn phát âm thanh AAC duy nhất của hệ thống
-      // Khi Live: phát âm thanh theo cài đặt isMuted
-      // Khi Tua chậm (!isLive): tạm tắt tiếng để tránh méo âm
-      const targetMuted = isLive ? isMuted : true;
-      replayVideoRef.current.muted = targetMuted;
-      replayVideoRef.current.volume = targetMuted ? 0 : 1;
-
-      if (isLive) {
-        replayVideoRef.current.playbackRate = 1.0;
-        if (!hasLiveFrame && replayVideoRef.current.seekable.length > 0) {
-          const end = replayVideoRef.current.seekable.end(replayVideoRef.current.seekable.length - 1);
-          if (replayVideoRef.current.currentTime < end - 2 || replayVideoRef.current.currentTime === 0) {
-            replayVideoRef.current.currentTime = Math.max(0, end - 0.8);
+    if (isLive) {
+      if (hasLiveFrame && liveVideoRef.current) {
+        liveVideoRef.current.muted = isMuted;
+        liveVideoRef.current.play().catch(() => {});
+        if (replayVideoRef.current) {
+          replayVideoRef.current.muted = true;
+          replayVideoRef.current.playbackRate = 1.0;
+          replayVideoRef.current.play().catch(() => {});
+        }
+      } else if (replayVideoRef.current) {
+        // Fallback: nếu không có WebRTC, HLS phát trực tiếp tại live edge
+        const video = replayVideoRef.current;
+        video.muted = isMuted;
+        video.playbackRate = 1.0;
+        if (video.seekable.length > 0) {
+          const end = video.seekable.end(video.seekable.length - 1);
+          if (video.currentTime < end - 2 || video.currentTime === 0) {
+            video.currentTime = Math.max(0, end - 0.8);
           }
         }
+        video.play().catch(() => {});
       }
-      replayVideoRef.current.play().catch(() => {});
+    } else {
+      // Khi tua: Replay video tắt tiếng để tránh méo tiếng khi chạy chậm
+      if (replayVideoRef.current) {
+        replayVideoRef.current.muted = true;
+        replayVideoRef.current.play().catch(() => {});
+      }
+      // Live video trong màn nhỏ PiP góc vẫn chạy realtime, âm thanh theo cài đặt isMuted
+      if (liveVideoRef.current) {
+        liveVideoRef.current.muted = isMuted;
+        liveVideoRef.current.play().catch(() => {});
+      }
     }
   }, [isLive, hasLiveFrame, isMuted]);
 
@@ -2843,7 +2852,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               filter: isSharpBoost && isLive ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
             }}
             playsInline
-            muted={true}
+            muted={isMuted}
             autoPlay
           />
         </div>
@@ -3273,10 +3282,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 const nextMuted = !isMuted;
                 setVolume(nextMuted ? 0 : 1);
                 setIsMuted(nextMuted);
+                if (liveVideoRef.current) {
+                  liveVideoRef.current.muted = nextMuted;
+                  if (!nextMuted) liveVideoRef.current.play().catch(() => {});
+                }
                 if (replayVideoRef.current) {
-                  replayVideoRef.current.muted = nextMuted;
-                  replayVideoRef.current.volume = nextMuted ? 0 : 1;
-                  if (!nextMuted) replayVideoRef.current.play().catch(() => {});
+                  replayVideoRef.current.muted = !hasLiveFrame ? nextMuted : true;
+                  if (!hasLiveFrame && !nextMuted) replayVideoRef.current.play().catch(() => {});
                 }
               }}
               className="p-1.5 sm:p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 transition-all flex-shrink-0"
@@ -3468,10 +3480,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 const nextMuted = !isMuted;
                 setIsMuted(nextMuted);
                 setVolume(nextMuted ? 0 : 1);
+                if (liveVideoRef.current) {
+                  liveVideoRef.current.muted = nextMuted;
+                  if (!nextMuted) liveVideoRef.current.play().catch(() => {});
+                }
                 if (replayVideoRef.current) {
-                  replayVideoRef.current.muted = nextMuted;
-                  replayVideoRef.current.volume = nextMuted ? 0 : 1;
-                  if (!nextMuted) replayVideoRef.current.play().catch(() => {});
+                  replayVideoRef.current.muted = !hasLiveFrame ? nextMuted : true;
+                  if (!hasLiveFrame && !nextMuted) replayVideoRef.current.play().catch(() => {});
                 }
               }}
               className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${

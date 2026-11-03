@@ -4,7 +4,7 @@ readTimeout: 60s
 writeTimeout: 60s
 writeQueueSize: 16384
 udpMaxPayloadSize: 1472
-# udpReadBufferSize: default
+udpReadBufferSize: 33554432
 
 api: true
 apiAddress: 127.0.0.1:9997
@@ -24,7 +24,7 @@ webrtcEncryption: false
 
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
-webrtcIPsFromInterfaces: false
+webrtcIPsFromInterfaces: true
 webrtcAdditionalHosts: ["157.66.100.10", "slomoview.stream", "www.slomoview.stream"]
 
 paths:
