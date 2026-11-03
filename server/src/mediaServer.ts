@@ -115,10 +115,14 @@ export function ensureRtcRelay(streamKey: string): void {
   });
   proc.on('error', (err: Error) => {
     relay.alive = false;
+    relay.failed = true;
     console.error(`[MediaServer] rtc-relay spawn error for ${streamKey}:`, err);
   });
   proc.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
     relay.alive = false;
+    if (code !== 0 && code !== null) {
+      relay.failed = true;
+    }
     console.log(`[MediaServer] rtc-relay exited for ${streamKey} with code=${code} signal=${signal}`);
   });
 }

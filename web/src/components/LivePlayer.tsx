@@ -1123,15 +1123,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               }
             } catch {}
             if (cancelled || !streams[0]) return;
+            const stream = streams[0];
+            const audioTracks = stream.getAudioTracks();
+            if (audioTracks.length > 0) {
+              audioTracks.forEach((t) => { t.enabled = true; });
+            }
             if (event.track.kind === 'video') {
               receivedVideoTrack = true;
             }
-            video.srcObject = streams[0];
+            console.log(`[LivePlayer] WebRTC ontrack: kind=${event.track.kind}, id=${event.track.id}, audioTracks=${audioTracks.length}`);
+            if (video.srcObject !== stream) {
+              video.srcObject = stream;
+            }
             video.muted = isMuted;
             setHasLiveFrame(true);
             setHasFrame(true);
             video.play().catch((err) => {
-              console.warn('[LivePlayer] Autoplay WebRTC ban đầu:', err);
+              if (err.name === 'AbortError') {
+                console.log('[LivePlayer] WebRTC play() AbortError (bỏ qua vì đang tiếp tục nạp stream)');
+                return;
+              }
+              console.warn('[LivePlayer] Autoplay WebRTC ban đầu bị chặn (cần tương tác người dùng):', err);
               video.muted = true;
               video.play().catch(() => {});
               const unlockOnGesture = () => {
@@ -1573,8 +1585,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       hls.on(Hls.Events.ERROR, (_e, data) => {
         // bufferStalledError là không fatal và rất hay gặp khi tua sang vùng chưa có buffer.
         // KHÔNG log spam vì nó lặp lại hàng chục lần mỗi giây.
-        if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-          // Không làm gì — stall timer trong onVideoEvent (waiting/stalled) sẽ xử lý
+        if (
+          data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
+          data.details === 'bufferNudgeOnStall' ||
+          data.details === 'aborted'
+        ) {
           return;
         }
 
@@ -2109,24 +2124,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
 
-    // TỐI ƯU CỰC MẠNH: Hủy hết buffer cũ, đưa playhead về mốc hẹn - 5s
-    // và dồn 100% băng thông tải đệm an toàn từ mốc hẹn - 5s đến mốc hẹn +
+    // HỦY TOÀN BỘ BUFFER HLS CŨ VÀ DỒN TẢI ĐỆM TỪ MỐC HẸN - 5S ĐẾN MỐC HẸN +
+    // Giữ nguyên hiển thị LIVE WebRTC cho người xem, không giật timeline lùi lại
     const priorityStart = Math.max(0, targetTime - 5.0);
-    if (replayVideoRef.current) {
-      replayVideoRef.current.currentTime = priorityStart;
-      setCurrentTime(priorityStart);
-    }
     if (hlsRef.current) {
       try {
         hlsRef.current.stopLoad();
         if (typeof (hlsRef.current as any).trigger === 'function') {
           try {
-            (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: priorityStart, type: 'video' });
-            (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: priorityStart, type: 'audio' });
+            (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: Number.POSITIVE_INFINITY, type: undefined });
           } catch {}
         }
         hlsRef.current.startLoad(priorityStart);
-        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã hủy HLS cũ, nạp ưu tiên đệm từ mốc hẹn - 5s: ${priorityStart.toFixed(2)}s`);
+        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã hủy buffer HLS cũ, dồn tải đệm từ ${priorityStart.toFixed(2)}s đến mốc hẹn ${targetTime.toFixed(2)}s`);
       } catch (err) {
         console.warn('[LivePlayer] Lỗi hls.startLoad ưu tiên:', err);
       }
@@ -2820,7 +2830,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             filter: isSharpBoost ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
           }}
           playsInline
-          muted={!isLive || isMuted}
+          muted={isLive ? true : (isMuted || playbackRate !== 1.0)}
         />
 
         {/* Thẻ 1: Live WebRTC

@@ -233,31 +233,65 @@ app.post('/api/whep/:streamKey', express_1.default.text({ type: ['application/sd
         // Kich hoat ngay lap tuc WebRTC Audio Relay (AAC -> Opus) khi co yeu cau xem
         (0, mediaServer_1.ensureRtcRelay)(streamKey);
         // Luon uu tien luong co tieng _rtc. Chi fallback neu relay that su bi loi
-        const targetKey = (0, mediaServer_1.isRtcRelayFailed)(streamKey) ? streamKey : `${streamKey}${mediaServer_1.RTC_RELAY_SUFFIX}`;
+        let targetKey = (0, mediaServer_1.isRtcRelayFailed)(streamKey) ? streamKey : `${streamKey}${mediaServer_1.RTC_RELAY_SUFFIX}`;
         const ports = [8888, 8889];
         let upstreamRes = null;
         let answerText = '';
-        for (const port of ports) {
-            try {
-                let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/sdp' },
-                    body: sdpOffer
-                });
-                if (resp.status === 404) {
-                    resp = await fetch(`http://127.0.0.1:${port}/${targetKey}/whep`, {
+        // Nếu relay vừa khởi động, đợi tối đa 1.2s (6 lần x 200ms) để MediaMTX nhận luồng _rtc thay vì trả 404/502
+        for (let retry = 0; retry < 6; retry++) {
+            for (const port of ports) {
+                try {
+                    let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/sdp' },
                         body: sdpOffer
                     });
+                    if (resp.status === 404) {
+                        resp = await fetch(`http://127.0.0.1:${port}/${targetKey}/whep`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/sdp' },
+                            body: sdpOffer
+                        });
+                    }
+                    if (resp.ok) {
+                        upstreamRes = resp;
+                        answerText = await resp.text();
+                        break;
+                    }
                 }
-                if (resp.ok) {
-                    upstreamRes = resp;
-                    answerText = await resp.text();
-                    break;
-                }
+                catch (e) { }
             }
-            catch (e) { }
+            if (upstreamRes)
+                break;
+            if (targetKey === streamKey || (0, mediaServer_1.isRtcRelayFailed)(streamKey))
+                break;
+            await new Promise((r) => setTimeout(r, 200));
+        }
+        // Nếu sau khi đợi mà _rtc vẫn chưa có, fallback về luồng gốc streamKey để đảm bảo luôn có hình
+        if (!upstreamRes && targetKey !== streamKey) {
+            targetKey = streamKey;
+            for (const port of ports) {
+                try {
+                    let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/sdp' },
+                        body: sdpOffer
+                    });
+                    if (resp.status === 404) {
+                        resp = await fetch(`http://127.0.0.1:${port}/${targetKey}/whep`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/sdp' },
+                            body: sdpOffer
+                        });
+                    }
+                    if (resp.ok) {
+                        upstreamRes = resp;
+                        answerText = await resp.text();
+                        break;
+                    }
+                }
+                catch (e) { }
+            }
         }
         if (!upstreamRes) {
             return res.status(502).send('WHEP upstream unavailable');

@@ -113,10 +113,14 @@ function ensureRtcRelay(streamKey) {
     });
     proc.on('error', (err) => {
         relay.alive = false;
+        relay.failed = true;
         console.error(`[MediaServer] rtc-relay spawn error for ${streamKey}:`, err);
     });
     proc.on('close', (code, signal) => {
         relay.alive = false;
+        if (code !== 0 && code !== null) {
+            relay.failed = true;
+        }
         console.log(`[MediaServer] rtc-relay exited for ${streamKey} with code=${code} signal=${signal}`);
     });
 }
