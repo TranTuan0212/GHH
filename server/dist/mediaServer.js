@@ -244,6 +244,7 @@ function resetReplaySession(streamKey) {
     const bundledFfmpeg = path_1.default.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
+    const sessionTag = Math.floor(Date.now() / 1000);
     const ffmpegArgs = [
         '-fflags', '+nobuffer+flush_packets',
         '-rtsp_transport', 'tcp',
@@ -258,7 +259,7 @@ function resetReplaySession(streamKey) {
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
-        '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
+        '-hls_segment_filename', path_1.default.join(outputDir, `${sessionTag}_%05d.ts`),
         '-hls_flags', 'delete_segments+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];
@@ -292,6 +293,7 @@ function startHlsSession(streamKey) {
     const bundledFfmpeg = path_1.default.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
     const ffmpegPath = process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
     const hlsListSize = Math.max(1, Math.ceil(DVR_WINDOW_SECONDS / HLS_SEGMENT_SECONDS));
+    const sessionTag = Math.floor(Date.now() / 1000);
     const ffmpegArgs = [
         '-fflags', '+nobuffer+flush_packets',
         '-rtsp_transport', 'tcp',
@@ -306,7 +308,7 @@ function startHlsSession(streamKey) {
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
         '-hls_list_size', String(hlsListSize),
-        '-hls_segment_filename', path_1.default.join(outputDir, '%05d.ts'),
+        '-hls_segment_filename', path_1.default.join(outputDir, `${sessionTag}_%05d.ts`),
         '-hls_flags', 'append_list+delete_segments+program_date_time',
         path_1.default.join(outputDir, 'index.m3u8')
     ];

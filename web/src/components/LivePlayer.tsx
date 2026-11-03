@@ -1934,7 +1934,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       replayVideoRef.current.pause();
     }
     if (hlsRef.current) {
-      hlsRef.current.stopLoad();
+      (hlsRef.current as any).stopLoad();
     }
 
     showModeNotice(
@@ -2001,11 +2001,30 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setWebrtcReconnectCount((c) => c + 1);
     }
 
-    // 4. Tự động chuyển ngay về luồng Live trực tiếp!
+    // 4. Xóa sạch 100% RAM buffer và URL cache của Hls.js để không bị phát lẫn lộn file của phiên trước
+    const hlsInst: any = hlsRef.current;
+    if (hlsInst) {
+      try {
+        hlsInst.stopLoad();
+        if (typeof (hlsRef.current as any).trigger === 'function') {
+          (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: Number.POSITIVE_INFINITY, type: undefined });
+        }
+      } catch {}
+    }
+    prefetchedSegmentsRef.current.clear();
+    lastLoadedFragSnRef.current = -1;
+    setBufferedRanges([]);
+    scheduledSlowRef.current = null;
+    setScheduledSlow(null);
+    hlsLiveEdgeRef.current = 0;
+    setHlsLiveEdge(0);
+    setHlsWindowStart(0);
+
+    // 5. Tự động chuyển ngay về luồng Live trực tiếp!
     jumpToLive();
 
-    // 5. Sau 1.5 giây (để server kịp xoá sạch file .ts cũ và tạo playlist mới bắt đầu từ 0s),
-    // cấp replaySessionId mới (chỉ 1 lần duy nhất) để nạp HLS mới toanh từ 0s!
+    // 6. Sau 1.5 giây (để server kịp xoá sạch file .ts cũ và tạo playlist mới),
+    // cấp replaySessionId mới để nạp HLS mới toanh của phiên tiếp theo!
     if (roundResetTimerRef.current !== null) {
       window.clearTimeout(roundResetTimerRef.current);
     }

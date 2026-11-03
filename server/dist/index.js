@@ -199,7 +199,9 @@ app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'rep
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
@@ -214,7 +216,9 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'repla
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
