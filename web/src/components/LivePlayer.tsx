@@ -141,6 +141,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const scheduledSlowRef = useRef<ScheduledSlow | null>(null);
   const [autoSlowSpeed, setAutoSlowSpeed] = useState<number>(0.25);
   const hasLiveFrameRef = useRef<boolean>(false);
+  const updateBufferRangesRef = useRef<() => void>(() => {});
   hasLiveFrameRef.current = hasLiveFrame;
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -1495,38 +1496,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHlsWindowStart(start);
             setHlsLiveEdge(end);
 
-            // Khi đang ở chế độ Live:
-            // Chỉ đồng bộ khi bắt đầu hoặc khi bị tụt hậu quá xa (> 5s do mạng khựng)
-            // Tuyệt đối không seek giật lùi liên tục khi đang phát bình thường
-            const curTime = video.currentTime;
-            const lag = end - curTime;
-            if (curTime === 0 && end > 2.0) {
-              video.currentTime = Math.max(0, end - 1.5);
-              if (video.paused) {
-                video.play().catch(() => {});
-              }
-            } else if (lag > 5.0 && !scheduledSlowRef.current) {
-              video.currentTime = Math.max(0, end - 1.5);
-              if (video.paused) {
-                video.play().catch(() => {});
-              }
-            } else if (video.paused) {
-              video.play().catch(() => {});
-            }
-          }
-
-          // Pre-fetch đón đầu 4 segment .ts mới nhất sát mép Live vào HTTP Memory Cache của trình duyệt
-          // để bấm Replay ngay trên khắc Live nạp từ RAM trong 0ms!
-          const lastSn = typeof last.sn === 'number' ? last.sn : -1;
-          if (lastSn >= 0 && (lastLoadedFragSnRef.current < 0 || lastSn - lastLoadedFragSnRef.current >= 2)) {
-            const tailFrags = fragments.slice(-4);
-            for (const f of tailFrags) {
-              if (f?.url && !prefetchedSegmentsRef.current.has(f.url)) {
-                prefetchedSegmentsRef.current.add(f.url);
-                fetch(f.url, { mode: 'cors', credentials: 'omit' }).catch(() => {
-                  prefetchedSegmentsRef.current.delete(f.url);
-                });
-              }
+            // Chế độ On-Demand: khi đang xem Live bình thường (không có hẹn slow),
+            // giữ video ngầm ở trạng thái pause để không ngốn CPU/băng thông
+            if (!scheduledSlowRef.current && !video.paused) {
+              video.pause();
             }
           }
         }
@@ -1542,7 +1515,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url);
       });
       hls.on(Hls.Events.BUFFER_APPENDED, () => {
-        // Cho replayVideo tiếp tục chạy ngầm đồng nhịp với Live Edge; không pause ở đây
+        // Cập nhật ngay dải buffer khi có segment mới nạp vào RAM
+        updateBufferRangesRef.current();
       });
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
@@ -1563,22 +1537,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             pendingPlayAfterSeekRef.current = true;
           }
         } else {
-          // Khi đang ở chế độ Live:
-          // replayVideo luôn chạy ngầm (muted) theo sát Live Edge để đệm sẵn 60s RAM
+          // Chế độ On-Demand: Khi đang ở Live, tắt nạp HLS và tạm dừng video ngầm
+          // Dồn 100% băng thông và tài nguyên cho WebRTC Live mượt mà nhất
           video.muted = true;
-          window.setTimeout(() => {
-            if (isLiveRef.current) {
-              if (video.seekable.length > 0) {
-                const end = video.seekable.end(video.seekable.length - 1);
-                if (end > 2 && video.currentTime < end - 3) {
-                  video.currentTime = Math.max(0, end - 1.5);
-                }
-              }
-              video.play().catch((err) => {
-                console.warn('[LivePlayer] Autoplay HLS background live buffer:', err);
-              });
-            }
-          }, 100);
+          video.pause();
+          hls.stopLoad();
         }
       });
 
@@ -1738,6 +1701,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         }
       }
     };
+
+    updateBufferRangesRef.current = updateBufferRanges;
 
     const onTime = () => {
       // Đang kéo tua hoặc đang chờ trình duyệt hoàn tất seek: không ghi đè currentTime để tránh mốc tua bị giật lùi
@@ -1964,20 +1929,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
     }
 
-    // 2. Đưa replayVideo về sát mép live và tiếp tục phát ngầm (muted):
-    // Giúp duy trì vùng đệm 60s RAM liên tục cập nhật theo thời gian thực
+    // 2. Chế độ On-Demand: Tạm dừng HLS ngầm và stopLoad để dồn 100% băng thông cho WebRTC Live
     if (replayVideoRef.current) {
-      if (hlsRef.current) {
-        hlsRef.current.config.liveMaxLatencyDuration = 2.5;
-      }
-      const video = replayVideoRef.current;
-      video.playbackRate = 1.0;
-      video.muted = true;
-      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
-      if (latestEdge > 0) {
-        video.currentTime = Math.max(0, latestEdge - 1.5);
-      }
-      video.play().catch(() => {});
+      replayVideoRef.current.pause();
+    }
+    if (hlsRef.current) {
+      hlsRef.current.stopLoad();
     }
 
     showModeNotice(
@@ -2096,6 +2053,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       targetSeekTimeRef.current = null;
       video.currentTime = safeTime;
       setCurrentTime(safeTime);
+      if (hlsRef.current) {
+        hlsRef.current.startLoad(safeTime);
+      }
       if (!isDraggingSeekRef.current) {
         video.play().catch(() => {});
       }
@@ -2114,6 +2074,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (scheduledSlowRef.current) {
       scheduledSlowRef.current = null;
       setScheduledSlow(null);
+      if (hlsRef.current && isLiveRef.current) {
+        hlsRef.current.stopLoad();
+      }
       showModeNotice('live', 'ĐÃ HỦY CỜ HẸN SLOW', 'Đã hủy lệnh tự động quay chậm', '');
       return;
     }
@@ -2124,9 +2087,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
 
-    // HỦY TOÀN BỘ BUFFER HLS CŨ VÀ DỒN TẢI ĐỆM TỪ MỐC HẸN - 5S ĐẾN MỐC HẸN +
-    // Giữ nguyên hiển thị LIVE WebRTC cho người xem, không giật timeline lùi lại
+    // NẠP ĐỆM ON-DEMAND: Tạm dừng video ngầm, dồn 100% băng thông tải 5s trước mốc hẹn
     const priorityStart = Math.max(0, targetTime - 5.0);
+    if (replayVideoRef.current) {
+      replayVideoRef.current.pause();
+      replayVideoRef.current.currentTime = priorityStart;
+    }
     if (hlsRef.current) {
       try {
         hlsRef.current.stopLoad();
@@ -2136,7 +2102,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           } catch {}
         }
         hlsRef.current.startLoad(priorityStart);
-        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã hủy buffer HLS cũ, dồn tải đệm từ ${priorityStart.toFixed(2)}s đến mốc hẹn ${targetTime.toFixed(2)}s`);
+        console.log(`[LivePlayer] 🎯 Hẹn Slow (On-Demand): Bắt đầu nạp đệm từ ${priorityStart.toFixed(2)}s đến mốc hẹn ${targetTime.toFixed(2)}s`);
       } catch (err) {
         console.warn('[LivePlayer] Lỗi hls.startLoad ưu tiên:', err);
       }
@@ -2195,6 +2161,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         video.playbackRate = speed;
       }
 
+      if (hlsRef.current) {
+        hlsRef.current.startLoad(video.currentTime);
+      }
       if (!isDraggingSeekRef.current) {
         video.play().catch(() => {});
       }
@@ -2248,6 +2217,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         seekingTimeoutRef.current = null;
       }, 800);
       video.currentTime = safeTime;
+      if (hlsRef.current) {
+        hlsRef.current.startLoad(safeTime);
+      }
       return;
     }
 
