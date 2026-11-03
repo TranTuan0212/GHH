@@ -1666,16 +1666,16 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
-          backBufferLength: 25,
-          maxBufferLength: 8,
-          maxMaxBufferLength: 16,
+          backBufferLength: 60,
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
           maxBufferSize: 128 * 1024 * 1024,
-          maxBufferHole: 0.1,
-          nudgeOffset: 0.05,
+          maxBufferHole: 0.3,
+          nudgeOffset: 0.1,
           nudgeMaxRetry: 5,
           highBufferWatchdogPeriod: 0,
-          liveSyncDuration: 2.0,
-          liveMaxLatencyDuration: 4.0,
+          liveSyncDuration: 2.5,
+          liveMaxLatencyDuration: 5.0,
           maxLiveSyncPlaybackRate: 1.0 // Cố định 1.0x chống giật khựng do buffer underrun
         });
 

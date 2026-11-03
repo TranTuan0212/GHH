@@ -1426,18 +1426,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
         // Mở rộng bộ đệm 90s - 180s nạp liên tục một mạch, loại bỏ triệt để hiện tượng đứt đoạn / lủng lỗ:
         // Cấu hình đệm tinh gọn, bám sát Live 0.8s, giải phóng triệt để CPU và băng thông server:
-        maxBufferLength: 8,
-        maxMaxBufferLength: 16,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
         maxBufferSize: 128 * 1024 * 1024,
         backBufferLength: 60,
-        maxBufferHole: 0.05,
-        nudgeOffset: 0.01,
-        nudgeMaxRetry: 3,
+        maxBufferHole: 0.3,
+        nudgeOffset: 0.1,
+        nudgeMaxRetry: 5,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo
         highBufferWatchdogPeriod: 0,
-        // Bám sát mép Live 0.8s để Chấm Vàng HLS đuổi kịp sát nút Chấm Đỏ:
-        liveSyncDuration: 0.8,
-        liveMaxLatencyDuration: 2.0,
+        // Đệm an toàn 2.5s để triệt tiêu bufferNudgeOnStall và nạp thanh HLS mượt mà:
+        liveSyncDuration: 2.5,
+        liveMaxLatencyDuration: 5.0,
         maxLiveSyncPlaybackRate: 1.15,
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
