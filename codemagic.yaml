@@ -13,6 +13,7 @@ workflows:
       - name: Install CocoaPods dependencies
         script: |
           set -e
+          set -o pipefail
           echo "=== COMMIT=$(git rev-parse --short HEAD) ==="
           echo "=== YAML_DEBUG_START ==="
           sed -n '1,40p' codemagic.yaml
@@ -20,7 +21,7 @@ workflows:
           cd ios
           ls -la Podfile
           pod install --repo-update 2>&1 | tee $HOME/pod_install.log
-          ls -la SloMoLive.xcworkspace || echo "WORKSPACE_MISSING"
+          ls -la SloMoLive.xcworkspace
       - name: Build iOS Application (.app)
         script: |
           set -e
