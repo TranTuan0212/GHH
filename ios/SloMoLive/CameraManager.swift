@@ -659,10 +659,16 @@ public class CameraManager: NSObject, ObservableObject {
     public func configureAndActivateAudioSession() -> Bool {
         let session = AVAudioSession.sharedInstance()
         do {
+            var audioOptions: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP]
+            if #available(iOS 17.0, *) {
+                audioOptions.insert(.allowBluetoothHFP)
+            } else {
+                audioOptions.insert(.allowBluetooth)
+            }
             try session.setCategory(
                 .playAndRecord,
                 mode: .videoRecording,
-                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+                options: audioOptions
             )
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             print("[CameraManager] 🎙️ Audio session configured & activated successfully")
@@ -1508,10 +1514,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             guard isStreamingAtomic else { return }
 
+            // Lấy timestamp phần cứng của frame từ sampleBuffer
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+
             // Log console mỗi 240 frames (~2s ở 120fps) — không cập nhật UI để tiết kiệm CPU.
             _frameCounter += 1
             if _frameCounter % 240 == 1 {
-                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 print("[CameraManager] 📹 Pushed ~\(self._frameCounter) frames [\(self.currentDevicePosition == .front ? "Cam Trước" : "Cam Sau")], latest PTS=\(CMTimeGetSeconds(pts))s")
             }
 
