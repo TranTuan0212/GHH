@@ -9,7 +9,9 @@ udpReadBufferSize: 33554432
 rtsp: true
 rtspAddress: 127.0.0.1:8554
 
-rtmp: false
+rtmp: true
+rtmpAddress: :1935
+rtmpEncryption: "no"
 hls: false
 
 webrtc: true
