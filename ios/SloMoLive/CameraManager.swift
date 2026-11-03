@@ -129,38 +129,127 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var debugEncoderInfo: String = ""
     @Published public var debugPushedFrames: Int = 0
 
+    // MARK: - Resolution Preset (720p / 1080p, 120fps / 60fps)
+    public enum ResolutionPreset: String, CaseIterable, Identifiable {
+        case p720_120 = "720p120"
+        case p1080_120 = "1080p120"
+        case p1080_60 = "1080p60"
+
+        public var id: String { rawValue }
+
+        public var label: String {
+            switch self {
+            case .p720_120: return "720p @ 120fps (Khuyên dùng)"
+            case .p1080_120: return "1080p @ 120fps (Siêu nét)"
+            case .p1080_60: return "1080p @ 60fps (Tiêu chuẩn)"
+            }
+        }
+
+        public var shortLabel: String {
+            switch self {
+            case .p720_120: return "720p120"
+            case .p1080_120: return "1080p120"
+            case .p1080_60: return "1080p60"
+            }
+        }
+
+        public var targetWidth: Int {
+            switch self {
+            case .p720_120: return 1280
+            case .p1080_120, .p1080_60: return 1920
+            }
+        }
+
+        public var targetHeight: Int {
+            switch self {
+            case .p720_120: return 720
+            case .p1080_120, .p1080_60: return 1080
+            }
+        }
+
+        public var targetFPS: Double {
+            switch self {
+            case .p720_120, .p1080_120: return 120.0
+            case .p1080_60: return 60.0
+            }
+        }
+
+        public var defaultTargetBitrateMbps: Int {
+            switch self {
+            case .p720_120: return 6
+            case .p1080_120: return 8
+            case .p1080_60: return 5
+            }
+        }
+    }
+
+    // MARK: - Quality Preset (0.70 / 0.85 / 0.95)
+    public struct QualityPreset: Hashable {
+        public let val: Float
+        public let label: String
+    }
+
+    public static let qualityPresets: [QualityPreset] = [
+        QualityPreset(val: 0.70, label: "0.70 - Tiêu chuẩn (Khuyên dùng)"),
+        QualityPreset(val: 0.85, label: "0.85 - Sắc nét"),
+        QualityPreset(val: 0.95, label: "0.95 - Tối đa")
+    ]
+    public static let defaultQuality: Float = 0.70
+    private static let qualityDefaultsKey = "SloMoLive.videoQuality"
+    private static let resolutionDefaultsKey = "SloMoLive.videoResolution"
+
     // MARK: - Bitrate do người dùng chọn (lưu UserDefaults)
 
-    /// Một mức bitrate hiển thị trong menu chọn của giao diện.
     public struct BitratePreset: Hashable {
         public let mbps: Int
         public let label: String
     }
 
-    /// Các mức bitrate cho phép chọn. Mức chọn là MỨC TỐI ĐA; khi bật tự hạ, encoder có thể
-    /// giảm xuống tối thiểu `minBitrateRatio` × mức chọn lúc mạng yếu để live không bị giật.
     public static let bitratePresets: [BitratePreset] = [
-        BitratePreset(mbps: 6, label: "6 Mbps - Tiết kiệm (4G yếu)"),
-        BitratePreset(mbps: 8, label: "8 Mbps - Khuyên dùng (Chuẩn nét & Ổn định)"),
-        BitratePreset(mbps: 10, label: "10 Mbps - Sắc nét"),
-        BitratePreset(mbps: 12, label: "12 Mbps - Cực nét (Wi-Fi mạnh)")
+        BitratePreset(mbps: 6, label: "6 Mbps - Chuẩn (4G/Wi-Fi)"),
+        BitratePreset(mbps: 8, label: "8 Mbps - Sắc nét"),
+        BitratePreset(mbps: 10, label: "10 Mbps - Cực nét"),
+        BitratePreset(mbps: 12, label: "12 Mbps - Wi-Fi mạnh")
     ]
-    public static let defaultBitrateMbps = 8
-    private static let minBitrateRatio = 0.6
+    public static let defaultBitrateMbps = 6
+    private static let minBitrateRatio = 0.50
     private static let bitrateDefaultsKey = "SloMoLive.streamBitrateMbps"
     private static let adaptiveDefaultsKey = "SloMoLive.streamAdaptiveBitrate"
 
-    /// Bitrate tối đa người dùng đã chọn (Mbps).
+    @Published public private(set) var selectedResolution: ResolutionPreset = {
+        let saved = UserDefaults.standard.string(forKey: CameraManager.resolutionDefaultsKey) ?? ""
+        return ResolutionPreset(rawValue: saved) ?? .p720_120
+    }()
+
+    @Published public private(set) var selectedQuality: Float = {
+        let saved = UserDefaults.standard.float(forKey: CameraManager.qualityDefaultsKey)
+        return (saved >= 0.5 && saved <= 1.0) ? saved : CameraManager.defaultQuality
+    }()
+
     @Published public private(set) var selectedBitrateMbps: Int = {
         let saved = UserDefaults.standard.integer(forKey: CameraManager.bitrateDefaultsKey)
         return CameraManager.bitratePresets.contains(where: { $0.mbps == saved }) ? saved : CameraManager.defaultBitrateMbps
     }()
 
-    /// Tự hạ bitrate khi mạng yếu (chống giật). Mặc định bật.
     @Published public private(set) var isAdaptiveBitrateEnabled: Bool =
         (UserDefaults.standard.object(forKey: CameraManager.adaptiveDefaultsKey) as? Bool) ?? true
 
-    /// Đổi mức bitrate (lưu cấu hình, áp dụng tức thì cho session tiếp theo hoặc khi đang chờ).
+    public func setResolution(_ preset: ResolutionPreset) {
+        guard preset != selectedResolution else { return }
+        selectedResolution = preset
+        UserDefaults.standard.set(preset.rawValue, forKey: CameraManager.resolutionDefaultsKey)
+        selectedBitrateMbps = preset.defaultTargetBitrateMbps
+        UserDefaults.standard.set(selectedBitrateMbps, forKey: CameraManager.bitrateDefaultsKey)
+        reconfigureCameraFormat()
+    }
+
+    public func setQuality(_ quality: Float) {
+        guard quality != selectedQuality else { return }
+        selectedQuality = quality
+        UserDefaults.standard.set(quality, forKey: CameraManager.qualityDefaultsKey)
+        applyBitrateChange()
+    }
+
     public func setBitrate(_ mbps: Int) {
         guard CameraManager.bitratePresets.contains(where: { $0.mbps == mbps }), mbps != selectedBitrateMbps else { return }
         selectedBitrateMbps = mbps
@@ -168,17 +257,44 @@ public class CameraManager: NSObject, ObservableObject {
         applyBitrateChange()
     }
 
-    /// Bật/tắt tự hạ bitrate khi mạng yếu.
     public func setAdaptiveBitrate(_ enabled: Bool) {
         guard enabled != isAdaptiveBitrateEnabled else { return }
         isAdaptiveBitrateEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: CameraManager.adaptiveDefaultsKey)
         applyBitrateChange()
     }
-private func applyBitrateChange() {
+
+    private func applyBitrateChange() {
         RoiSyncManager.shared.currentBitrateMbps = Double(selectedBitrateMbps)
         if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty && !isStreaming && !isConnecting {
             rebuildLiveSession()
+        }
+    }
+
+    public func reconfigureCameraFormat() {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let videoDevice = self.videoDeviceInput?.device else { return }
+            do {
+                try videoDevice.lockForConfiguration()
+                let targetRates: [Double] = [self.selectedResolution.targetFPS, 120.0, 60.0]
+                if let (format, fps) = self.selectBestHFRFormat(for: videoDevice, targetRates: targetRates) {
+                    videoDevice.activeFormat = format
+                    let timescale = Int32(fps)
+                    videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: timescale)
+                    videoDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: timescale)
+                    self.activeCaptureFPS = fps
+                    DispatchQueue.main.async {
+                        self.currentFPS = fps
+                    }
+                    print("[CameraManager] 🔄 Reconfigured camera format: \(self.selectedResolution.label) @ \(fps)fps")
+                }
+                videoDevice.unlockForConfiguration()
+                if !self.streamKey.isEmpty && !self.rtmpIngestUrl.isEmpty && !self.isStreamingAtomic && !self.isConnecting {
+                    self.rebuildLiveSession()
+                }
+            } catch {
+                print("[CameraManager] ❌ Lỗi reconfigureCameraFormat: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -484,7 +600,7 @@ private func applyBitrateChange() {
         // Bitrate do người dùng chọn trên giao diện (mặc định 20 Mbps). Mức chọn là mức TỐI ĐA;
         // sàn = 60% mức chọn, chỉ dùng khi bật tự hạ bitrate lúc mạng yếu.
         let targetBitrate: UInt = UInt(selectedBitrateMbps) * 1_000_000
-        let maxBitrate: UInt = targetBitrate
+        let maxBitrate: UInt = UInt(Double(targetBitrate) * 1.334)
         let minBitrate: UInt = UInt(Double(targetBitrate) * CameraManager.minBitrateRatio)
         let gopFrames: UInt = max(1, targetFps / 2)
 
@@ -638,10 +754,14 @@ private func applyBitrateChange() {
                        range.maxFrameRate >= targetRate {
                         
                         var score: Int64 = 0
-                        if maxDim == 1920 && minDim == 1080 {
-                            score = 1000 // Ưu tiên số 1 tuyệt đối: Full HD 1080p (cả Cam Trước & Cam Sau)
+                        let targetW = selectedResolution.targetWidth
+                        let targetH = selectedResolution.targetHeight
+                        if maxDim == targetW && minDim == targetH {
+                            score = 1000 // Khớp chính xác độ phân giải người dùng chọn
                         } else if maxDim == 1280 && minDim == 720 {
-                            score = 200  // Ưu tiên số 2: HD 720p
+                            score = 400
+                        } else if maxDim == 1920 && minDim == 1080 {
+                            score = 300
                         } else if maxDim <= 1920 {
                             score = 50
                         } else {
@@ -775,7 +895,7 @@ private func applyBitrateChange() {
                 try videoDevice.lockForConfiguration()
 
                 // Chọn format HFR: Khóa chuẩn 120fps (mượt mà, thu sáng tốt trong phòng, bitrate tối ưu) → 60fps
-                let targetRates: [Double] = [120.0, 60.0]
+                let targetRates: [Double] = [self.selectedResolution.targetFPS, 120.0, 60.0]
                 let result = self.selectBestHFRFormat(for: videoDevice, targetRates: targetRates)
 
                 if let (format, fps) = result {

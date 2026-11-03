@@ -1541,7 +1541,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           // Dồn 100% băng thông và tài nguyên cho WebRTC Live mượt mà nhất
           video.muted = true;
           video.pause();
-          hls.stopLoad();
         }
       });
 
@@ -1690,13 +1689,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const lastHlsEnd = b.end(b.length - 1);
         if (scheduledSlowRef.current && isLiveRef.current) {
           const sched = scheduledSlowRef.current;
-          if (lastHlsEnd >= sched.targetTime - 0.25) {
+          const elapsedSec = (Date.now() - sched.scheduledAt) / 1000;
+          if (lastHlsEnd >= sched.targetTime - 0.25 || elapsedSec >= 1.5) {
             console.log('[LivePlayer] 🎯 HLS đã nạp tới Cờ Hẹn -> Tự động kích hoạt Slow:', sched);
-            const targetTime = sched.targetTime;
+            const targetTime = Math.min(sched.targetTime, Math.max(0, lastHlsEnd - 0.25));
             const speed = sched.speed;
             scheduledSlowRef.current = null;
             setScheduledSlow(null);
-            switchToSlowAtTime(targetTime, speed);
+            switchToSlowAtTime(targetTime > 0 ? targetTime : sched.targetTime, speed);
           }
         }
       }
@@ -2093,9 +2093,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (scheduledSlowRef.current) {
       scheduledSlowRef.current = null;
       setScheduledSlow(null);
-      if (hlsRef.current && isLiveRef.current) {
-        hlsRef.current.stopLoad();
-      }
       showModeNotice('live', 'ĐÃ HỦY CỜ HẸN SLOW', 'Đã hủy lệnh tự động quay chậm', '');
       return;
     }
@@ -2106,24 +2103,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
 
-    // NẠP ĐỆM ON-DEMAND: Tạm dừng video ngầm, dồn 100% băng thông tải 5s trước mốc hẹn
-    const priorityStart = Math.max(0, targetTime - 5.0);
-    if (replayVideoRef.current) {
-      replayVideoRef.current.pause();
-      replayVideoRef.current.currentTime = priorityStart;
-    }
+    // Đảm bảo Hls tiếp tục nạp để đón segment của mốc hẹn
     if (hlsRef.current) {
       try {
-        hlsRef.current.stopLoad();
-        if (typeof (hlsRef.current as any).trigger === 'function') {
-          try {
-            (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: Number.POSITIVE_INFINITY, type: undefined });
-          } catch {}
-        }
-        hlsRef.current.startLoad(priorityStart);
-        console.log(`[LivePlayer] 🎯 Hẹn Slow (On-Demand): Bắt đầu nạp đệm từ ${priorityStart.toFixed(2)}s đến mốc hẹn ${targetTime.toFixed(2)}s`);
+        hlsRef.current.startLoad();
+        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã cắm cờ tại ${targetTime.toFixed(2)}s, HLS sẵn sàng kích hoạt Slow trong 0.5s–1s`);
       } catch (err) {
-        console.warn('[LivePlayer] Lỗi hls.startLoad ưu tiên:', err);
+        console.warn('[LivePlayer] Lỗi hls.startLoad:', err);
       }
     }
 

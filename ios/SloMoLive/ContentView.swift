@@ -482,7 +482,9 @@ extension ContentView {
                     .minimumScaleFactor(0.7)
                     .layoutPriority(1)
                 Spacer(minLength: 2)
+                StatusChip(text: cameraManager.selectedResolution.shortLabel, color: .cyan)
                 StatusChip(text: "\(Int(cameraManager.currentFPS)) FPS", color: .yellow)
+                StatusChip(text: String(format: "Q:%.2f", cameraManager.selectedQuality), color: .purple)
                 StatusChip(text: "\(cameraManager.selectedBitrateMbps)M", color: .mint)
                 StatusChip(icon: net.icon, text: net.text, color: net.color)
                 if locationManager.lastKnownLocation != nil {
@@ -666,6 +668,12 @@ extension ContentView {
                 )
             }
 
+            // Chọn độ phân giải & FPS
+            resolutionMenu
+
+            // Chọn Quality (Chất lượng nén)
+            qualityMenu
+
             // Chọn bitrate
             bitrateMenu
 
@@ -675,6 +683,58 @@ extension ContentView {
         .padding(10)
         .background(Color.black.opacity(0.6))
         .cornerRadius(18)
+    }
+
+    /// Menu chọn độ phân giải và FPS (720p / 1080p, 120fps / 60fps)
+    private var resolutionMenu: some View {
+        Menu {
+            Section("Độ phân giải & FPS") {
+                ForEach(CameraManager.ResolutionPreset.allCases) { preset in
+                    Button(action: {
+                        cameraManager.setResolution(preset)
+                    }) {
+                        if preset == cameraManager.selectedResolution {
+                            Label(preset.label, systemImage: "checkmark")
+                        } else {
+                            Text(preset.label)
+                        }
+                    }
+                }
+            }
+        } label: {
+            ControlTile(
+                icon: "aspectratio.fill",
+                title: cameraManager.selectedResolution.shortLabel,
+                tint: .cyan,
+                isActive: true
+            )
+        }
+    }
+
+    /// Menu chọn Chất lượng nén VideoToolbox (Quality: 0.70 / 0.85 / 0.95)
+    private var qualityMenu: some View {
+        Menu {
+            Section("Chất lượng nén VideoToolbox") {
+                ForEach(CameraManager.qualityPresets, id: \.self) { preset in
+                    Button(action: {
+                        cameraManager.setQuality(preset.val)
+                    }) {
+                        if abs(preset.val - cameraManager.selectedQuality) < 0.01 {
+                            Label(preset.label, systemImage: "checkmark")
+                        } else {
+                            Text(preset.label)
+                        }
+                    }
+                }
+            }
+        } label: {
+            ControlTile(
+                icon: "slider.horizontal.3",
+                title: String(format: "Q: %.2f", cameraManager.selectedQuality),
+                tint: .purple,
+                isActive: true
+            )
+        }
     }
 
     /// Menu chọn bitrate tối đa + bật/tắt tự hạ khi mạng yếu.

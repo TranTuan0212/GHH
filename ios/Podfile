@@ -29,7 +29,7 @@ post_install do |installer|
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse'
         ).gsub(
           'VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel);',
-          "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_Quality, (__bridge CFTypeRef)@(0.95));\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
+          "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        float customQuality = [[NSUserDefaults standardUserDefaults] floatForKey:@"SloMoLive.videoQuality"];\n        if (customQuality <= 0.0f || customQuality > 1.0f) { customQuality = 0.70f; }\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_Quality, (__bridge CFTypeRef)@(customQuality));\n        int64_t bytesPerSec = (int64_t)((_configuration.videoMaxBitRate > 0 ? _configuration.videoMaxBitRate : 8000000) * 1.2 / 8);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_DataRateLimits, (__bridge CFArrayRef)@[@(bytesPerSec), @(1)]);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
         ).gsub(
           'if (frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {',
           'if (frameCount <= 10 || frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {'
@@ -92,10 +92,10 @@ post_install do |installer|
           buf_source = File.read(streaming_buf)
           buf_patched = buf_source.gsub(
             'defaultSendBufferMaxCount = 600;',
-            'defaultSendBufferMaxCount = 800;'
+            'defaultSendBufferMaxCount = 200;'
           ).gsub(
             'defaultSortBufferMaxCount = 5;',
-            'defaultSortBufferMaxCount = 2;'
+            'defaultSortBufferMaxCount = 5;'
           )
           File.write(streaming_buf, buf_patched) if buf_patched != buf_source
         end
