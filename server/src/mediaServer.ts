@@ -93,6 +93,7 @@ export function ensureRtcRelay(streamKey: string): void {
     '-map', '0:v:0',
     '-map', '0:a:0?',
     '-c:v', 'copy',
+    '-bsf:v', 'setts=ts=N/(120*TB)',
     '-c:a', 'libopus',
     '-b:a', '64k',
     '-ar', '48000',
@@ -245,7 +246,7 @@ export function resetReplaySession(streamKey: string): boolean {
     '-rtsp_transport', 'tcp',
     '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
     '-c:v', 'copy',
-    '-bsf:v', 'h264_mp4toannexb',
+    '-bsf:v', 'h264_mp4toannexb,setts=ts=N/(120*TB)',
     // Cố ý giữ track AAC (copy, 0% CPU), KHÔNG dùng '-an' vì làm Replay mất tiếng (xem .agent/DEBUG_LOG.md 2026-11-03)
     '-map', '0:v',
     '-map', '0:a?',
@@ -299,7 +300,7 @@ export function startHlsSession(streamKey: string): void {
     '-rtsp_transport', 'tcp',
     '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
     '-c:v', 'copy',
-    '-bsf:v', 'h264_mp4toannexb',
+    '-bsf:v', 'h264_mp4toannexb,setts=ts=N/(120*TB)',
     // Cố ý giữ track AAC (copy, 0% CPU), KHÔNG dùng '-an' vì làm Replay mất tiếng (xem .agent/DEBUG_LOG.md 2026-11-03)
     '-map', '0:v',
     '-map', '0:a?',

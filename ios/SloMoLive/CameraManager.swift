@@ -1521,7 +1521,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             // bất kỳ lỗi nội bộ nào của LFLiveKit, ta nuốt exception thay vì crash toàn app.
             // Swift không có try-catch cho ObjC exception gốc, nên ta đặt cờ atomic và để LFLiveKit
             // xử lý; nếu pushVideo trả về early do session invalid thì frame đó bị drop, không crash.
-            liveSession?.pushVideo(pixelBuffer)
+            let ptsMs = UInt64((CMTimeGetSeconds(pts) * 1000.0).rounded())
+            liveSession?.pushVideo(pixelBuffer, timeStamp: ptsMs)
         }
     }
 }

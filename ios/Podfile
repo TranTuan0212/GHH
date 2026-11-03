@@ -17,10 +17,8 @@ post_install do |installer|
       config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
     end
 
-    # LFLiveKit enables B-frame reordering by default. At 120/240fps its RTMP publisher
-    # can emit non-monotonic DTS, which makes the server-side 60fps decoder stall. For this
-    # low-latency DVR pipeline, encode in display order (no B-frames) so PTS/DTS are monotonic.
     if target.name == 'LFLiveKit'
+      # 1. Patch LFHardwareVideoEncoder.m: B-frame off, Dynamic Quality, Keyframe interval
       encoder = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'coder', 'LFHardwareVideoEncoder.m')
       if File.exist?(encoder)
         source = File.read(encoder)
@@ -34,47 +32,87 @@ post_install do |installer|
           'if (frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {',
           'if (frameCount <= 10 || frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {'
         )
-        File.write(encoder, patched) if patched != source
+        if patched != source
+          File.write(encoder, patched)
+          puts '[Podfile] Patched LFHardwareVideoEncoder.m (B-frame off, Quality, Profile High, Keyframe)'
+        else
+          puts '[Podfile] WARNING: LFHardwareVideoEncoder.m patch pattern not found'
+        end
       end
 
-      # Prevent uint64_t timestamp underflow in LFLiveSession.m and allow immediate keyframe lock
+      # 2. Patch LFLiveSession.h: Khai báo method pushVideo:timeStamp: để nhận Hardware PTS từ camera
+      session_h = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'LFLiveSession.h')
+      if File.exist?(session_h)
+        h_source = File.read(session_h)
+        h_patched = h_source.gsub(
+          '- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer;',
+          "- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer;\n- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer timeStamp:(uint64_t)timeStamp;"
+        )
+        if h_patched != h_source
+          File.write(session_h, h_patched)
+          puts '[Podfile] Patched LFLiveSession.h (declared pushVideo:timeStamp:)'
+        else
+          puts '[Podfile] WARNING: LFLiveSession.h pushVideo pattern not found'
+        end
+      end
+
+      # 3. Patch LFLiveSession.m: Triệt tiêu Timestamp Jitter bằng Hardware PTS và phân tách Video/Audio base timestamp
       session_file = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'LFLiveSession.m')
       if File.exist?(session_file)
         sess_source = File.read(session_file)
+        old_push_video = "- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer{\n    if(self.captureType & LFLiveInputMaskVideo){\n        if (self.uploading) [self.videoEncoder encodeVideoData:pixelBuffer timeStamp:NOW];\n    }\n}"
+        new_push_video = "- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer{\n    [self pushVideo:pixelBuffer timeStamp:NOW];\n}\n\n- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer timeStamp:(uint64_t)timeStamp{\n    if(self.captureType & LFLiveInputMaskVideo){\n        if (self.uploading) [self.videoEncoder encodeVideoData:pixelBuffer timeStamp:timeStamp];\n    }\n}"
+        
+        old_send_buffer = "- (void)pushSendBuffer:(LFFrame*)frame{\n    if(self.relativeTimestamps == 0){\n        self.relativeTimestamps = frame.timestamp;\n    }\n    frame.timestamp = [self uploadTimestamp:frame.timestamp];\n    [self.socket sendFrame:frame];\n}"
+        new_send_buffer = <<-'OBJC'.chomp
+- (void)pushSendBuffer:(LFFrame*)frame{
+    static uint64_t _relVideoTs = 0;
+    static uint64_t _relAudioTs = 0;
+    if (self.relativeTimestamps == 0) {
+        self.relativeTimestamps = frame.timestamp;
+        _relVideoTs = 0;
+        _relAudioTs = 0;
+    }
+    if ([frame isKindOfClass:[LFVideoFrame class]]) {
+        if (_relVideoTs == 0) _relVideoTs = frame.timestamp;
+        frame.timestamp = (frame.timestamp >= _relVideoTs) ? (frame.timestamp - _relVideoTs) : 0;
+    } else {
+        if (_relAudioTs == 0) _relAudioTs = frame.timestamp;
+        frame.timestamp = (frame.timestamp >= _relAudioTs) ? (frame.timestamp - _relAudioTs) : 0;
+    }
+    [self.socket sendFrame:frame];
+}
+OBJC
+
         sess_patched = sess_source.gsub(
           'if(frame.isKeyFrame && self.hasCaptureAudio) self.hasKeyFrameVideo = YES;',
           'if(frame.isKeyFrame) { self.hasCaptureAudio = YES; self.hasKeyFrameVideo = YES; }'
         ).gsub(
-          'currentts = captureTimestamp - self.relativeTimestamps;',
-          'currentts = (captureTimestamp > self.relativeTimestamps) ? (captureTimestamp - self.relativeTimestamps) : 0;'
+          old_push_video,
+          new_push_video
+        ).gsub(
+          old_send_buffer,
+          new_send_buffer
         )
-        File.write(session_file, sess_patched) if sess_patched != sess_source
-      end
 
-      # Adaptive bitrate gốc của LFLiveKit chỉ +50 kbps / -100 kbps mỗi lần LFStreamingBuffer báo trạng thái
-      # (khoảng 5 giây/lần) → hạ từ 20 xuống 12 Mbps mất hàng phút, không kịp chống giật khi 4G tụt.
-      # Vá: giảm 1 Mbps (không thấp hơn videoMinBitRate), tăng 0.25 Mbps (không vượt videoMaxBitRate).
-      # Nếu chuỗi gốc không khớp (bản LFLiveKit khác) thì gsub không đổi gì — an toàn, giữ hành vi cũ.
-      if File.exist?(session_file)
-        abr_source = File.read(session_file)
-        abr_patched = abr_source.gsub(
+        # Adaptive bitrate steps
+        sess_patched = sess_patched.gsub(
           'videoBitRate = videoBitRate + 50 * 1000;',
           'videoBitRate = MIN(videoBitRate + 250 * 1000, _videoConfiguration.videoMaxBitRate);'
         ).gsub(
           'videoBitRate = videoBitRate - 100 * 1000;',
           'videoBitRate = (videoBitRate > self.videoConfiguration.videoMinBitRate + 1000 * 1000) ? (videoBitRate - 1000 * 1000) : self.videoConfiguration.videoMinBitRate;'
         )
-        if abr_patched != abr_source
-          File.write(session_file, abr_patched)
-          puts '[Podfile] Patched LFLiveSession adaptive bitrate steps (-1 Mbps / +0.25 Mbps)'
+
+        if sess_patched != sess_source
+          File.write(session_file, sess_patched)
+          puts '[Podfile] Patched LFLiveSession.m (pushVideo:timeStamp:, Monotonic Video/Audio Timestamps, ABR)'
         else
-          puts '[Podfile] WARNING: LFLiveSession adaptive bitrate step pattern not found, left unchanged'
+          puts '[Podfile] WARNING: LFLiveSession.m patch pattern not found'
         end
       end
 
-      # Prevent LFLiveVideoConfiguration from creating a dummy AVCaptureSession attached to
-      # AVCaptureDevicePositionFront, which resets the front camera's activeFormat (1080p 120fps)
-      # back to 720p 30fps whenever defaultConfiguration is called.
+      # 4. Patch LFLiveVideoConfiguration.m: Bỏ dummy AVCaptureSession
       video_cfg = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'configuration', 'LFLiveVideoConfiguration.m')
       if File.exist?(video_cfg)
         cfg_source = File.read(video_cfg)
@@ -82,10 +120,15 @@ post_install do |installer|
           "- (LFLiveVideoSessionPreset)supportSessionPreset:(LFLiveVideoSessionPreset)sessionPreset {",
           "- (LFLiveVideoSessionPreset)supportSessionPreset:(LFLiveVideoSessionPreset)sessionPreset {\n    return sessionPreset;"
         )
-        File.write(video_cfg, cfg_patched) if cfg_patched != cfg_source
+        if cfg_patched != cfg_source
+          File.write(video_cfg, cfg_patched)
+          puts '[Podfile] Patched LFLiveVideoConfiguration.m (bypass dummy AVCaptureSession)'
+        else
+          puts '[Podfile] WARNING: LFLiveVideoConfiguration.m patch pattern not found'
+        end
       end
 
-      # Tối ưu LFStreamingBuffer: Giữ độ trễ real-time < 1.5s, không để tích lũy lag trong RAM.
+      # 5. Patch LFStreamingBuffer.m: Tối ưu hàng đợi đệm trễ < 1.6s
       ['publish', 'buffer'].each do |subdir|
         streaming_buf = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', subdir, 'LFStreamingBuffer.m')
         if File.exist?(streaming_buf)
@@ -93,21 +136,17 @@ post_install do |installer|
           buf_patched = buf_source.gsub(
             'defaultSendBufferMaxCount = 600;',
             'defaultSendBufferMaxCount = 200;'
-          ).gsub(
-            'defaultSortBufferMaxCount = 5;',
-            'defaultSortBufferMaxCount = 5;'
           )
-          File.write(streaming_buf, buf_patched) if buf_patched != buf_source
+          if buf_patched != buf_source
+            File.write(streaming_buf, buf_patched)
+            puts "[Podfile] Patched LFStreamingBuffer.m in #{subdir} (buffer max 200f)"
+          else
+            puts "[Podfile] WARNING: LFStreamingBuffer.m patch pattern not found in #{subdir}"
+          end
         end
       end
 
-      # 1. Eliminate cross-queue dispatch ping-pong after each RTMP packet in LFStreamRtmpSocket.m.
-      # 2. Synchronously emit both H.264 Sequence Header (0x17 0x00) and AAC Sequence Header (0xAF 0x00)
-      #    before any media payload packet so MediaMTX always registers 2 tracks on the very first attempt
-      #    (preventing 'received a packet for audio track 0, but track is not set up').
-      # 3. Separate RTMP chunk channels (0x04 for video, 0x05 for audio) and use RTMP_PACKET_SIZE_LARGE
-      #    to prevent uint32_t relative timestamp delta underflow in pili-librtmp
-      #    (preventing 'extended chunk stream IDs are not supported (yet)').
+      # 6. Patch LFStreamRtmpSocket.m: Eliminate dispatch ping-pong, sync audio sequence header, separate channels
       ['LFStreamRtmpSocket.m', 'LFStreamRTMPSocket.m'].each do |sock_name|
         rtmp_sock = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'publish', sock_name)
         next unless File.exist?(rtmp_sock)
@@ -183,16 +222,31 @@ OBJC
     rtmp_pack.m_headerType = RTMP_PACKET_SIZE_LARGE;
 OBJC
         sock_patched = sock_source.gsub(
-          /dispatch_async\(dispatch_get_global_queue\(DISPATCH_QUEUE_PRIORITY_DEFAULT,\s*0\),\s*\^\{\s*\/\/[^\n]*\n\s*_self\.isSending\s*=\s*NO;\s*\}\);/,
+          /dispatch_async\(dispatch_get_global_queue\(DISPATCH_QUEUE_PRIORITY_DEFAULT,\s*0\),\s*\^\{\s*\/\/[^
+]*
+\s*_self\.isSending\s*=\s*NO;\s*\}\);/,
           '_self.isSending = NO;'
         ).gsub(
-          old_send_block.gsub("\r\n", "\n"),
-          new_send_block.gsub("\r\n", "\n")
+          old_send_block.gsub("
+", "
+"),
+          new_send_block.gsub("
+", "
+")
         ).gsub(
-          old_channel_block.gsub("\r\n", "\n"),
-          new_channel_block.gsub("\r\n", "\n")
+          old_channel_block.gsub("
+", "
+"),
+          new_channel_block.gsub("
+", "
+")
         )
-        File.write(rtmp_sock, sock_patched) if sock_patched != sock_source
+        if sock_patched != sock_source
+          File.write(rtmp_sock, sock_patched)
+          puts "[Podfile] Patched #{sock_name} (direct sending, audio header sync, chunk channels 0x04/0x05)"
+        else
+          puts "[Podfile] WARNING: #{sock_name} patch pattern not found"
+        end
       end
     end
   end
