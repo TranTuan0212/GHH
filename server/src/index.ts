@@ -163,7 +163,7 @@ app.get('/api/server-info', (req, res) => {
     primaryIp,
     serverUrl: `http://${primaryIp}:${PORT}`,
     // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
-    rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+    rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live/`,
     hlsBaseUrl: resolveHlsBaseUrl(req),
     replayHlsBaseUrl: resolveReplayHlsBaseUrl(req),
     port: PORT,
@@ -210,14 +210,13 @@ app.use('/replay', express.static(path.join(MEDIA_ROOT, 'replay'), {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     } else if (filePath.endsWith('.ts')) {
-      // Đặt no-cache để trình duyệt luôn tải file .ts mới của phiên mới, không bao giờ dùng lại cache cũ từ phiên trước
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
       res.setHeader('Content-Type', 'video/MP2T');
     }
   }
 }));
 
-app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
+app.use('/live', express.static(path.join(MEDIA_ROOT, 'replay'), {
   setHeaders: (res, filePath) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
@@ -226,11 +225,63 @@ app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     } else if (filePath.endsWith('.ts')) {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
       res.setHeader('Content-Type', 'video/MP2T');
     }
   }
 }));
+
+// WebRTC WHEP Reverse Proxy (tránh lỗi Mixed Content HTTPS -> HTTP port 8888 trên slomoview.stream / VPS 157.66.100.10)
+app.post('/api/whep/:streamKey', express.text({ type: ['application/sdp', 'text/plain', '*/*'], limit: '2mb' }), async (req, res) => {
+  try {
+    const streamKey = (req.params.streamKey || '').replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!streamKey) {
+      return res.status(400).send('Invalid streamKey');
+    }
+    const sdpOffer = req.body;
+    const ports = [8888, 8889];
+    let upstreamRes: any = null;
+    let answerText = '';
+
+    for (const port of ports) {
+      try {
+        let resp = await fetch(`http://127.0.0.1:${port}/live/${streamKey}/whep`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: sdpOffer
+        });
+        if (resp.status === 404) {
+          resp = await fetch(`http://127.0.0.1:${port}/${streamKey}/whep`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: sdpOffer
+          });
+        }
+        if (resp.ok) {
+          upstreamRes = resp;
+          answerText = await resp.text();
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!upstreamRes) {
+      return res.status(502).send('WHEP upstream unavailable');
+    }
+
+    res.status(upstreamRes.status);
+    res.setHeader('Content-Type', upstreamRes.headers.get('content-type') || 'application/sdp');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(answerText);
+  } catch (err: any) {
+    res.status(502).send('WHEP upstream unavailable');
+  }
+});
+
+app.all('/api/whep/:streamKey/*', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.status(200).end();
+});
 
 /**
  * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
@@ -452,7 +503,7 @@ io.on('connection', (socket) => {
       groupNames: db.getGroupNames(roomId),
       serverIps: ips,
       serverUrl: `http://${primaryIp}:${PORT}`,
-      rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+      rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live/`,
       hlsBaseUrl: resolveHlsBaseUrl(fakeReq)
     });
   });
