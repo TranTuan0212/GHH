@@ -1685,20 +1685,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         }
         setBufferedRanges(list);
 
-        // Kiểm tra xem Chấm Vàng HLS đã nạp tới Cờ Hẹn Slow chưa
-        const lastHlsEnd = b.end(b.length - 1);
-        if (scheduledSlowRef.current && isLiveRef.current) {
-          const sched = scheduledSlowRef.current;
-          const elapsedSec = (Date.now() - sched.scheduledAt) / 1000;
-          if (lastHlsEnd >= sched.targetTime - 0.25 || elapsedSec >= 1.5) {
-            console.log('[LivePlayer] 🎯 HLS đã nạp tới Cờ Hẹn -> Tự động kích hoạt Slow:', sched);
-            const targetTime = Math.min(sched.targetTime, Math.max(0, lastHlsEnd - 0.25));
-            const speed = sched.speed;
-            scheduledSlowRef.current = null;
-            setScheduledSlow(null);
-            switchToSlowAtTime(targetTime > 0 ? targetTime : sched.targetTime, speed);
-          }
-        }
+
       }
     };
 
@@ -1914,9 +1901,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     updateFrozenTimeline(null);
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
-    scheduledSlowRef.current = null;
-    setScheduledSlow(null);
-
     // 1. Kích hoạt và bật tiếng cho luồng trực tiếp Live WebRTC
     const liveVid = liveVideoRef.current;
     if (liveVid) {
@@ -2088,12 +2072,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     );
   };
 
-  // Bật / tắt hẹn giờ Slow tự động khi HLS nạp tới mốc
+  // Nhảy tới mốc hẹn và phát Slow-mo
+  const jumpToScheduledSlow = () => {
+    if (!scheduledSlowRef.current) return;
+    const sched = scheduledSlowRef.current;
+    // Lùi nhẹ 1.0s trước mốc hẹn để xem trọn vẹn tình huống
+    const jumpTime = Math.max(0, sched.targetTime - 1.0);
+    switchToSlowAtTime(jumpTime, sched.speed);
+  };
+
+  // Cắm cờ mốc hẹn Slow
   const toggleScheduledSlow = (customSpeed?: number) => {
     if (scheduledSlowRef.current) {
-      scheduledSlowRef.current = null;
-      setScheduledSlow(null);
-      showModeNotice('live', 'ĐÃ HỦY CỜ HẸN SLOW', 'Đã hủy lệnh tự động quay chậm', '');
+      jumpToScheduledSlow();
       return;
     }
     const speed = customSpeed ?? autoSlowSpeed;
@@ -2103,11 +2094,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
 
-    // Đảm bảo Hls tiếp tục nạp để đón segment của mốc hẹn
+    // Đảm bảo Hls tiếp tục nạp
     if (hlsRef.current) {
       try {
-        hlsRef.current.startLoad();
-        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã cắm cờ tại ${targetTime.toFixed(2)}s, HLS sẵn sàng kích hoạt Slow trong 0.5s–1s`);
+        (hlsRef.current as any).startLoad();
+        console.log(`[LivePlayer] 🎯 Đã cắm cờ mốc hẹn tại: ${targetTime.toFixed(2)}s`);
       } catch (err) {
         console.warn('[LivePlayer] Lỗi hls.startLoad:', err);
       }
@@ -2115,9 +2106,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     showModeNotice(
       'slow',
-      `🎯 ĐÃ CẮM CỜ HẸN SLOW ${speed}x (ĐỆM 5S AN TOÀN)`,
-      'Đã dồn 100% tốc độ nạp đệm 5s trước khoảnh khắc lật bài, sẵn sàng tự kích hoạt Slow!',
-      'Bấm phím [S] lần nữa để hủy hẹn'
+      `🎯 ĐÃ CẮM CỜ MỐC HẸN ${speed}x!`,
+      `Mốc hẹn đã được giữ trên timeline. Bấm [XEM MỐC HẸN] hoặc phím [S] để phát quay chậm!`,
+      'Bấm vào cờ 🚩 trên thanh tua để nhảy tới mốc'
     );
   };
 
@@ -2365,11 +2356,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
 
     if (e.key === 's' || e.key === 'S') {
-      if (isLiveRef.current) {
-        e.preventDefault();
+      e.preventDefault();
+      if (scheduledSlowRef.current) {
+        jumpToScheduledSlow();
+      } else {
         toggleScheduledSlow();
-        return;
       }
+      return;
     }
 
     if (e.key === 'f' || e.key === 'F') {
@@ -3062,21 +3055,43 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               </div>
             </div>
           </div>
-          {!isLive && (
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5">
+            {scheduledSlow ? (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => jumpToScheduledSlow()}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer bg-cyan-500 hover:bg-cyan-400 text-slate-950 border-cyan-300 shadow-sm animate-pulse"
+                  title="Bấm để nhảy tới mốc hẹn (S)"
+                >
+                  <span>⚡</span>
+                  <span>Mốc Hẹn {scheduledSlow.speed}x (S)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    scheduledSlowRef.current = null;
+                    setScheduledSlow(null);
+                    showModeNotice('live', 'ĐÃ HỦY CỜ HẸN', 'Đã xóa mốc hẹn', '');
+                  }}
+                  className="px-1.5 py-1 rounded-full text-[11px] font-bold text-slate-400 hover:text-red-400 transition-all"
+                  title="Xóa mốc hẹn"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
               <button
                 type="button"
                 onClick={() => toggleScheduledSlow()}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer ${
-                  scheduledSlow
-                    ? 'bg-cyan-500 text-slate-950 border-cyan-300 animate-pulse ring-1 ring-cyan-400'
-                    : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300 shadow-sm'
-                }`}
-                title="Hẹn Slow tự động với đệm 5s an toàn (Phím tắt: S)"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300 shadow-sm"
+                title="Cắm cờ mốc hẹn Slow (Phím tắt: S)"
               >
-                <span>{scheduledSlow ? '⏳' : '🎯'}</span>
-                <span>{scheduledSlow ? 'Chờ HLS...' : `Hẹn Slow ${autoSlowSpeed}x (S)`}</span>
+                <span>🎯</span>
+                <span>Hẹn Slow {autoSlowSpeed}x (S)</span>
               </button>
+            )}
+            {!isLive && (
               <button
                 type="button"
                 onClick={() => jumpToLive()}
@@ -3084,8 +3099,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               >
                 VỀ LIVE
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* DVR Seekbar: YouTube-style với hover tooltip, progress fill, drag mượt */}
@@ -3159,13 +3174,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             {/* 1. CỜ HẸN SLOW (Marker xanh neon) nếu người dùng đã bấm hẹn */}
             {flagMarkerRatio !== null && (
               <div
-                className="absolute top-1/2 -translate-y-1/2 pointer-events-none z-10 flex flex-col items-center"
+                className="absolute top-1/2 -translate-y-1/2 z-20 flex flex-col items-center cursor-pointer group/flag select-none"
                 style={{ left: `${flagMarkerRatio * 100}%`, transform: 'translate(-50%, -50%)' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  jumpToScheduledSlow();
+                }}
+                title={`Bấm để nhảy tới mốc hẹn ${scheduledSlow?.speed}x`}
               >
-                <span className="px-1.5 py-0.2 rounded bg-cyan-400 text-slate-950 font-black text-[9px] shadow-lg animate-pulse mb-0.5 whitespace-nowrap">
+                <span className="px-1.5 py-0.2 rounded bg-cyan-400 text-slate-950 font-black text-[9px] shadow-lg animate-pulse mb-0.5 whitespace-nowrap hover:scale-110 transition-transform">
                   🚩 HẸN {scheduledSlow?.speed}x
                 </span>
-                <span className="w-1 h-4 bg-cyan-300 rounded-full shadow-md shadow-cyan-400/80"></span>
+                <span className="w-1.5 h-4 bg-cyan-300 rounded-full shadow-md shadow-cyan-400/80"></span>
               </div>
             )}
 
@@ -3822,19 +3842,41 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         <div className="absolute top-4 right-4 z-[999990] flex items-center gap-2">
           {isLive ? (
             <>
-              <button
-                type="button"
-                onClick={() => toggleScheduledSlow()}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer ${
-                  scheduledSlow
-                    ? 'bg-cyan-500 text-slate-950 border-cyan-300 animate-pulse ring-2 ring-cyan-400/50'
-                    : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300'
-                }`}
-                title="Bấm để hẹn tự động quay chậm khi HLS nạp tới khoảnh khắc này (Phím tắt: S)"
-              >
-                <span>{scheduledSlow ? '⏳' : '🎯'}</span>
-                <span>{scheduledSlow ? 'ĐANG CHỜ HLS...' : `HẸN SLOW ${autoSlowSpeed}x (S)`}</span>
-              </button>
+              {scheduledSlow ? (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => jumpToScheduledSlow()}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 text-slate-950 border-cyan-300 ring-2 ring-cyan-400/50 animate-pulse"
+                    title="Bấm để nhảy ngay tới mốc đã hẹn và phát Slow (Phím tắt: S)"
+                  >
+                    <span>⚡</span>
+                    <span>XEM MỐC HẸN {scheduledSlow.speed}x (S)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      scheduledSlowRef.current = null;
+                      setScheduledSlow(null);
+                      showModeNotice('live', 'ĐÃ HỦY CỜ HẸN', 'Đã xóa mốc hẹn', '');
+                    }}
+                    className="p-1.5 rounded-xl bg-slate-900/90 text-slate-400 hover:text-red-400 border border-white/20 transition-all text-xs font-bold"
+                    title="Hủy mốc hẹn"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => toggleScheduledSlow()}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300"
+                  title="Cắm cờ đánh dấu mốc thời gian này để xem lại Slow (Phím tắt: S)"
+                >
+                  <span>🎯</span>
+                  <span>HẸN SLOW {autoSlowSpeed}x (S)</span>
+                </button>
+              )}
 
               <div className="bg-slate-900/95 border border-white/20 rounded-xl p-0.5 flex items-center gap-0.5 text-[11px] font-mono font-bold shadow-xl">
                 {[0.1, 0.25, 0.5].map((spd) => (
@@ -3843,7 +3885,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                     type="button"
                     onClick={() => {
                       setAutoSlowSpeed(spd);
-                      if (scheduledSlow) toggleScheduledSlow(spd);
+                      if (scheduledSlow) {
+                        const updated = { ...scheduledSlow, speed: spd };
+                        scheduledSlowRef.current = updated;
+                        setScheduledSlow(updated);
+                      }
                     }}
                     className={`px-2 py-1 rounded-lg transition-all ${
                       autoSlowSpeed === spd
@@ -3857,14 +3903,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               </div>
             </>
           ) : (
-            <button
-              type="button"
-              onClick={() => jumpToLive()}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-red-600 hover:bg-red-500 text-white border-red-400 animate-pulse"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>VỀ LIVE (Enter)</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              {scheduledSlow && (
+                <button
+                  type="button"
+                  onClick={() => jumpToScheduledSlow()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs shadow-xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-cyan-500/90 hover:bg-cyan-400 text-slate-950 border-cyan-300"
+                  title="Tua lại đúng mốc hẹn"
+                >
+                  <span>🚩</span>
+                  <span>Về mốc hẹn ({scheduledSlow.speed}x)</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => jumpToLive()}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-red-600 hover:bg-red-500 text-white border-red-400 animate-pulse"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>VỀ LIVE (Enter)</span>
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -3900,8 +3959,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           {/* Cờ Hẹn tại đáy Fullscreen */}
           {flagMarkerRatio !== null && (
             <div
-              className="absolute bottom-0 -translate-x-1/2 w-1.5 h-3 bg-cyan-400 shadow-lg shadow-cyan-400/80"
+              className="absolute bottom-0 -translate-x-1/2 w-2 h-4 bg-cyan-400 shadow-lg shadow-cyan-400/80 cursor-pointer pointer-events-auto z-20"
               style={{ left: `${flagMarkerRatio * 100}%` }}
+              onClick={(e) => {
+                e.stopPropagation();
+                jumpToScheduledSlow();
+              }}
+              title={`Mốc hẹn ${scheduledSlow?.speed}x`}
             />
           )}
 
