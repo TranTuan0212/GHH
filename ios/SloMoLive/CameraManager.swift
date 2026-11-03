@@ -1064,8 +1064,6 @@ public class CameraManager: NSObject, ObservableObject {
         isConnecting = true
         errorMessage = nil
 
-        // Reset sạch trạng thái nhận diện bài của phiên cũ để bắt nhạy 100% ngay từ lá bài đầu tiên
-        CardDetector.shared.resetState()
 
         // ĐẶT BẰNG TRUE: Cung cấp khung hình video ngay từ đầu đồng bộ cùng audio stream,
         // để LFLiveKit khởi tạo onMetaData đầy đủ cả 2 tracks (H.264 & AAC) cùng lúc tới MediaMTX.

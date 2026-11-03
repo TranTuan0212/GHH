@@ -215,127 +215,6 @@ struct ContentView: View {
                         cameraManager.setupCamera { _ in }
                         roiSync.start()
                     }
-                                        // Ô Soi Reticle ROI đồng bộ 1:1 từ Web Dashboard + Kết quả AI
-                    GeometryReader { geo in
-                        let viewW = geo.size.width
-                        let viewH = geo.size.height
-
-                        if networkManager.isAiModeEnabled && roiSync.isRoiVisible && roiSync.isActive {
-                            let orient = cameraManager.currentCaptureOrientation
-                            let isFront = (cameraManager.currentDevicePosition == .front)
-                            let isLandscape = (orient == .landscapeLeft || orient == .landscapeRight)
-
-                            // Khử lệch gương của Cam trước nếu dùng camera selfie
-                            let rx = isFront ? (1.0 - roiSync.normX) : roiSync.normX
-                            let ry = roiSync.normY
-                            let rw = roiSync.normW
-                            let rh = roiSync.normH
-
-                            // Trên màn hình portrait của iPhone (viewW x viewH, viewW < viewH):
-                            let screenLong = max(viewW, viewH)
-                            let screenShort = min(viewW, viewH)
-
-                            // Khi để ngang (Landscape):
-                            // Luồng video trên Web là 16:9 (1920x1080).
-                            // - Chiều ngang theo mắt người (dọc theo cạnh dài phone) = rw * 1920 (scaled)
-                            // - Chiều dọc theo mắt người (dọc theo cạnh ngắn phone) = rh * 1080 (scaled)
-                            let scale = isLandscape
-                                ? max(screenLong / 1920.0, screenShort / 1080.0)
-                                : max(viewW / 1080.0, viewH / 1920.0)
-
-                            let renderedW = (isLandscape ? 1920.0 : 1080.0) * scale
-                            let renderedH = (isLandscape ? 1080.0 : 1920.0) * scale
-
-                            // boxW vẽ dọc theo SwiftUI X (cạnh ngắn máy), boxH vẽ dọc theo SwiftUI Y (cạnh dài máy)
-                            let boxW: CGFloat = isLandscape ? (renderedH * rh) : (renderedW * rw)
-                            let boxH: CGFloat = isLandscape ? (renderedW * rw) : (renderedH * rh)
-
-                            let (boxX, boxY): (CGFloat, CGFloat) = {
-                                if isLandscape {
-                                    let offsetX = (screenShort - renderedH) / 2.0
-                                    let offsetY = (screenLong - renderedW) / 2.0
-                                    switch orient {
-                                    case .landscapeRight:
-                                        // Camera ở bên trái người nhìn
-                                        let px = offsetX + (1.0 - ry) * renderedH
-                                        let py = offsetY + rx * renderedW
-                                        return (px, py)
-                                    case .landscapeLeft:
-                                        // Camera ở bên phải người nhìn
-                                        let px = offsetX + ry * renderedH
-                                        let py = offsetY + (1.0 - rx) * renderedW
-                                        return (px, py)
-                                    default:
-                                        return (viewW / 2, viewH / 2)
-                                    }
-                                } else {
-                                    let offsetX = (viewW - renderedW) / 2.0
-                                    let offsetY = (viewH - renderedH) / 2.0
-                                    if orient == .portraitUpsideDown {
-                                        return (offsetX + (1.0 - rx) * renderedW, offsetY + (1.0 - ry) * renderedH)
-                                    } else {
-                                        return (offsetX + rx * renderedW, offsetY + ry * renderedH)
-                                    }
-                                }
-                            }()
-
-                            ZStack {
-                                // Khung chữ nhật ô soi: Đỏ khi rà soát, Xanh lá rực khi phát hiện bài
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(roiSync.hasRecentDetection ? Color.green : Color.red, lineWidth: 2.5)
-                                    .frame(width: boxW, height: boxH)
-                                    .position(x: boxX, y: boxY)
-
-                                // Tâm chữ thập ở giữa ô soi
-                                Circle()
-                                    .fill(roiSync.hasRecentDetection ? Color.green : Color.red.opacity(0.85))
-                                    .frame(width: 6, height: 6)
-                                    .position(x: boxX, y: boxY)
-
-                                // Nhãn kết quả AI hoặc Thông tin ô soi
-                                VStack(spacing: 3) {
-                                    if let card = roiSync.detectedCard, roiSync.hasRecentDetection {
-                                        HStack(spacing: 4) {
-                                            Text("🎯 AI: \(card)")
-                                                .font(.system(size: 13, weight: .black))
-                                                .foregroundColor(.green)
-                                            Text("(\(roiSync.detectedConfidence)%)")
-                                                .font(.system(size: 11, weight: .bold))
-                                                .foregroundColor(.white)
-                                            if roiSync.detectedSharpness > 0 {
-                                                Text("• Nét:\(Int(roiSync.detectedSharpness))")
-                                                    .font(.system(size: 10, weight: .semibold))
-                                                    .foregroundColor(.yellow)
-                                            }
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(Color.black.opacity(0.88))
-                                        .cornerRadius(6)
-                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.green, lineWidth: 1.5))
-                                    }
-
-                                    // Real-Time Live Debug HUD (Điểm % nhảy liên tục 120fps cho mọi frame dù % thấp)
-                                    HStack(spacing: 4) {
-                                        Circle()
-                                            .fill(!roiSync.liveDebugScan.isEmpty && roiSync.liveDebugScan != "Đang quét..." ? Color.yellow : Color.orange)
-                                            .frame(width: 5, height: 5)
-                                        Text("🔍 AI Live: \(roiSync.liveDebugScan.isEmpty ? "Đang quét..." : roiSync.liveDebugScan)")
-                                            .font(.system(size: 11, weight: .black, design: .monospaced))
-                                            .foregroundColor(.yellow)
-                                    }
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2.5)
-                                    .background(Color.black.opacity(0.85))
-                                    .cornerRadius(5)
-                                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.yellow.opacity(0.6), lineWidth: 1))
-                                }
-                                .position(x: boxX, y: max(28, boxY - boxH / 2 - 24))
-                            }
-                            .allowsHitTesting(false)
-                        }
-                    }
-                    .edgesIgnoringSafeArea(.all)
 
 
                     // Yellow Focus & Exposure Box (Giống app Camera iOS chuẩn)
@@ -799,19 +678,7 @@ extension ContentView {
         }
     }
 
-    private func toggleAiMode() {
-        networkManager.isAiModeEnabled.toggle()
-        roiSync.isActive = networkManager.isAiModeEnabled
-        if !networkManager.isAiModeEnabled {
-            roiSync.isRoiVisible = false
-            roiSync.detectedCard = nil
-            roiSync.hasRecentDetection = false
-            roiSync.liveDebugScan = ""
-            CardDetector.shared.resetState()
-        } else {
-            roiSync.isRoiVisible = true
-        }
-    }
+
 
     private func toggleLive() {
         if cameraManager.isStreaming || cameraManager.isConnecting {
@@ -1150,12 +1017,12 @@ public class RoiSyncManager: ObservableObject {
     public static let shared = RoiSyncManager()
 
     @Published public var isConnected: Bool = false
-    @Published public var isRoiVisible: Bool = true
+    @Published public var isRoiVisible: Bool = false
     @Published public var normX: CGFloat = 0.35
     @Published public var normY: CGFloat = 0.30
     @Published public var normW: CGFloat = 0.30
     @Published public var normH: CGFloat = 0.40
-    @Published public var isActive: Bool = true
+    @Published public var isActive: Bool = false
 
     // Telemetry & Network Status
     public var currentFPS: Double = 120.0

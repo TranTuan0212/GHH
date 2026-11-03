@@ -20,8 +20,8 @@ public class NetworkManager: ObservableObject {
     @Published public var currentUsername: String? = nil
     @Published public var currentUserId: String? = nil
     @Published public var userExpiresAt: String? = nil
-    @Published public var allowedMode: String = "all"
-    @Published public var effectiveMode: String = "mode2"
+    @Published public var allowedMode: String = "mode1"
+    @Published public var effectiveMode: String = "mode1"
     @Published public var isAiModeEnabled: Bool = false
     @Published public var activeStreamId: String? = nil
     @Published public var streamKey: String? = nil
@@ -57,9 +57,7 @@ public class NetworkManager: ObservableObject {
             self.currentUsername = UserDefaults.standard.string(forKey: "saved_username")
             self.currentUserId = UserDefaults.standard.string(forKey: "saved_user_id")
             self.userExpiresAt = UserDefaults.standard.string(forKey: "saved_user_expires_at")
-            let savedAllowed = UserDefaults.standard.string(forKey: "saved_allowed_mode") ?? "all"
-            let savedEffective = UserDefaults.standard.string(forKey: "saved_effective_mode")
-            self.applyAccountMode(allowed: savedAllowed, effective: savedEffective)
+            self.applyAccountMode(allowed: "mode1", effective: "mode1")
             self.isAuthenticated = true
 
             // Tự động làm mới hạn dùng và thông tin tài khoản từ máy chủ
@@ -95,24 +93,11 @@ public class NetworkManager: ObservableObject {
     }
 
     public func applyAccountMode(allowed: String?, effective: String?) {
-        let normAllowed = (allowed ?? self.allowedMode).lowercased()
-        self.allowedMode = normAllowed
-        UserDefaults.standard.set(normAllowed, forKey: "saved_allowed_mode")
-
-        let resolvedEffective: String
-        if normAllowed == "mode1" {
-            resolvedEffective = "mode1"
-        } else if normAllowed == "mode2" {
-            resolvedEffective = "mode2"
-        } else if let eff = effective?.lowercased(), (eff == "mode1" || eff == "mode2") {
-            resolvedEffective = eff
-        } else {
-            resolvedEffective = self.effectiveMode
-        }
-
-        self.effectiveMode = resolvedEffective
-        self.isAiModeEnabled = (resolvedEffective == "mode2")
-        UserDefaults.standard.set(resolvedEffective, forKey: "saved_effective_mode")
+        self.allowedMode = "mode1"
+        self.effectiveMode = "mode1"
+        self.isAiModeEnabled = false
+        UserDefaults.standard.set("mode1", forKey: "saved_allowed_mode")
+        UserDefaults.standard.set("mode1", forKey: "saved_effective_mode")
     }
 
     private var apiBaseURL: String {
