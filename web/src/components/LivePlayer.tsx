@@ -85,6 +85,11 @@ function resolveServerUrl(serverUrlFromServer?: string): string {
   return 'http://localhost:4000';
 }
 
+const isMobileDevice = typeof navigator !== 'undefined' && (
+  /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+  (typeof (navigator as any).maxTouchPoints === 'number' && (navigator as any).maxTouchPoints > 2)
+);
+
 interface LivePlayerProps {
   stream: StreamSession | null;
   socket?: Socket | null;
@@ -1277,9 +1282,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setHasLiveFrame(true);
       setHasFrame(true);
       if (isLiveRef.current && replayVideoRef.current) {
-        replayVideoRef.current.muted = true;
-        replayVideoRef.current.playbackRate = 1.0;
-        replayVideoRef.current.play().catch(() => {});
+        // Tối ưu Mobile/Tablet: Dừng decoder replay video khi Live sẵn sàng để dồn 100% phần cứng cho WebRTC Live
+        replayVideoRef.current.pause();
       }
     };
     const onLiveVideoResize = () => {
@@ -1318,9 +1322,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
         if (replayVideoRef.current) {
-          replayVideoRef.current.muted = true;
-          replayVideoRef.current.playbackRate = 1.0;
-          replayVideoRef.current.play().catch(() => {});
+          // Tối ưu Mobile/Tablet: Dừng hẳn decoder HLS khi đang xem Live để tránh nghẽn GPU/decoder
+          replayVideoRef.current.pause();
         }
       } else if (replayVideoRef.current) {
         // Fallback: nếu không có WebRTC, HLS phát trực tiếp tại live edge
@@ -1474,7 +1477,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Đệm an toàn 2.5s để triệt tiêu bufferNudgeOnStall và nạp thanh HLS mượt mà:
         liveSyncDuration: 2.5,
         liveMaxLatencyDuration: 5.0,
-        maxLiveSyncPlaybackRate: 1.15,
+        maxLiveSyncPlaybackRate: 1.0,
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
@@ -2805,18 +2808,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         <video
           ref={replayVideoRef}
           className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
-            !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-100 z-0 pointer-events-none'
+            !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-0 invisible z-0 pointer-events-none'
           }`}
           style={{
-            transform: !isLive
+            transform: (!isLive
               ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
-              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`) + ' translateZ(0)',
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
             imageRendering: 'auto' as any,
             willChange: 'transform',
-            filter: isSharpBoost ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
+            filter: (!isMobileDevice && isSharpBoost) ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
           }}
           playsInline
           muted={isLive ? true : (isMuted || playbackRate !== 1.0)}
@@ -2853,13 +2856,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ref={liveVideoRef}
             className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
-              transform: isLive
+              transform: (isLive
                 ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
-                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`) + ' translateZ(0)',
               transition: 'transform 0.1s ease-out',
               imageRendering: 'auto' as any,
-            willChange: 'transform',
-              filter: isSharpBoost && isLive ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
+              willChange: 'transform',
+              filter: (!isMobileDevice && isSharpBoost && isLive) ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
             }}
             playsInline
             muted={isMuted}
