@@ -22,7 +22,7 @@ public class NetworkManager: ObservableObject {
     @Published public var userExpiresAt: String? = nil
     @Published public var allowedMode: String = "all"
     @Published public var effectiveMode: String = "mode2"
-    @Published public var isAiModeEnabled: Bool = true
+    @Published public var isAiModeEnabled: Bool = false
     @Published public var activeStreamId: String? = nil
     @Published public var streamKey: String? = nil
     @Published public var rtmpIngestUrl: String? = nil

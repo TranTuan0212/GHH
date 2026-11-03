@@ -140,16 +140,12 @@ public class CameraManager: NSObject, ObservableObject {
     /// Các mức bitrate cho phép chọn. Mức chọn là MỨC TỐI ĐA; khi bật tự hạ, encoder có thể
     /// giảm xuống tối thiểu `minBitrateRatio` × mức chọn lúc mạng yếu để live không bị giật.
     public static let bitratePresets: [BitratePreset] = [
-        BitratePreset(mbps: 8, label: "8 Mbps – Tiết kiệm"),
-        BitratePreset(mbps: 10, label: "10 Mbps – Tiết kiệm"),
-        BitratePreset(mbps: 12, label: "12 Mbps – Cân bằng"),
-        BitratePreset(mbps: 14, label: "14 Mbps – Ổn định"),
-        BitratePreset(mbps: 16, label: "16 Mbps"),
-        BitratePreset(mbps: 20, label: "20 Mbps – Khuyên dùng"),
-        BitratePreset(mbps: 25, label: "25 Mbps – Siêu nét"),
-        BitratePreset(mbps: 30, label: "30 Mbps – Cực nét (mạng mạnh)")
+        BitratePreset(mbps: 6, label: "6 Mbps - Tiết kiệm (4G yếu)"),
+        BitratePreset(mbps: 8, label: "8 Mbps - Khuyên dùng (Chuẩn nét & Ổn định)"),
+        BitratePreset(mbps: 10, label: "10 Mbps - Sắc nét"),
+        BitratePreset(mbps: 12, label: "12 Mbps - Cực nét (Wi-Fi mạnh)")
     ]
-    public static let defaultBitrateMbps = 20
+    public static let defaultBitrateMbps = 8
     private static let minBitrateRatio = 0.6
     private static let bitrateDefaultsKey = "SloMoLive.streamBitrateMbps"
     private static let adaptiveDefaultsKey = "SloMoLive.streamAdaptiveBitrate"
@@ -164,7 +160,7 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public private(set) var isAdaptiveBitrateEnabled: Bool =
         (UserDefaults.standard.object(forKey: CameraManager.adaptiveDefaultsKey) as? Bool) ?? true
 
-    /// Đổi mức bitrate. Nếu đang live sẽ kết nối lại RTMP (~1–2 giây) để áp dụng ngay.
+    /// Đổi mức bitrate (lưu cấu hình, áp dụng tức thì cho session tiếp theo hoặc khi đang chờ).
     public func setBitrate(_ mbps: Int) {
         guard CameraManager.bitratePresets.contains(where: { $0.mbps == mbps }), mbps != selectedBitrateMbps else { return }
         selectedBitrateMbps = mbps
@@ -172,26 +168,16 @@ public class CameraManager: NSObject, ObservableObject {
         applyBitrateChange()
     }
 
-    /// Bật/tắt tự hạ bitrate khi mạng yếu. Nếu đang live sẽ kết nối lại RTMP để áp dụng ngay.
+    /// Bật/tắt tự hạ bitrate khi mạng yếu.
     public func setAdaptiveBitrate(_ enabled: Bool) {
         guard enabled != isAdaptiveBitrateEnabled else { return }
         isAdaptiveBitrateEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: CameraManager.adaptiveDefaultsKey)
         applyBitrateChange()
     }
-
-    private func applyBitrateChange() {
+private func applyBitrateChange() {
         RoiSyncManager.shared.currentBitrateMbps = Double(selectedBitrateMbps)
-        if isStreaming || isConnecting {
-            // rebuildLiveSession() khi đang live chỉ thay object session mà không dừng/khởi động
-            // lại RTMP, nên phải dừng hẳn rồi phát lại với cùng stream key (giống khi 4G reconnect).
-            print("[CameraManager] 🔁 Đổi bitrate khi đang live → kết nối lại RTMP với \(selectedBitrateMbps) Mbps")
-            stopLiveStream()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                guard let self = self, !self.isStreaming, !self.isConnecting else { return }
-                self.startLiveStream()
-            }
-        } else if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+        if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty && !isStreaming && !isConnecting {
             rebuildLiveSession()
         }
     }
@@ -436,7 +422,7 @@ public class CameraManager: NSObject, ObservableObject {
         configureAndActivateAudioSession()
         let audioCfg: LFLiveAudioConfiguration = LFLiveAudioConfiguration.default()
         audioCfg.numberOfChannels = 1
-        audioCfg.audioSampleRate = ._44100Hz
+        audioCfg.audioSampleRate = ._48000Hz
         audioCfg.audioBitrate = ._64Kbps
 
         let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
@@ -1400,18 +1386,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             // Đọc atomic flag thay vì @Published var isStreaming để tránh warning "publishing changes
             // from background threads" và truy cập thread-safe.
-            // Chạy On-Device AI trực tiếp trên CVPixelBuffer gốc không nén
-            if NetworkManager.shared.isAiModeEnabled && RoiSyncManager.shared.isActive {
-                let isFront = (self.cameraPosition == .front)
-                CardDetector.shared.processFrame(
-                    pixelBuffer: pixelBuffer,
-                    normX: RoiSyncManager.shared.normX,
-                    normY: RoiSyncManager.shared.normY,
-                    normW: RoiSyncManager.shared.normW,
-                    normH: RoiSyncManager.shared.normH,
-                    isFront: isFront
-                )
-            }
+            // AI đã được gỡ bỏ hoàn toàn để giải phóng 100% CPU/GPU, iPhone chạy mát rượi
 
             guard isStreamingAtomic else { return }
 
@@ -1512,469 +1487,10 @@ extension CameraManager: LFLiveSessionDelegate {
 }
 
 
-// MARK: - On-Device Edge AI Card Detector (Apple Neural Engine + Vision)
+// MARK: - AI Detector Stub (Đã tắt hoàn toàn AI để giải phóng 100% tài nguyên CPU/GPU giúp iPhone chạy mát)
 public class CardDetector: NSObject, ObservableObject {
     public static let shared = CardDetector()
-
-    private var visionModel: VNCoreMLModel?
-    private var isBusy = false
-    private let queue = DispatchQueue(label: "com.slomolive.ai.vision", qos: .userInitiated)
-    private var lastInferenceTime: Double = 0.0
-    private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
-
-    // Nhận diện Pass-Through Burst Peak Voting (120fps) khi bài lướt qua ô soi
-    private struct PassVote {
-        var count: Int
-        var totalConf: Int
-        var peakConf: Int
-    }
-    private var passVotes: [String: PassVote] = [:]
-    private var isPassActive = false
-    private var passStartTime: TimeInterval = 0.0
-    private var passLastSeenTime: TimeInterval = 0.0
-    private var passBestConf: Int = 0
-    private var passBestPixelBuffer: CVPixelBuffer? = nil
-    private var passBestRoiRect: CGRect = .zero
-    private var passBestIsFront: Bool = false
-    private var passBestCard: String? = nil
-
-
-    private var lastLockedCard: String? = nil
-    private var lockCooldownUntil: TimeInterval = 0.0
-
-
     @Published public var isModelLoaded: Bool = false
-
-    public func resetState() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            self.lastLockedCard = nil
-            self.lockCooldownUntil = 0.0
-            self.passVotes.removeAll()
-            self.passBestCard = nil
-            self.passBestConf = 0
-
-
-            self.isPassActive = false
-            self.passBestPixelBuffer = nil
-        }
-    }
-
-    public override init() {
-        super.init()
-        loadModel()
-    }
-
-    public func loadModel() {
-        var possibleUrls = [
-            Bundle.main.url(forResource: "cards_yolov8", withExtension: "mlmodelc"),
-            Bundle.main.url(forResource: "cards_yolov8", withExtension: "mlpackage")
-        ].compactMap { $0 }
-
-        let directModelc = Bundle.main.bundleURL.appendingPathComponent("cards_yolov8.mlmodelc")
-        if FileManager.default.fileExists(atPath: directModelc.path) {
-            possibleUrls.insert(directModelc, at: 0)
-        }
-
-        guard let modelURL = possibleUrls.first else {
-            NSLog("[CardDetector] ⚠️ Model CoreML 'cards_yolov8' chưa có trong app bundle.")
-            return
-        }
-
-        do {
-            let config = MLModelConfiguration()
-            config.computeUnits = .all // Tận dụng tối đa Apple Neural Engine (NPU)
-            let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
-            self.visionModel = try VNCoreMLModel(for: mlModel)
-            DispatchQueue.main.async { self.isModelLoaded = true }
-            NSLog("[CardDetector] 🚀 Đã nạp thành công CoreML Model lên Apple Neural Engine: %@", modelURL.lastPathComponent)
-        } catch {
-            NSLog("[CardDetector] ❌ Lỗi load CoreML model: %@", error.localizedDescription)
-        }
-    }
-
-    public func processFrame(pixelBuffer: CVPixelBuffer, normX: CGFloat, normY: CGFloat, normW: CGFloat, normH: CGFloat, isFront: Bool) {
-        guard let _ = self.visionModel, !isBusy else { return }
-        isBusy = true
-
-        // 1. Cắt trực tiếp vùng ô đỏ thành ảnh con (croppedPatch) kèm 20% margin an toàn
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let bufW = ciImage.extent.width
-        let bufH = ciImage.extent.height
-        guard bufW > 50, bufH > 50 else {
-            isBusy = false
-            return
-        }
-
-        let pad = 0.20
-        let w = normW * (1.0 + pad * 2.0)
-        let h = normH * (1.0 + pad * 2.0)
-        let cropW = max(30, min(bufW, w * bufW))
-        let cropH = max(30, min(bufH, h * bufH))
-        let cropX = max(0, min(bufW - cropW, (normX - w / 2.0) * bufW))
-        let cropY = max(0, min(bufH - cropH, (1.0 - (normY + h / 2.0)) * bufH))
-        let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
-        let croppedPatch = ciImage.cropped(to: cropPixelRect)
-            .transformed(by: CGAffineTransform(translationX: -cropX, y: -cropY))
-
-        // Tọa độ ROI chuẩn của ô đỏ cho snapshot
-        let vx = max(CGFloat(0.0), min(CGFloat(1.0), normX - normW / 2.0))
-        let vy = max(CGFloat(0.0), min(CGFloat(1.0), CGFloat(1.0) - (normY + normH / 2.0)))
-        let vw = min(CGFloat(1.0) - vx, normW)
-        let vh = min(CGFloat(1.0) - vy, normH)
-        let roiRect = CGRect(x: vx, y: vy, width: vw, height: vh)
-
-        queue.async { [weak self] in
-            defer { self?.isBusy = false }
-            guard let self = self else { return }
-
-            // 2. NHẬN DIỆN GÓC BÀI ĐỐI XỨNG NGUYÊN BẢN (1 Pass siêu tốc ~1.8ms trên Apple Neural Engine):
-            // Model góc in (Corner Box) đã học sẵn cả 2 góc đối xứng (xuôi và ngược 180°), góc nghiêng và lật gương.
-            // Cam trước: .upMirrored | Cam sau: .up
-            let primaryOrient: CGImagePropertyOrientation = isFront ? .upMirrored : .up
-            let primaryHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: primaryOrient, options: [:])
-            let eval = self.evaluateVisionHandler(primaryHandler)
-            var detected = eval.detected
-            var bestLiveCandidate = eval.rawBest
-            var bestAngle = "0°"
-
-            // 2b. Nếu pass 0° chưa bắt được (khi đặt camera bên cạnh bàn, lá bài bị xoay ngang 90°/270°):
-            // Quét nhanh hướng xoay ngang (~1.8ms trên Apple Neural Engine) để bắt dính bài tức thì
-            if detected == nil {
-                let sideOrient: CGImagePropertyOrientation = isFront ? .leftMirrored : .right
-                let sideHandler = VNImageRequestHandler(ciImage: croppedPatch, orientation: sideOrient, options: [:])
-                let sideEval = self.evaluateVisionHandler(sideHandler)
-                if let sDet = sideEval.detected {
-                    detected = sDet
-                    bestAngle = "90°"
-                } else if let sRb = sideEval.rawBest, (bestLiveCandidate == nil || sRb.conf > (bestLiveCandidate?.conf ?? 0)) {
-                    bestLiveCandidate = sRb
-                    bestAngle = "90°"
-                }
-            }
-
-            // 2b. Hỗ trợ góc nghiêng 3D: CHỈ kích hoạt khi pass 0° chưa bắt được bài nhưng có tín hiệu lá bài mờ (bestLiveCandidate conf >= 20%).
-            // Giữ cho khung hình trống xử lý siêu tốc ~1.8ms trên Apple Neural Engine (không rớt bất kỳ frame nào ở 120 FPS).
-            if detected == nil, let cand = bestLiveCandidate, cand.conf >= 20 {
-                let shadowEnhanced = self.enhanceShadowedPatch(croppedPatch)
-                let shearConfigs: [(scale: CGFloat, fy: CGFloat, shearX: CGFloat, label: String)] = [
-                    (0.62, 1.80, -0.45, "3D-L"),
-                    (0.62, 1.80,  0.45, "3D-R")
-                ]
-                for cfg in shearConfigs {
-                    let warped = self.warp3DShearPatch(shadowEnhanced, scale: cfg.scale, fy: cfg.fy, shearX: cfg.shearX)
-                    let h3d = VNImageRequestHandler(ciImage: warped, orientation: primaryOrient, options: [:])
-                    let ev3d = self.evaluateVisionHandler(h3d)
-                    if let rb = ev3d.rawBest, rb.conf > (bestLiveCandidate?.conf ?? 0) {
-                        bestLiveCandidate = rb
-                        bestAngle = cfg.label
-                    }
-                    if let det = ev3d.detected {
-                        detected = det
-                        bestAngle = cfg.label
-                        break
-                    }
-                }
-            }
-
-            // Cập nhật Live Debug Scan HUD lên màn hình iOS (nhảy real-time từng frame 120fps)
-            if let cand = bestLiveCandidate {
-                RoiSyncManager.shared.updateLiveScanDebug(card: cand.cardCode, conf: cand.conf, angle: bestAngle)
-            }
-
-            // 3. Xử lý Pass-Through Burst Voting khi lá bài lướt qua ô soi
-            if let d = detected {
-                self.processCardCandidate(cardCode: d.cardCode, conf: d.conf, pixelBuffer: pixelBuffer, roiRect: roiRect, isFront: isFront)
-
-            } else {
-                self.checkCardDisappeared()
-            }
-        }
-    }
-
-    /// Đánh giá kết quả từ VNImageRequestHandler trên CoreML
-    private func evaluateVisionHandler(_ handler: VNImageRequestHandler) -> (detected: (cardCode: String, conf: Int)?, rawBest: (cardCode: String, conf: Int)?) {
-        guard let visionModel = self.visionModel else { return (nil, nil) }
-        var detected: (cardCode: String, conf: Int)? = nil
-        var rawBest: (cardCode: String, conf: Int)? = nil
-
-        let request = VNCoreMLRequest(model: visionModel) { req, _ in
-            if let objectObs = req.results as? [VNRecognizedObjectObservation], !objectObs.isEmpty {
-                if let best = objectObs.max(by: { $0.confidence < $1.confidence }),
-                   let label = best.labels.first {
-                    let conf = Int((label.confidence * 100.0).rounded())
-                    rawBest = (label.identifier, conf)
-                    if label.confidence >= 0.22 {
-                        detected = (label.identifier, conf)
-                    }
-                }
-            } else if let featureObs = req.results as? [VNCoreMLFeatureValueObservation], !featureObs.isEmpty {
-                for feat in featureObs {
-                    if feat.featureName == "confidence", let multiArray = feat.featureValue.multiArrayValue {
-                        let count = multiArray.count
-                        guard count > 0 else { continue }
-                        var maxConf: Float = 0.0
-                        var maxIdx = -1
-                        let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: count)
-                        for i in 0..<min(count, 52) {
-                            let c = ptr[i]
-                            if c > maxConf {
-                                maxConf = c
-                                maxIdx = i
-                            }
-                        }
-                        if maxIdx >= 0 {
-                            let cardNames = [
-                                "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S",
-                                "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S",
-                                "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S",
-                                "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S",
-                                "9C", "9D", "9H", "9S", "AC", "AD", "AH", "AS",
-                                "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS",
-                                "QC", "QD", "QH", "QS"
-                            ]
-                            let cardCode = (maxIdx < cardNames.count) ? cardNames[maxIdx] : "\(maxIdx)"
-                            let conf = Int((maxConf * 100.0).rounded())
-                            rawBest = (cardCode, conf)
-                            if maxConf >= 0.22 {
-                                detected = (cardCode, conf)
-                            }
-                            return
-                        }
-                    }
-                }
-            }
-        }
-        request.imageCropAndScaleOption = .scaleFit
-        try? handler.perform([request])
-        return (detected, rawBest)
-    }
-
-    /// Nâng sáng dịu vùng bóng tối bằng CIHighlightShadowAdjust (giữ nguyên 100% màu sắc gốc của chất Đỏ và Đen)
-    private func enhanceShadowedPatch(_ input: CIImage) -> CIImage {
-        let ext = input.extent
-        var current = input
-        if let hs = CIFilter(name: "CIHighlightShadowAdjust") {
-            hs.setValue(current, forKey: kCIInputImageKey)
-            hs.setValue(0.75, forKey: "inputShadowAmount")
-            if let out = hs.outputImage { current = out }
-        }
-        return current.cropped(to: ext)
-    }
-
-    /// Biến đổi phối cảnh 3D Affine (kéo giãn trục dọc fy + khử độ xiên chéo shearX) cho lá bài cầm nghiêng dẹt
-    private func warp3DShearPatch(_ input: CIImage, scale: CGFloat, fy: CGFloat, shearX: CGFloat) -> CIImage {
-        let transform = CGAffineTransform(a: scale, b: 0.0, c: shearX * scale, d: scale * fy, tx: 0.0, ty: 0.0)
-        let warped = input.transformed(by: transform)
-        let wExt = warped.extent
-        return warped.transformed(by: CGAffineTransform(translationX: -wExt.origin.x, y: -wExt.origin.y))
-    }
-
-    private func checkCardDisappeared() {
-        let now = Date().timeIntervalSince1970
-        guard isPassActive else { return }
-
-        // Khi lá bài đã lướt ra khỏi ô soi (không thấy >= 0.10s / ~12 frame 120fps)
-        if (now - passLastSeenTime) >= 0.10 {
-            isPassActive = false
-            // Tìm lá bài chiến thắng đạt điểm tin cậy tích lũy cao nhất
-            if let winner = passVotes.max(by: { $0.value.totalConf < $1.value.totalConf }) {
-                let voteCount = winner.value.count
-                let peakConf = winner.value.peakConf
-                let winnerCard = winner.key
-                // Bắt cả bài lướt siêu nhanh (1 frame nhưng conf >= 45%) hoặc lướt bình thường (>= 2 frames)
-                if (voteCount >= 2 || peakConf >= 45) && (lastLockedCard != winnerCard || now > lockCooldownUntil) {
-                    commitLockedCard(
-                        cardCode: winnerCard,
-                        conf: peakConf,
-                        fallbackPixelBuffer: passBestPixelBuffer,
-                        roiRect: passBestRoiRect,
-                        isFront: passBestIsFront
-                    )
-                }
-            }
-
-            passVotes.removeAll()
-            passBestCard = nil
-            passBestPixelBuffer = nil
-            passBestConf = 0
-            RoiSyncManager.shared.clearLiveScanDebug()
-        }
-    }
-
-    private func processCardCandidate(cardCode: String, conf: Int, pixelBuffer: CVPixelBuffer, roiRect: CGRect, isFront: Bool) {
-        let now = Date().timeIntervalSince1970
-        passLastSeenTime = now
-
-        if !isPassActive {
-            isPassActive = true
-            passStartTime = now
-            passVotes.removeAll()
-            passBestConf = 0
-
-            passBestPixelBuffer = nil
-            passBestCard = nil
-        }
-
-        // Tích lũy điểm voting trong suốt chu kỳ bài lướt qua ô (Cực nhanh: 0.05ms, KHÔNG nén JPEG)
-        var vote = passVotes[cardCode] ?? PassVote(count: 0, totalConf: 0, peakConf: 0)
-        vote.count += 1
-        vote.totalConf += conf
-        vote.peakConf = max(vote.peakConf, conf)
-        passVotes[cardCode] = vote
-
-        // Giữ lại pixelBuffer có độ tin cậy cao nhất cho snapshot
-        if conf >= passBestConf {
-            passBestConf = conf
-            passBestPixelBuffer = pixelBuffer
-            passBestRoiRect = roiRect
-            passBestIsFront = isFront
-            passBestCard = cardCode
-        }
-
-        // Nếu bài nằm yên trong ô >= 4 frame liên tiếp (không lướt đi): Khóa chốt sớm
-        if vote.count >= 4 && (lastLockedCard != cardCode || now > lockCooldownUntil) {
-            commitLockedCard(
-                cardCode: cardCode,
-                conf: vote.peakConf,
-                fallbackPixelBuffer: pixelBuffer,
-                roiRect: roiRect,
-                isFront: isFront
-            )
-        }
-    }
-
-    private func commitLockedCard(cardCode: String, conf: Int, fallbackPixelBuffer: CVPixelBuffer?, roiRect: CGRect, isFront: Bool) {
-        let now = Date().timeIntervalSince1970
-        lastLockedCard = cardCode
-        lockCooldownUntil = now + 0.35 // Chống chia trùng lặp trong 350ms
-
-        // CHỈ nén JPEG ĐÚNG 1 LẦN DUY NHẤT khi CHỐT BÀI (Zero-Drop trong toàn bộ chu kỳ 120fps trước đó)
-        var imageBase64: String? = nil
-        var sharpness: Double = 85.0
-        if let pb = fallbackPixelBuffer ?? passBestPixelBuffer {
-            let res = extractCroppedImageAndSharpness(from: pb, roiRect: roiRect.isEmpty ? passBestRoiRect : roiRect, isFront: isFront)
-            imageBase64 = res.base64
-            sharpness = res.sharpness
-        }
-
-        NSLog("[CardDetector] 🎯 120fps CHỐT BÀI: %@ (%d%%) | Nét=%.1f", cardCode, conf, sharpness)
-        DispatchQueue.main.async {
-            RoiSyncManager.shared.notifyCardDetected(
-                cardCode: cardCode,
-                conf: conf,
-                sharpness: sharpness,
-                imageBase64: imageBase64,
-                updateFrameOnly: false
-            )
-        }
-    }
-
-    /// Trích xuất ảnh cropped trong ô đỏ và tính toán chỉ số độ nét (Laplacian Variance)
-    private func extractCroppedImageAndSharpness(from pixelBuffer: CVPixelBuffer, roiRect: CGRect, isFront: Bool) -> (base64: String?, sharpness: Double) {
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let extent = ciImage.extent
-        let bufW = extent.width
-        let bufH = extent.height
-
-        guard bufW > 10, bufH > 10 else { return (nil, 100.0) }
-
-        let cropX = max(0, min(bufW, roiRect.origin.x * bufW))
-        let cropY = max(0, min(bufH, roiRect.origin.y * bufH))
-        let cropW = max(20, min(bufW - cropX, roiRect.size.width * bufW))
-        let cropH = max(20, min(bufH - cropY, roiRect.size.height * bufH))
-        let cropPixelRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
-
-        guard let cgImage = ciContext.createCGImage(ciImage, from: cropPixelRect) else {
-            return (nil, 100.0)
-        }
-
-        let sharpness = computeSharpness(from: cgImage)
-
-        // Nếu là camera trước: Lật gương ảnh snapshot ngang để hiển thị số và hoa bài xuôi chiều chuẩn trên Web
-        var finalCgImage = cgImage
-        if isFront {
-            if let flipped = flipImageHorizontally(cgImage) {
-                finalCgImage = flipped
-            }
-        }
-
-        // Nén ảnh JPEG nhỏ gọn (max dimension 320) để gửi tức thì qua mạng
-        let uiImage = UIImage(cgImage: finalCgImage)
-        let maxDim: CGFloat = 320.0
-        let scale = min(maxDim / max(uiImage.size.width, 1), maxDim / max(uiImage.size.height, 1), 1.0)
-        let newSize = CGSize(width: max(1, uiImage.size.width * scale), height: max(1, uiImage.size.height * scale))
-
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let resized = renderer.image { _ in
-            uiImage.draw(in: CGRect(origin: .zero, size: newSize))
-        }
-
-        if let jpegData = resized.jpegData(compressionQuality: 0.8) {
-            let b64 = "data:image/jpeg;base64," + jpegData.base64EncodedString()
-            return (b64, sharpness)
-        }
-        return (nil, sharpness)
-    }
-
-    /// Lật gương ngang ảnh CGImage (Khử ngược số cho Camera trước)
-    private func flipImageHorizontally(_ image: CGImage) -> CGImage? {
-        let width = image.width
-        let height = image.height
-        guard let colorSpace = image.colorSpace,
-              let context = CGContext(
-                data: nil,
-                width: width,
-                height: height,
-                bitsPerComponent: image.bitsPerComponent,
-                bytesPerRow: 0,
-                space: colorSpace,
-                bitmapInfo: image.bitmapInfo.rawValue
-              ) else { return nil }
-        context.translateBy(x: CGFloat(width), y: 0)
-        context.scaleBy(x: -1.0, y: 1.0)
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
-    }
-
-    /// Tính toán độ nét bằng phương sai Laplacian trên lưới điểm ảnh
-    private func computeSharpness(from cgImage: CGImage) -> Double {
-        let width = 64
-        let height = 64
-        var pixels = [UInt8](repeating: 0, count: width * height)
-        let colorSpace = CGColorSpaceCreateDeviceGray()
-        guard let context = CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else { return 100.0 }
-
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        var sum: Double = 0.0
-        var sumSq: Double = 0.0
-        var count: Double = 0.0
-
-        for y in 1..<(height - 1) {
-            for x in 1..<(width - 1) {
-                let center = Double(pixels[y * width + x])
-                let up = Double(pixels[(y - 1) * width + x])
-                let down = Double(pixels[(y + 1) * width + x])
-                let left = Double(pixels[y * width + (x - 1)])
-                let right = Double(pixels[y * width + (x + 1)])
-                let lap = 4.0 * center - (up + down + left + right)
-                sum += lap
-                sumSq += lap * lap
-                count += 1.0
-            }
-        }
-        guard count > 0 else { return 100.0 }
-        let mean = sum / count
-        let variance = (sumSq / count) - (mean * mean)
-        return round(variance * 10.0) / 10.0
-    }
+    public func resetState() {}
+    public func processFrame(pixelBuffer: CVPixelBuffer, normX: Double, normY: Double, normW: Double, normH: Double, isFront: Bool) {}
 }

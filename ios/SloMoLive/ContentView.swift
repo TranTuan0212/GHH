@@ -498,9 +498,9 @@ extension ContentView {
                     .foregroundColor(remainingColor)
                 Text("· \(networkManager.currentUsername ?? "")")
                     .foregroundColor(.white.opacity(0.75))
-                Text(networkManager.isAiModeEnabled ? "· MODE 2 (AI)" : "· MODE 1")
+                Text("· 120 FPS LIVE")
                     .fontWeight(.black)
-                    .foregroundColor(networkManager.isAiModeEnabled ? .cyan : .orange)
+                    .foregroundColor(.green)
             }
             .font(.system(size: 10, weight: .semibold))
             .lineLimit(1)
@@ -669,33 +669,7 @@ extension ContentView {
             // Chọn bitrate
             bitrateMenu
 
-            // AI On-Device (chỉ tài khoản có quyền AI)
-            if networkManager.allowedMode != "mode1" {
-                Button(action: {
-                    toggleAiMode()
-                }) {
-                    ControlTile(
-                        icon: networkManager.isAiModeEnabled ? "cpu.fill" : "cpu",
-                        title: networkManager.isAiModeEnabled ? "AI: Bật" : "AI: Tắt",
-                        tint: .cyan,
-                        isActive: networkManager.isAiModeEnabled
-                    )
-                }
-
-                // Ô soi debug (chỉ khi bật AI)
-                if networkManager.isAiModeEnabled {
-                    Button(action: {
-                        roiSync.toggleVisibility()
-                    }) {
-                        ControlTile(
-                            icon: roiSync.isRoiVisible ? "viewfinder.circle.fill" : "viewfinder.circle",
-                            title: roiSync.isRoiVisible ? "Ô soi: Bật" : "Ô soi: Ẩn",
-                            tint: .red,
-                            isActive: roiSync.isRoiVisible
-                        )
-                    }
-                }
-            }
+            // AI đã được gỡ bỏ hoàn toàn để app nhẹ và mát
         }
         .buttonStyle(.plain)
         .padding(10)
@@ -729,7 +703,7 @@ extension ContentView {
             }
             if cameraManager.isStreaming || cameraManager.isConnecting {
                 Section {
-                    Text("Đổi khi đang live: kết nối lại ~1–2 giây")
+                    Text("Áp dụng mức bitrate cho phiên tiếp theo")
                 }
             }
         } label: {

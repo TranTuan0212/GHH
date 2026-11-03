@@ -96,6 +96,7 @@ function ensureRtcRelay(streamKey) {
         '-b:a', '64k',
         '-ar', '48000',
         '-ac', '2',
+        '-af', 'aresample=async=1000',
         '-application', 'lowdelay',
         '-frame_duration', '20',
         '-f', 'rtsp',
