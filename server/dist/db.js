@@ -416,10 +416,10 @@ class Database {
         return this.data.streamSessions;
     }
     getActiveStream(userId) {
-        if (userId) {
-            return this.data.streamSessions.find(s => s.userId === userId && s.status === 'LIVE');
-        }
-        return this.data.streamSessions.find(s => s.status === 'LIVE');
+        const list = userId
+            ? this.data.streamSessions.filter(s => s.userId === userId)
+            : this.data.streamSessions;
+        return list.slice().reverse().find(s => s.status === 'LIVE');
     }
     getLatestStream(userId) {
         const list = userId
@@ -427,8 +427,8 @@ class Database {
             : this.data.streamSessions;
         if (list.length === 0)
             return undefined;
-        // Ưu tiên luồng đang LIVE, nếu không còn LIVE thì trả về phiên vừa kết thúc gần nhất để xem lại DVR
-        return list.find(s => s.status === 'LIVE') || list[list.length - 1];
+        // Ưu tiên luồng đang LIVE mới nhất, nếu không còn LIVE thì trả về phiên vừa kết thúc gần nhất để xem lại DVR
+        return list.slice().reverse().find(s => s.status === 'LIVE') || list[list.length - 1];
     }
     createStreamSession(session) {
         // Chỉ kết thúc luồng live cũ của chính user này

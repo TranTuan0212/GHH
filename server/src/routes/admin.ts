@@ -102,7 +102,6 @@ adminRouter.get('/users', (req: AuthRequest, res: Response) => {
       id: u.id,
       username: u.username,
       role: u.role,
-      allowedMode: u.allowedMode || 'all',
       isBlocked: u.isBlocked,
       createdAt: u.createdAt,
       activatedAt: u.createdAt,
@@ -119,7 +118,7 @@ adminRouter.get('/users', (req: AuthRequest, res: Response) => {
 
 // POST /api/admin/users - Create User
 adminRouter.post('/users', (req: AuthRequest, res: Response) => {
-  const { username, password, daysValid, role, allowedMode } = req.body;
+  const { username, password, daysValid, role } = req.body;
 
   if (!username || !password) {
     return res.status(400).json({ error: 'Username và Password không được để trống.' });
@@ -133,13 +132,11 @@ adminRouter.post('/users', (req: AuthRequest, res: Response) => {
   const days = parseInt(daysValid) || 30;
   const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
 
-  const modeToSet: 'mode1' | 'mode2' | 'all' = (allowedMode === 'mode1' || allowedMode === 'mode2') ? allowedMode : 'all';
   const newUser: User = {
     id: 'usr-' + Date.now(),
     username: username.trim(),
     passwordHash: bcrypt.hashSync(password, 10),
     role: role === 'ADMIN' ? 'ADMIN' : 'USER',
-    allowedMode: modeToSet,
     isBlocked: false,
     expiresAt,
     createdAt: new Date().toISOString()
@@ -153,22 +150,9 @@ adminRouter.post('/users', (req: AuthRequest, res: Response) => {
       id: newUser.id,
       username: newUser.username,
       role: newUser.role,
-      allowedMode: newUser.allowedMode,
       expiresAt: newUser.expiresAt
     }
   });
-});
-
-// POST /api/admin/users/:id/mode - Update allowed mode
-adminRouter.post('/users/:id/mode', (req: AuthRequest, res: Response) => {
-  const { id } = req.params;
-  const { allowedMode } = req.body;
-  const modeToSet: 'mode1' | 'mode2' | 'all' = (allowedMode === 'mode1' || allowedMode === 'mode2') ? allowedMode : 'all';
-  const updated = db.updateUser(id, { allowedMode: modeToSet });
-  if (!updated) {
-    return res.status(404).json({ error: 'Không tìm thấy người dùng.' });
-  }
-  res.json({ message: 'Cập nhật chế độ thành công.', user: { id: updated.id, username: updated.username, allowedMode: updated.allowedMode } });
 });
 
 // POST /api/admin/users/:id/renew - Extend expiration

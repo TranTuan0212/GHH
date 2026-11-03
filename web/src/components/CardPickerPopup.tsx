@@ -73,16 +73,6 @@ const POKER_SUITS = [
     activeBg: 'bg-red-600 text-white shadow-red-500/50'
   },
   {
-    key: 'diamonds',
-    symbol: '♦',
-    name: 'RÔ',
-    color: 'text-rose-400',
-    border: 'border-rose-500/50 hover:border-rose-300',
-    bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900',
-    hoverBg: 'hover:bg-rose-800 hover:text-white',
-    activeBg: 'bg-rose-600 text-white shadow-rose-500/50'
-  },
-  {
     key: 'clubs',
     symbol: '♣',
     name: 'CHUỒN',

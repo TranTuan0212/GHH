@@ -3,11 +3,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.activeRoomModes = exports.latestReticleRoi = void 0;
-exports.getLatestReticleRoi = getLatestReticleRoi;
-exports.getEffectiveRoomMode = getEffectiveRoomMode;
-exports.broadcastRoiWs = broadcastRoiWs;
-const ws_1 = require("ws");
 require("./env");
 const express_1 = __importDefault(require("express"));
 const http_1 = __importDefault(require("http"));
@@ -31,193 +26,6 @@ process.on('uncaughtException', (err) => {
         return;
     }
     console.error('[Process Error]', err);
-});
-// Native WebSocket Server cho app iOS đồng bộ ô soi Reticle ROI & kết quả AI
-const roiWss = new ws_1.WebSocketServer({ noServer: true });
-const roiWsClients = new Set();
-exports.latestReticleRoi = {
-    normX: 0.35,
-    normY: 0.30,
-    normW: 0.30,
-    normH: 0.40,
-    isActive: true
-};
-function getLatestReticleRoi() {
-    return exports.latestReticleRoi;
-}
-exports.activeRoomModes = new Map();
-function getEffectiveRoomMode(userId) {
-    if (!userId)
-        return 'mode2';
-    const u = db_1.db.getUserById(userId);
-    if (u?.allowedMode === 'mode1')
-        return 'mode1';
-    if (u?.allowedMode === 'mode2')
-        return 'mode2';
-    return exports.activeRoomModes.get(userId) || 'mode2';
-}
-function broadcastRoiWs(payload) {
-    const data = JSON.stringify(payload);
-    for (const client of roiWsClients) {
-        if (client.readyState === ws_1.WebSocket.OPEN) {
-            try {
-                client.send(data);
-            }
-            catch (e) {
-                roiWsClients.delete(client);
-            }
-        }
-    }
-}
-server.on('upgrade', (request, socket, head) => {
-    try {
-        const url = new URL(request.url || '', 'http://' + (request.headers.host || 'localhost'));
-        if (url.pathname === '/ws/roi' || url.pathname === '/ws/debug') {
-            roiWss.handleUpgrade(request, socket, head, (ws) => {
-                roiWss.emit('connection', ws, request);
-            });
-        }
-    }
-    catch (err) {
-        // Socket.io tự xử lý upgrade của nó
-    }
-});
-function parseCardMeta(cardCode) {
-    const code = (cardCode || '').toUpperCase().trim();
-    if (code === '?' || code === '0' || code === 'UNKNOWN' || code === '__HIDDEN__') {
-        return {
-            code: '?',
-            rank: '?',
-            suit: 'Ẩn',
-            suitSymbol: '?',
-            color: 'orange',
-            display: '? (Ẩn)',
-            fullName: 'Không thấy (?)'
-        };
-    }
-    const suitChar = code.slice(-1);
-    const rank = code.slice(0, -1);
-    const suitMap = {
-        'H': { display: 'Cơ', name: 'Cơ' },
-        'D': { display: 'Rô', name: 'Rô' },
-        'C': { display: 'Tép', name: 'Tép' },
-        'S': { display: 'Bích', name: 'Bích' },
-    };
-    const suit = suitMap[suitChar] || { display: suitChar, name: suitChar };
-    const rankNameMap = {
-        'A': 'Át',
-        'K': 'K',
-        'Q': 'Q',
-        'J': 'J',
-        '10': '10',
-        '9': '9',
-        '8': '8',
-        '7': '7',
-        '6': '6',
-        '5': '5',
-        '4': '4',
-        '3': '3',
-        '2': '2'
-    };
-    const rankName = rankNameMap[rank] || rank;
-    return {
-        code: code,
-        display: `${rank} ${suit.display}`,
-        fullName: `${rankName} ${suit.name}`
-    };
-}
-let lastDeviceTelemetry = null;
-roiWss.on('connection', (ws) => {
-    roiWsClients.add(ws);
-    console.log('[WebSocket] iOS Client connected to /ws/roi');
-    try {
-        ws.send(JSON.stringify({ type: 'roi', data: exports.latestReticleRoi }));
-        const activeLiveInit = db_1.db.getActiveStream() || db_1.db.getLatestStream();
-        if (activeLiveInit?.userId) {
-            const u = db_1.db.getUserById(activeLiveInit.userId);
-            const effMode = getEffectiveRoomMode(activeLiveInit.userId);
-            ws.send(JSON.stringify({
-                type: 'mode_changed',
-                data: {
-                    userId: activeLiveInit.userId,
-                    username: u?.username || '',
-                    allowedMode: u?.allowedMode || 'all',
-                    effectiveMode: effMode,
-                    isAiEnabled: effMode === 'mode2'
-                }
-            }));
-        }
-    }
-    catch (e) { }
-    ws.on('message', (raw) => {
-        try {
-            const msg = JSON.parse(raw.toString());
-            if (msg.type === 'ios_ping') {
-                try {
-                    ws.send(JSON.stringify({ type: 'ios_pong', t: msg.t }));
-                }
-                catch { }
-                return;
-            }
-            if (msg.type === 'register_ios_client') {
-                const u = msg.userId ? db_1.db.getUserById(msg.userId) : (msg.username ? db_1.db.getUserByUsername(msg.username) : undefined);
-                if (u) {
-                    const effMode = getEffectiveRoomMode(u.id);
-                    ws.send(JSON.stringify({
-                        type: 'mode_changed',
-                        data: {
-                            userId: u.id,
-                            username: u.username,
-                            allowedMode: u.allowedMode || 'all',
-                            effectiveMode: effMode,
-                            isAiEnabled: effMode === 'mode2'
-                        }
-                    }));
-                }
-                return;
-            }
-            if (msg.type === 'device_telemetry' && msg.data) {
-                lastDeviceTelemetry = msg.data;
-                io.emit('device_telemetry', msg.data);
-                return;
-            }
-            if (msg.type === 'card_detected_from_ios' && msg.data) {
-                const cardCode = msg.data.cardValue;
-                const conf = typeof msg.data.confidence === 'number' ? msg.data.confidence : 0.95;
-                const sharpness = typeof msg.data.sharpness === 'number' ? msg.data.sharpness : 280;
-                const image = msg.data.image || '';
-                const updateFrameOnly = Boolean(msg.data.updateFrameOnly);
-                const cardMeta = parseCardMeta(cardCode);
-                const activeLive = db_1.db.getActiveStream() || db_1.db.getLatestStream();
-                const effectiveRoomId = (msg.roomId && msg.roomId !== 'default')
-                    ? msg.roomId
-                    : (msg.data?.roomId && msg.data.roomId !== 'default'
-                        ? msg.data.roomId
-                        : (activeLive?.userId || 'default'));
-                console.log(`[WebSocket] 🎯 iPhone On-Device AI phát hiện: ${cardMeta.display} (${Math.round(conf * 100)}%) | Nét=${sharpness} | updateOnly=${updateFrameOnly} | Room=${effectiveRoomId}`);
-                const payload = {
-                    card: cardMeta,
-                    allCards: [cardMeta],
-                    confidence: conf,
-                    sharpness: sharpness,
-                    image: image,
-                    updateFrameOnly: updateFrameOnly,
-                    timestamp: new Date().toLocaleTimeString('vi-VN'),
-                    roomId: effectiveRoomId
-                };
-                io.emit('card_detected', payload);
-                broadcastRoiWs({ type: 'card_detected', data: payload });
-            }
-        }
-        catch (e) { }
-    });
-    ws.on('close', () => {
-        roiWsClients.delete(ws);
-        console.log('[WebSocket] iOS Client disconnected from /ws/roi');
-    });
-    ws.on('error', () => {
-        roiWsClients.delete(ws);
-    });
 });
 const io = new socket_io_1.Server(server, {
     cors: {
@@ -260,13 +68,6 @@ io.use((socket, next) => {
     }
 });
 (0, stream_1.setSocketServer)(io);
-(0, mediaServer_1.setStreamStartedHandler)((startedSession) => {
-    if (!startedSession)
-        return;
-    io.to(`room_${startedSession.userId}`).emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
-    io.to('room_admin').emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
-    io.emit('stream_status_changed', { roomId: startedSession.userId, status: 'LIVE', session: startedSession });
-});
 (0, mediaServer_1.setStreamEndedHandler)((streamKey) => {
     let ended = db_1.db.endStreamSessionByStreamKey(streamKey);
     if (!ended) {
@@ -276,7 +77,6 @@ io.use((socket, next) => {
         return;
     io.to(`room_${ended.userId}`).emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
     io.to('room_admin').emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
-    io.emit('stream_status_changed', { roomId: ended.userId, status: 'ENDED', session: ended });
 });
 const PORT = parseInt(process.env.PORT || '4000');
 app.use((0, cors_1.default)());
@@ -314,30 +114,6 @@ const realtimeUserChanges = (req, res, next) => {
         if (res.statusCode >= 400)
             return;
         io.to('room_admin').emit('users_changed', { path: fullPath, method: req.method, at: Date.now() });
-        const modeMatch = fullPath.match(/^\/api\/admin\/users\/([^/]+)\/mode$/);
-        if (modeMatch && req.method === 'POST') {
-            const targetUserId = modeMatch[1];
-            const updatedUser = db_1.db.getUserById(targetUserId);
-            if (updatedUser) {
-                const effMode = updatedUser.allowedMode === 'mode1'
-                    ? 'mode1'
-                    : updatedUser.allowedMode === 'mode2'
-                        ? 'mode2'
-                        : (exports.activeRoomModes.get(targetUserId) || 'mode2');
-                exports.activeRoomModes.set(targetUserId, effMode);
-                const modePayload = {
-                    userId: updatedUser.id,
-                    username: updatedUser.username,
-                    allowedMode: updatedUser.allowedMode || 'all',
-                    effectiveMode: effMode,
-                    isAiEnabled: effMode === 'mode2'
-                };
-                io.to(`room_${targetUserId}`).emit('user_mode_changed', modePayload);
-                io.to('room_admin').emit('user_mode_changed', modePayload);
-                broadcastRoiWs({ type: 'mode_changed', data: modePayload });
-                console.log(`[Admin] Đã đồng bộ chuyển chế độ realtime cho ${updatedUser.username} (${targetUserId}) -> ${effMode} (AI=${modePayload.isAiEnabled})`);
-            }
-        }
         const m = fullPath.match(/^\/api\/admin\/users\/([^/]+)(?:\/(toggle-block|reset-device|reset-password))?$/);
         if (!m)
             return;
@@ -358,83 +134,6 @@ app.use('/api/auth', realtimeUserChanges, auth_1.authRouter);
 app.use('/api/admin', realtimeUserChanges, admin_1.adminRouter);
 app.use('/api/license', realtimeUserChanges, license_1.licenseRouter);
 app.use('/api/stream', stream_1.streamRouter);
-// Vietnamese TTS Audio Proxy (đảm bảo đọc tiếng Việt rõ ràng trên mọi trình duyệt / Windows thiếu gói giọng đọc vi-VN)
-app.get('/api/tts', async (req, res) => {
-    try {
-        const text = (req.query.text || '').trim().slice(0, 200);
-        if (!text) {
-            return res.status(400).send('Missing text');
-        }
-        const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&q=${encodeURIComponent(text)}`;
-        const upstream = await fetch(ttsUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-        if (!upstream.ok) {
-            return res.status(upstream.status).send('TTS upstream error');
-        }
-        const arrayBuffer = await upstream.arrayBuffer();
-        res.setHeader('Content-Type', 'audio/mpeg');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        res.send(Buffer.from(arrayBuffer));
-    }
-    catch (err) {
-        res.status(500).send('TTS failed');
-    }
-});
-// WebRTC WHEP Reverse Proxy (tránh lỗi Mixed Content HTTPS -> HTTP port 8889 trên slomoview.stream / VPS 157.66.100.10)
-app.post('/api/whep/:streamKey', express_1.default.text({ type: ['application/sdp', 'text/plain', '*/*'], limit: '2mb' }), async (req, res) => {
-    try {
-        const streamKey = (req.params.streamKey || '').replace(/[^a-zA-Z0-9._-]/g, '');
-        if (!streamKey) {
-            return res.status(400).send('Invalid streamKey');
-        }
-        const sdpOffer = typeof req.body === 'string' ? req.body : '';
-        // Thử cổng MediaMTX nội bộ 8888 trước (chuẩn cấu hình VPS), nếu không được thì thử 8889
-        const ports = [8888, 8889];
-        let upstreamRes = null;
-        let answerText = '';
-        for (const port of ports) {
-            try {
-                let resp = await fetch(`http://127.0.0.1:${port}/live/${streamKey}/whep`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/sdp' },
-                    body: sdpOffer
-                });
-                if (resp.status === 404) {
-                    resp = await fetch(`http://127.0.0.1:${port}/${streamKey}/whep`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/sdp' },
-                        body: sdpOffer
-                    });
-                }
-                if (resp.ok || resp.status < 500) {
-                    upstreamRes = resp;
-                    answerText = await resp.text();
-                    break;
-                }
-            }
-            catch (e) {
-                // thử cổng tiếp theo
-            }
-        }
-        if (!upstreamRes) {
-            return res.status(502).send('WHEP upstream unavailable');
-        }
-        res.status(upstreamRes.status);
-        res.setHeader('Content-Type', upstreamRes.headers.get('content-type') || 'application/sdp');
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.send(answerText);
-    }
-    catch (err) {
-        res.status(502).send('WHEP upstream unavailable');
-    }
-});
-app.all('/api/whep/:streamKey/*', (_req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.status(200).end();
-});
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', serverTime: new Date().toISOString() });
@@ -471,41 +170,23 @@ app.get('/api/server-info', (req, res) => {
     });
 });
 /**
-
  * QUAN TRỌNG: proxy /live/* (HLS .m3u8 + .ts do NMS/ffmpeg sinh ra ở port 8000 nội bộ) qua
-
  * chính port 4000 này. Lý do:
-
  *   - Cloudflare Quick Tunnel chỉ forward 1 port (4000). Nếu trả về link
-
  *     "http://<lan-ip>:8000/live/..." thì trình duyệt (đang mở trang qua HTTPS tunnel) sẽ
-
  *     bị chặn bởi Mixed Content (http trong trang https) VÀ CORS Private Network Access
-
  *     (domain public không được phép gọi thẳng vào IP LAN riêng).
-
  *   - Proxy qua cùng port/host mà trình duyệt đang kết nối -> luôn same-origin, same-protocol,
-
  *     không còn Mixed Content, không còn CORS/private-network nữa, không cần mở thêm tunnel.
-
  *
-
  * NMS serve mediaroot tại port 8000 với path prefix /live/ (vd: /live/<streamKey>/index.m3u8),
-
  * nên proxy chỉ cần forward nguyên originalUrl tới localhost:8000 là đúng.
-
 /**
-
  * Phục vụ trực tiếp HLS (.m3u8 + .ts) từ thư mục ổ đĩa media/replay và media/live.
-
  * - Giải quyết triệt để lỗi 404: NodeMediaServer port 8000 không có route /replay,
-
  *   khiến request /replay/.../index.m3u8 bị 404 dù file đã được FFmpeg ghi trên đĩa.
-
  * - express.static hỗ trợ HTTP Range requests chuẩn (cực kỳ quan trọng để tua/seek video mượt).
-
  * - Cấu hình CORS mở và no-cache cho .m3u8 để cập nhật playlist mới nhất.
-
  */
 const MEDIA_ROOT = path_1.default.join(__dirname, '../media');
 app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'replay'), {
@@ -519,7 +200,7 @@ app.use('/replay', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'rep
         }
         else if (filePath.endsWith('.ts')) {
             // Đặt no-cache để trình duyệt luôn tải file .ts mới của phiên mới, không bao giờ dùng lại cache cũ từ phiên trước
-            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
@@ -534,35 +215,15 @@ app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'live'
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         }
         else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
-            res.setHeader('Content-Type', 'video/MP2T');
-        }
-    }
-}));
-// Fallback: Nếu request /live mà file nằm trong replay, tự động phục vụ từ replay
-app.use('/live', express_1.default.static(path_1.default.join(MEDIA_ROOT, 'replay'), {
-    setHeaders: (res, filePath) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', '*');
-        if (filePath.endsWith('.m3u8')) {
             res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-        }
-        else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
             res.setHeader('Content-Type', 'video/MP2T');
         }
     }
 }));
 /**
-
  * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
-
  * host:port + protocol với chính request đang gọi /api/... -> nhờ có proxy /live ở trên nên
-
  * điều này đúng cho cả 3 trường hợp: LAN, Cloudflare tunnel (HTTPS), hay override thủ công.
-
  */
 function resolveHlsBaseUrl(req) {
     const forwardedProto = req.headers['x-forwarded-proto']?.split(',')[0]?.trim();
@@ -583,7 +244,7 @@ const appDir = fs_1.default.existsSync(path_1.default.resolve(__dirname, '../../
     ? path_1.default.resolve(__dirname, '../../app')
     : path_1.default.resolve(process.cwd(), 'app');
 app.get('/ios/manifest.plist', (req, res) => {
-    const host = req.headers.host || 'slomoview.stream';
+    const host = req.headers.host || 'streamslo.date';
     const forwardedProto = req.headers['x-forwarded-proto']?.split(',')[0]?.trim();
     const proto = forwardedProto || req.protocol || 'https';
     // Apple itms-services bắt buộc HTTPS (trừ localhost test)
@@ -599,97 +260,51 @@ app.get('/ios/manifest.plist', (req, res) => {
     const ipaUrl = `${scheme}://${host}/ios/${ipaFilename}`;
     const iconUrl = `${scheme}://${host}/vite.svg`;
     const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
-
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-
 <plist version="1.0">
-
 <dict>
-
     <key>items</key>
-
     <array>
-
         <dict>
-
             <key>assets</key>
-
             <array>
-
                 <dict>
-
                     <key>kind</key>
-
                     <string>software-package</string>
-
                     <key>url</key>
-
                     <string>${ipaUrl}</string>
-
                 </dict>
-
                 <dict>
-
                     <key>kind</key>
-
                     <string>display-image</string>
-
                     <key>needs-shine</key>
-
                     <false/>
-
                     <key>url</key>
-
                     <string>${iconUrl}</string>
-
                 </dict>
-
                 <dict>
-
                     <key>kind</key>
-
                     <string>full-size-image</string>
-
                     <key>needs-shine</key>
-
                     <false/>
-
                     <key>url</key>
-
                     <string>${iconUrl}</string>
-
                 </dict>
-
             </array>
-
             <key>metadata</key>
-
             <dict>
-
                 <key>bundle-identifier</key>
-
                 <string>com.slomo.live</string>
-
                 <key>bundle-version</key>
-
                 <string>1.0.0</string>
-
                 <key>kind</key>
-
                 <string>software</string>
-
                 <key>title</key>
-
                 <string>SloMo Live 240FPS</string>
-
             </dict>
-
         </dict>
-
     </array>
-
 </dict>
-
 </plist>`;
     res.setHeader('Content-Type', 'application/xml');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -734,14 +349,6 @@ const roomViewers = new Map();
 io.on('connection', (socket) => {
     const user = socket.user;
     console.log(`[Socket] Client connected: ${socket.id} | User: ${user ? `${user.username} (${user.role})` : 'Anonymous'}`);
-    if (lastDeviceTelemetry) {
-        socket.emit('device_telemetry', lastDeviceTelemetry);
-    }
-    socket.on('ping_check', (callback) => {
-        if (typeof callback === 'function') {
-            callback();
-        }
-    });
     // Admin tự động tham gia phòng quản trị ngay khi vừa kết nối, không chờ join_room
     if (user?.role === 'ADMIN') {
         socket.join('room_admin');
@@ -806,7 +413,6 @@ io.on('connection', (socket) => {
         const fakeReq = { headers: socket.handshake.headers };
         const { rtmpHost, rtmpPort } = (0, network_1.resolveRtmpHostForClient)(fakeReq);
         socket.emit('initial_state', {
-            effectiveMode: getEffectiveRoomMode(roomId),
             roomId,
             activeStream: activeStream || null,
             latestGps: latestGps || null,
@@ -916,46 +522,6 @@ io.on('connection', (socket) => {
         const updated = db_1.db.getCardEntries(targetRoomId);
         io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
     });
-    // --- Server-Side AI Gateway ---
-    socket.on('set_active_app_mode', (data) => {
-        const targetRoomId = (user?.role === 'ADMIN' && data?.roomId) ? data.roomId : (user?.id || data?.roomId || 'default');
-        const requestedMode = data?.appMode === 'mode1' ? 'mode1' : 'mode2';
-        exports.activeRoomModes.set(targetRoomId, requestedMode);
-        const targetUser = db_1.db.getUserById(targetRoomId);
-        const allowedMode = targetUser?.allowedMode || 'all';
-        const effMode = allowedMode === 'mode1' ? 'mode1' : (allowedMode === 'mode2' ? 'mode2' : requestedMode);
-        const modePayload = {
-            userId: targetRoomId,
-            username: targetUser?.username || '',
-            allowedMode,
-            effectiveMode: effMode,
-            isAiEnabled: effMode === 'mode2'
-        };
-        broadcastRoiWs({ type: 'mode_changed', data: modePayload });
-        io.to(`room_${targetRoomId}`).emit('active_app_mode_synced', modePayload);
-    });
-    socket.on('set_reticle_roi', (data) => {
-        if (data && typeof data === 'object') {
-            exports.latestReticleRoi = { ...exports.latestReticleRoi, ...data };
-        }
-        io.emit('reticle_roi_updated', data);
-        broadcastRoiWs({ type: 'roi', data: exports.latestReticleRoi });
-    });
-    socket.on('scan_exact_frame', (data) => {
-        io.emit('scan_exact_frame_request', data);
-    });
-    socket.on('reset_session_ram', (data) => {
-        const targetRoomId = (user?.role === 'ADMIN' && data?.roomId) ? data.roomId : (data?.roomId || user?.id || 'default');
-        db_1.db.clearCardEntries(targetRoomId);
-        io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-        io.emit('reset_session_ram', data);
-    });
-    socket.on('server_card_detected', (data) => {
-        const activeLive = db_1.db.getActiveStream() || db_1.db.getLatestStream();
-        const effectiveRoomId = (data.roomId && data.roomId !== 'default') ? data.roomId : (activeLive?.userId || 'default');
-        const enriched = { ...data, roomId: effectiveRoomId };
-        io.emit('card_detected', enriched);
-    });
     socket.on('live_remote_card', (data) => {
         if (!user)
             return;
@@ -970,12 +536,6 @@ io.on('connection', (socket) => {
             timestamp: Date.now()
         });
     });
-    socket.on('cards_cleared', (data) => {
-        const targetRoomId = (user?.role === 'ADMIN' && data?.roomId) ? data.roomId : (data?.roomId || user?.id || 'default');
-        db_1.db.clearCardEntries(targetRoomId);
-        io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-        broadcastRoiWs({ type: 'cards_cleared', data: data || {} });
-    });
     socket.on('clear_cards', (data) => {
         if (!user)
             return;
@@ -984,7 +544,6 @@ io.on('connection', (socket) => {
             return;
         db_1.db.clearCardEntries(targetRoomId);
         io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-        io.emit('cards_cleared', { roomId: targetRoomId });
     });
     socket.on('finish_round', (data) => {
         if (!user)
@@ -1013,7 +572,6 @@ io.on('connection', (socket) => {
         const ts = Date.now();
         io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
         io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
-        io.emit('cards_cleared', { roomId: targetRoomId });
     });
     socket.on('disconnect', () => {
         const roomId = socket._viewerRoomId;

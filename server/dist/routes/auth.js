@@ -157,7 +157,6 @@ exports.authRouter.post('/login', (req, res) => {
             id: user.id,
             username: user.username,
             role: user.role,
-            allowedMode: user.allowedMode || 'all',
             expiresAt: user.expiresAt,
             platform: platform || 'web',
             device: boundDevice,
@@ -180,7 +179,6 @@ exports.authRouter.get('/me', authMiddleware, (req, res) => {
             id: user?.id,
             username: user?.username,
             role: user?.role,
-            allowedMode: user?.allowedMode || 'all',
             expiresAt: user?.expiresAt,
             platform: req.user?.platform,
             devices

@@ -200,7 +200,6 @@ authRouter.post('/login', (req: Request, res: Response) => {
       id: user.id,
       username: user.username,
       role: user.role,
-      allowedMode: user.allowedMode || 'all',
       expiresAt: user.expiresAt,
       platform: platform || 'web',
       device: boundDevice,
@@ -225,7 +224,6 @@ authRouter.get('/me', authMiddleware, (req: AuthRequest, res: Response) => {
       id: user?.id,
       username: user?.username,
       role: user?.role,
-      allowedMode: user?.allowedMode || 'all',
       expiresAt: user?.expiresAt,
       platform: req.user?.platform,
       devices
