@@ -230,7 +230,10 @@ app.post('/api/whep/:streamKey', express_1.default.text({ type: ['application/sd
         // Live có tiếng: khi relay AAC -> Opus đang chạy thì CHỈ phát path `_rtc` (có Opus).
         // Path gốc chỉ có AAC nên WebRTC mất tiếng; chỉ fallback về path gốc khi relay không chạy
         // (vd FFmpeg thiếu libopus) để live vẫn có hình. Path `_rtc` chưa sẵn sàng -> 404 -> web tự thử lại.
-        const targetKey = (0, mediaServer_1.isRtcRelayActive)(streamKey) ? `${streamKey}${mediaServer_1.RTC_RELAY_SUFFIX}` : streamKey;
+        // Kich hoat ngay lap tuc WebRTC Audio Relay (AAC -> Opus) khi co yeu cau xem
+        (0, mediaServer_1.ensureRtcRelay)(streamKey);
+        // Luon uu tien luong co tieng _rtc. Chi fallback neu relay that su bi loi
+        const targetKey = (0, mediaServer_1.isRtcRelayFailed)(streamKey) ? streamKey : `${streamKey}${mediaServer_1.RTC_RELAY_SUFFIX}`;
         const ports = [8888, 8889];
         let upstreamRes = null;
         let answerText = '';

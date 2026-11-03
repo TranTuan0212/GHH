@@ -46,6 +46,7 @@ interface RtcRelay {
   proc: ChildProcess;
   startedAt: number;
   alive: boolean;
+  failed?: boolean;
 }
 
 const rtcRelays: Map<string, RtcRelay> = new Map();
@@ -71,7 +72,12 @@ function stopRtcRelay(streamKey: string): void {
   rtcRelays.delete(streamKey);
 }
 
-function ensureRtcRelay(streamKey: string): void {
+export function isRtcRelayFailed(streamKey: string): boolean {
+  const relay = rtcRelays.get(streamKey);
+  return !!relay && !!relay.failed;
+}
+
+export function ensureRtcRelay(streamKey: string): void {
   const existing = rtcRelays.get(streamKey);
   if (existing && existing.alive) return;
   // Chống spawn dồn dập khi FFmpeg lỗi liên tục (watcher chạy mỗi 1s)

@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RTC_RELAY_SUFFIX = exports.hlsSessions = void 0;
 exports.isRtcRelayActive = isRtcRelayActive;
+exports.isRtcRelayFailed = isRtcRelayFailed;
+exports.ensureRtcRelay = ensureRtcRelay;
 exports.setStreamEndedHandler = setStreamEndedHandler;
 exports.cleanupStreamSession = cleanupStreamSession;
 exports.stopFfmpegOnly = stopFfmpegOnly;
@@ -68,6 +70,10 @@ function stopRtcRelay(streamKey) {
         catch { }
     }
     rtcRelays.delete(streamKey);
+}
+function isRtcRelayFailed(streamKey) {
+    const relay = rtcRelays.get(streamKey);
+    return !!relay && !!relay.failed;
 }
 function ensureRtcRelay(streamKey) {
     const existing = rtcRelays.get(streamKey);

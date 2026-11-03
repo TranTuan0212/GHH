@@ -1493,7 +1493,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               if (video.paused) {
                 video.play().catch(() => {});
               }
-            } else if (lag > 5.0) {
+            } else if (lag > 5.0 && !scheduledSlowRef.current) {
               video.currentTime = Math.max(0, end - 1.5);
               if (video.paused) {
                 video.play().catch(() => {});
@@ -2109,14 +2109,24 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
 
-    // TỐI ƯU CỰC MẠNH: Bỏ hết các file cũ trước mốc hẹn 5s,
-    // dồn 100% băng thông tải ngay đệm 5s an toàn trước cú chia bài và phi nước đại bám Live!
+    // TỐI ƯU CỰC MẠNH: Hủy hết buffer cũ, đưa playhead về mốc hẹn - 5s
+    // và dồn 100% băng thông tải đệm an toàn từ mốc hẹn - 5s đến mốc hẹn +
+    const priorityStart = Math.max(0, targetTime - 5.0);
+    if (replayVideoRef.current) {
+      replayVideoRef.current.currentTime = priorityStart;
+      setCurrentTime(priorityStart);
+    }
     if (hlsRef.current) {
       try {
         hlsRef.current.stopLoad();
-        const priorityStart = Math.max(0, targetTime - 5.0);
+        if (typeof (hlsRef.current as any).trigger === 'function') {
+          try {
+            (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: priorityStart, type: 'video' });
+            (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: priorityStart, type: 'audio' });
+          } catch {}
+        }
         hlsRef.current.startLoad(priorityStart);
-        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã cắt bỏ tải cũ, nạp ưu tiên đệm 5s an toàn từ: ${priorityStart.toFixed(2)}s`);
+        console.log(`[LivePlayer] 🎯 Hẹn Slow: Đã hủy HLS cũ, nạp ưu tiên đệm từ mốc hẹn - 5s: ${priorityStart.toFixed(2)}s`);
       } catch (err) {
         console.warn('[LivePlayer] Lỗi hls.startLoad ưu tiên:', err);
       }
