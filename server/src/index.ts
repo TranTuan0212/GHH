@@ -11,7 +11,7 @@ import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { licenseRouter } from './routes/license';
 import { db } from './db';
-import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession } from './mediaServer';
+import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession, isRtcRelayActive, RTC_RELAY_SUFFIX } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
 
 const app = express();
@@ -239,19 +239,23 @@ app.post('/api/whep/:streamKey', express.text({ type: ['application/sdp', 'text/
       return res.status(400).send('Invalid streamKey');
     }
     const sdpOffer = req.body;
+    // Live có tiếng: khi relay AAC -> Opus đang chạy thì CHỈ phát path `_rtc` (có Opus).
+    // Path gốc chỉ có AAC nên WebRTC mất tiếng; chỉ fallback về path gốc khi relay không chạy
+    // (vd FFmpeg thiếu libopus) để live vẫn có hình. Path `_rtc` chưa sẵn sàng -> 404 -> web tự thử lại.
+    const targetKey = isRtcRelayActive(streamKey) ? `${streamKey}${RTC_RELAY_SUFFIX}` : streamKey;
     const ports = [8888, 8889];
     let upstreamRes: any = null;
     let answerText = '';
 
     for (const port of ports) {
       try {
-        let resp = await fetch(`http://127.0.0.1:${port}/live/${streamKey}/whep`, {
+        let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/sdp' },
           body: sdpOffer
         });
         if (resp.status === 404) {
-          resp = await fetch(`http://127.0.0.1:${port}/${streamKey}/whep`, {
+          resp = await fetch(`http://127.0.0.1:${port}/${targetKey}/whep`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/sdp' },
             body: sdpOffer

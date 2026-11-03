@@ -1494,10 +1494,11 @@ export const Mode2Dashboard: React.FC<Mode2DashboardProps> = ({
             try {
               const anyReceiver = receiver as any;
               if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
-                anyReceiver.playoutDelayHint = 0.05;
+                // Tang dem thich ung mang ping cao 200-500ms triet tieu lag khung (xem DEBUG_LOG.md)
+                anyReceiver.playoutDelayHint = 0.40;
               }
               if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
-                anyReceiver.jitterBufferTarget = 50;
+                anyReceiver.jitterBufferTarget = 400;
               }
             } catch {}
             if (cancelled || !streams[0] || !liveVideoRef.current) return;

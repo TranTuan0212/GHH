@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.hlsSessions = void 0;
+exports.RTC_RELAY_SUFFIX = exports.hlsSessions = void 0;
+exports.isRtcRelayActive = isRtcRelayActive;
 exports.setStreamEndedHandler = setStreamEndedHandler;
 exports.cleanupStreamSession = cleanupStreamSession;
 exports.stopFfmpegOnly = stopFfmpegOnly;
@@ -35,6 +36,84 @@ const SESSION_TIMEOUT_SECONDS = parseInt(process.env.SESSION_TIMEOUT_SECONDS || 
 const CRON_MAX_AGE_SECONDS = parseInt(process.env.CRON_MAX_AGE_SECONDS || '', 10) || 24 * 60 * 60;
 const HLS_SEGMENT_SECONDS = 0.5;
 exports.hlsSessions = new Map();
+/**
+ * WebRTC Audio Relay (AAC -> Opus):
+ * iPhone (LFLiveKit) phát audio AAC qua RTMP, nhưng WebRTC trình duyệt KHÔNG hỗ trợ AAC
+ * nên MediaMTX bỏ track audio khi phát WHEP -> live không có tiếng.
+ * Relay này đọc RTSP gốc, GIỮ NGUYÊN video (-c:v copy, 0% CPU, không giảm nét) và chỉ
+ * chuyển audio sang Opus, rồi publish lại vào path `live/{streamKey}_rtc` để WHEP phát có tiếng.
+ * Cố ý KHÔNG lấy tiếng từ HLS (gây lệch tiếng vài giây so với hình, xem DEBUG_LOG.md 2026-11-03).
+ */
+exports.RTC_RELAY_SUFFIX = '_rtc';
+const RTC_RELAY_RESTART_MS = 3000;
+const rtcRelays = new Map();
+function resolveFfmpegPath() {
+    const bundledFfmpeg = path_1.default.join(__dirname, '../tools/ffmpeg/ffmpeg.exe');
+    return process.env.FFMPEG_PATH || (fs_1.default.existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg');
+}
+/** Relay Opus của stream có đang chạy không (WHEP proxy dùng để chọn path `_rtc`). */
+function isRtcRelayActive(streamKey) {
+    const relay = rtcRelays.get(streamKey);
+    return !!relay && relay.alive;
+}
+function stopRtcRelay(streamKey) {
+    const relay = rtcRelays.get(streamKey);
+    if (!relay)
+        return;
+    relay.alive = false;
+    if (relay.proc.exitCode === null && !relay.proc.killed) {
+        try {
+            relay.proc.kill('SIGTERM');
+        }
+        catch { }
+    }
+    rtcRelays.delete(streamKey);
+}
+function ensureRtcRelay(streamKey) {
+    const existing = rtcRelays.get(streamKey);
+    if (existing && existing.alive)
+        return;
+    // Chống spawn dồn dập khi FFmpeg lỗi liên tục (watcher chạy mỗi 1s)
+    if (existing && Date.now() - existing.startedAt < RTC_RELAY_RESTART_MS)
+        return;
+    const ffmpegArgs = [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-fflags', '+nobuffer',
+        '-flags', 'low_delay',
+        '-rtsp_transport', 'tcp',
+        '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
+        '-c:v', 'copy',
+        '-c:a', 'libopus',
+        '-b:a', '64k',
+        '-ar', '48000',
+        '-ac', '2',
+        '-application', 'lowdelay',
+        '-frame_duration', '20',
+        '-f', 'rtsp',
+        '-rtsp_transport', 'tcp',
+        `rtsp://127.0.0.1:8554/live/${streamKey}${exports.RTC_RELAY_SUFFIX}`
+    ];
+    const proc = (0, child_process_1.spawn)(resolveFfmpegPath(), ffmpegArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const relay = { proc, startedAt: Date.now(), alive: true };
+    rtcRelays.set(streamKey, relay);
+    console.log(`[MediaServer] 🔊 Khởi động WebRTC Audio Relay (AAC -> Opus, video copy): live/${streamKey}${exports.RTC_RELAY_SUFFIX}`);
+    proc.stderr?.on('data', (data) => {
+        const line = data.toString().trim();
+        if (line)
+            console.log(`[MediaServer] [rtc-relay ${streamKey}] ${line}`);
+    });
+    proc.on('error', (err) => {
+        relay.alive = false;
+        console.error(`[MediaServer] rtc-relay spawn error for ${streamKey}:`, err);
+    });
+    proc.on('close', (code, signal) => {
+        relay.alive = false;
+        console.log(`[MediaServer] rtc-relay exited for ${streamKey} with code=${code} signal=${signal}`);
+    });
+}
 let streamEndedHandler;
 function setStreamEndedHandler(handler) {
     streamEndedHandler = handler;
@@ -46,6 +125,7 @@ function getStreamDir(rendition, streamKey) {
     return path_1.default.join(MEDIA_ROOT, rendition, streamKey);
 }
 function cleanupStreamSession(streamKey) {
+    stopRtcRelay(streamKey);
     if (pendingDisconnects.has(streamKey)) {
         clearTimeout(pendingDisconnects.get(streamKey));
         pendingDisconnects.delete(streamKey);
@@ -90,6 +170,7 @@ function cleanupStreamSession(streamKey) {
  * Dừng FFmpeg Replay, giữ lại file .ts/.m3u8 để người xem tua lại.
  */
 function stopFfmpegOnly(streamKey) {
+    stopRtcRelay(streamKey);
     if (pendingDisconnects.has(streamKey)) {
         clearTimeout(pendingDisconnects.get(streamKey));
         pendingDisconnects.delete(streamKey);
@@ -159,7 +240,10 @@ function resetReplaySession(streamKey) {
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb',
-        '-an',
+        // Cố ý giữ track AAC (copy, 0% CPU), KHÔNG dùng '-an' vì làm Replay mất tiếng (xem .agent/DEBUG_LOG.md 2026-11-03)
+        '-map', '0:v',
+        '-map', '0:a?',
+        '-c:a', 'copy',
         '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
@@ -204,7 +288,10 @@ function startHlsSession(streamKey) {
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb',
-        '-an',
+        // Cố ý giữ track AAC (copy, 0% CPU), KHÔNG dùng '-an' vì làm Replay mất tiếng (xem .agent/DEBUG_LOG.md 2026-11-03)
+        '-map', '0:v',
+        '-map', '0:a?',
+        '-c:a', 'copy',
         '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
@@ -269,6 +356,9 @@ function startMediaMtxWatcher() {
             for (const item of items) {
                 if (!item.ready)
                     continue;
+                // Bỏ qua path relay Opus `_rtc` do chính server publish (không phải iPhone, không tạo DVR/DB)
+                if (String(item.name).endsWith(exports.RTC_RELAY_SUFFIX))
+                    continue;
                 const streamKey = item.name.split('/').pop() || item.name;
                 activeStreamKeys.add(streamKey);
                 // Hủy timer ân hạn ngắt kết nối nếu có
@@ -306,6 +396,8 @@ function startMediaMtxWatcher() {
                         console.log(`[MediaServer] ⚡ Tự động cấp phép phiên LIVE mới qua MediaMTX: ${streamKey}`);
                     }
                 }
+                // Live WebRTC có tiếng: đảm bảo relay AAC -> Opus luôn chạy khi iPhone đang phát
+                ensureRtcRelay(streamKey);
                 // Khởi động FFmpeg Replay DVR nếu chưa chạy
                 const existingSession = exports.hlsSessions.get(streamKey);
                 const isProcAlive = existingSession && existingSession.ffmpegProcesses[0] &&
