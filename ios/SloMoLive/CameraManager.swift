@@ -519,15 +519,6 @@ public class CameraManager: NSObject, ObservableObject {
         audioCfg.audioSampleRate = ._48000Hz
         audioCfg.audioBitrate = ._64Kbps
 
-        let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
-        let uiOrientation: UIInterfaceOrientation = {
-            switch currentCaptureOrientation {
-            case .landscapeLeft: return .landscapeLeft
-            case .landscapeRight: return .landscapeRight
-            case .portraitUpsideDown: return .portraitUpsideDown
-            default: return .portrait
-            }
-        }()
 
         // QUAN TRỌNG: Khởi tạo trực tiếp LFLiveVideoConfiguration() thay vì gọi defaultConfiguration(for: .high3)
         // vì defaultConfiguration trong LFLiveKit gọi supportSessionPreset: tạo một AVCaptureSession phụ gắn đè
