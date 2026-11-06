@@ -1555,10 +1555,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHlsLiveEdge(end);
 
             // Chế độ On-Demand: khi đang xem Live bình thường (không có hẹn slow),
-            // dừng hoàn toàn nạp segment HLS và dừng video ngầm để giải phóng 100% CPU/GPU cho WebRTC Live!
-            if (!scheduledSlowRef.current) {
-              if (!video.paused) video.pause();
-              try { hls.stopLoad(); } catch {}
+            // giữ video ngầm ở trạng thái pause để không ngốn CPU/băng thông
+            if (!scheduledSlowRef.current && !video.paused) {
+              video.pause();
             }
           }
         }
@@ -1954,11 +1953,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
-
-    // Reset sạch mốc hẹn cũ khi quay lại Live để lần hẹn sau luôn là mốc mới chuẩn xác
-    scheduledSlowRef.current = null;
-    setScheduledSlow(null);
-
     if (hlsLiveEdgeRef.current > 0) {
       setHlsLiveEdge(hlsLiveEdgeRef.current);
     }
@@ -2151,25 +2145,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Cắm cờ mốc hẹn Slow tự động
   const toggleScheduledSlow = (customSpeed?: number) => {
     const speed = customSpeed ?? autoSlowSpeed;
-
-    // Lấy mốc Live Edge chuẩn xác nhất từ danh sách fragments HLS thực tế
-    let accurateLiveEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
-    if (hlsRef.current) {
-      try {
-        const details = (hlsRef.current as any)?.levels?.[(hlsRef.current as any)?.currentLevel || 0]?.details;
-        if (details?.fragments && details.fragments.length > 0) {
-          const lastFrag = details.fragments[details.fragments.length - 1];
-          const end = lastFrag.start + lastFrag.duration;
-          if (end > accurateLiveEdge) {
-            accurateLiveEdge = end;
-            hlsLiveEdgeRef.current = end;
-            setHlsLiveEdge(end);
-          }
-        }
-      } catch {}
-    }
-
-    const targetTime = accurateLiveEdge > 0 ? accurateLiveEdge : currentTime;
+    const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+    const targetTime = latestEdge > 0 ? latestEdge : currentTime;
     const item = { targetTime, speed, scheduledAt: Date.now(), triggered: false };
     scheduledSlowRef.current = item;
     setScheduledSlow(item);
@@ -2443,11 +2420,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
-      if (isLiveRef.current) {
-        // Đang xem Live -> Luôn cắm cờ mốc hẹn MỚI chuẩn xác
-        toggleScheduledSlow();
-      } else if (scheduledSlowRef.current) {
-        // Đang xem Replay/Slow -> Bấm S để nhảy lại đúng mốc hẹn
+      if (scheduledSlowRef.current) {
         jumpToScheduledSlow();
       } else {
         toggleScheduledSlow();
