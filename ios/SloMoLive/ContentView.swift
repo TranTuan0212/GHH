@@ -398,6 +398,22 @@ extension ContentView {
         }
     }
 
+    private var orientationTitle: String {
+        switch cameraManager.orientationLockMode {
+        case .auto: return "Xoay: Tự động"
+        case .landscape: return "Ngang 16:9"
+        case .portrait: return "Dọc 9:16"
+        }
+    }
+
+    private var orientationIcon: String {
+        switch cameraManager.orientationLockMode {
+        case .auto: return "arrow.triangle.2.circlepath"
+        case .landscape: return "rectangle.fill.on.rectangle.fill"
+        case .portrait: return "iphone"
+        }
+    }
+
     private var placementTitle: String {
         switch cameraManager.flatPlacementMode {
         case .auto: return "Đặt: Tự động"
@@ -581,15 +597,15 @@ extension ContentView {
                 )
             }
 
-            // Đặt máy (Úp / Ngửa / Tự động)
+            // Hướng quay (Ngang 16:9 / Dọc 9:16 / Tự động)
             Button(action: {
-                cameraManager.cycleFlatPlacementMode()
+                cameraManager.cycleOrientationLockMode()
             }) {
                 ControlTile(
-                    icon: placementIcon,
-                    title: placementTitle,
-                    tint: .yellow,
-                    isActive: cameraManager.flatPlacementMode != .auto
+                    icon: orientationIcon,
+                    title: orientationTitle,
+                    tint: .orange,
+                    isActive: cameraManager.orientationLockMode != .auto
                 )
             }
 

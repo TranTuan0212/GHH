@@ -67,6 +67,53 @@ public class CameraManager: NSObject, ObservableObject {
     /// không bị ảnh hưởng bởi iOS 16 UIWindowScene orientation suppression, và nhận biết được kể cả khi đặt nằm ngang trước).
     private let motionManager = CMMotionManager()
 
+    /// Chế độ khóa hướng quay camera: Tự động nhận diện vs Ép Ngang 16:9 vs Ép Dọc 9:16
+    public enum OrientationLockMode: String, CaseIterable {
+        case auto = "Tự Động 🔄"
+        case landscape = "Ngang 16:9 🖥️"
+        case portrait = "Dọc 9:16 📱"
+    }
+
+    @Published public var orientationLockMode: OrientationLockMode = .auto
+
+    public func cycleOrientationLockMode() {
+        switch orientationLockMode {
+        case .auto:
+            setOrientationLockMode(.landscape)
+        case .landscape:
+            setOrientationLockMode(.portrait)
+        case .portrait:
+            setOrientationLockMode(.auto)
+        }
+    }
+
+    public func setOrientationLockMode(_ mode: OrientationLockMode) {
+        orientationLockMode = mode
+        let isFront = (self.cameraPosition == .front)
+        switch mode {
+        case .auto:
+            // Tự động nhận diện qua gia tốc kế
+            break
+        case .landscape:
+            let newOri: AVCaptureVideoOrientation = isFront ? .landscapeLeft : .landscapeRight
+            if newOri != currentCaptureOrientation {
+                currentCaptureOrientation = newOri
+                updateVideoOrientation()
+                if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                    rebuildLiveSession()
+                }
+            }
+        case .portrait:
+            if currentCaptureOrientation != .portrait {
+                currentCaptureOrientation = .portrait
+                updateVideoOrientation()
+                if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                    rebuildLiveSession()
+                }
+            }
+        }
+    }
+
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
     public enum FlatPlacementMode: String, CaseIterable {
         case auto = "Tự Động 📱"
@@ -433,7 +480,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     @objc private func deviceOrientationDidChange() {
-        guard !isStreamingAtomic && !isConnecting && flatPlacementMode == .auto else { return }
+        guard !isStreamingAtomic && !isConnecting && orientationLockMode == .auto && flatPlacementMode == .auto else { return }
         let isFront = (self.cameraPosition == .front)
         let newOrientation: AVCaptureVideoOrientation
         switch UIDevice.current.orientation {
@@ -458,8 +505,8 @@ public class CameraManager: NSObject, ObservableObject {
     /// Xử lý vector trọng lực đọc từ con quay gia tốc kế của iPhone.
     /// Nhận biết chính xác điện thoại đang nằm ngang hay đứng bất kể góc ngửa trên tripod hay khóa xoay iOS.
     private func handleAcceleration(_ acceleration: CMAcceleration) {
-        // Trong lúc live stream: KHÔNG đổi orientation giữa chừng để tránh vỡ SPS/PPS của H.264 encoder
-        guard !isStreamingAtomic && !isConnecting && flatPlacementMode == .auto else { return }
+        // Trong lúc live stream hoặc khi đang khóa hướng thủ công: KHÔNG đổi orientation tự động
+        guard !isStreamingAtomic && !isConnecting && orientationLockMode == .auto && flatPlacementMode == .auto else { return }
 
         let x = acceleration.x
         let y = acceleration.y
