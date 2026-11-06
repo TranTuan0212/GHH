@@ -233,6 +233,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [remoteExposure, setRemoteExposure] = useState<number>(0.0);
   const [remoteFocusPoint, setRemoteFocusPoint] = useState<{ x: number; y: number } | null>(null);
   const focusTimeoutRef = useRef<number | null>(null);
+  const isFlippedRef = useRef(isFlipped);
+  useEffect(() => {
+    isFlippedRef.current = isFlipped;
+  }, [isFlipped]);
 
   useEffect(() => {
     if (!socket) return;
@@ -247,7 +251,26 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         const container = videoContainerRef.current;
         if (container) {
           const rect = container.getBoundingClientRect();
-          setRemoteFocusPoint({ x: data.x * rect.width, y: data.y * rect.height });
+          const activeVid = (isLiveRef.current && hasLiveFrame) ? liveVideoRef.current : replayVideoRef.current;
+          const videoW = activeVid?.videoWidth || 1280;
+          const videoH = activeVid?.videoHeight || 720;
+          const containerRatio = rect.width / rect.height;
+          const videoRatio = videoW / videoH;
+          let actualRenderW = rect.width;
+          let actualRenderH = rect.height;
+          let offsetX = 0;
+          let offsetY = 0;
+          if (videoRatio > containerRatio) {
+            actualRenderW = rect.width;
+            actualRenderH = rect.width / videoRatio;
+            offsetY = (rect.height - actualRenderH) / 2;
+          } else {
+            actualRenderH = rect.height;
+            actualRenderW = rect.height * videoRatio;
+            offsetX = (rect.width - actualRenderW) / 2;
+          }
+          const effectiveX = isFlippedRef.current ? (1.0 - data.x) : data.x;
+          setRemoteFocusPoint({ x: offsetX + effectiveX * actualRenderW, y: offsetY + data.y * actualRenderH });
           if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
           focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 1500);
         }
@@ -303,8 +326,15 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
 
     // Chuẩn hóa tọa độ chính xác trong khung hình video (0.01 đến 0.99)
-    const normX = Math.max(0.01, Math.min(0.99, relativeX / actualRenderW));
+    let normX = Math.max(0.01, Math.min(0.99, relativeX / actualRenderW));
     const normY = Math.max(0.01, Math.min(0.99, relativeY / actualRenderH));
+
+    // NẾU ĐANG BẬT "LẬT ẢNH" (isFlipped = true / CSS transform scaleX(-1)):
+    // Khi người dùng click bên Trái màn hình Web, vị trí trong luồng video gốc thực tế là bên Phải.
+    // Bù trừ trục X để gửi tọa độ chuẩn xác về iPhone:
+    if (isFlipped) {
+      normX = 1.0 - normX;
+    }
 
     setRemoteFocusPoint({ x: clickX, y: clickY });
     if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
