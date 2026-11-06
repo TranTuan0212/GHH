@@ -13,6 +13,21 @@ class VideoPreviewView: UIView {
     var videoPreviewLayer: AVCaptureVideoPreviewLayer {
         return layer as! AVCaptureVideoPreviewLayer
     }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        syncOrientation()
+    }
+
+    func syncOrientation() {
+        if let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported {
+            if let current = CameraManager.current?.currentCaptureOrientation {
+                if conn.videoOrientation != current {
+                    conn.videoOrientation = current
+                }
+            }
+        }
+    }
 }
 
 struct CameraPreviewView: UIViewRepresentable {
@@ -28,6 +43,9 @@ struct CameraPreviewView: UIViewRepresentable {
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
+        if let conn = view.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
+            conn.videoOrientation = CameraManager.current?.currentCaptureOrientation ?? .portrait
+        }
         VideoPreviewView.activePreviewLayer = view.videoPreviewLayer
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -42,6 +60,7 @@ struct CameraPreviewView: UIViewRepresentable {
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
         }
+        uiView.syncOrientation()
         context.coordinator.parent = self
     }
 
@@ -1351,22 +1370,30 @@ public class RoiSyncManager: ObservableObject {
                 if let action = json["action"] as? String {
                     switch action {
                     case "focus":
-                        let x = json["x"] as? CGFloat ?? 0.5
-                        let y = json["y"] as? CGFloat ?? 0.5
+                        let rawX = json["x"] as? CGFloat ?? 0.5
+                        let rawY = json["y"] as? CGFloat ?? 0.5
 
                         DispatchQueue.main.async {
-                            let screenW = (VideoPreviewView.activePreviewLayer?.bounds.width ?? 0) > 0 ? VideoPreviewView.activePreviewLayer!.bounds.width : UIScreen.main.bounds.width
-                            let screenH = (VideoPreviewView.activePreviewLayer?.bounds.height ?? 0) > 0 ? VideoPreviewView.activePreviewLayer!.bounds.height : UIScreen.main.bounds.height
-                            let screenPoint = CGPoint(x: screenW * x, y: screenH * y)
+                            guard let layer = VideoPreviewView.activePreviewLayer, layer.bounds.width > 0, layer.bounds.height > 0 else {
+                                let normPt = CGPoint(x: rawX, y: rawY)
+                                let devPt = CameraManager.current?.convertVideoNormalizedPointToDevicePoint(normPt) ?? normPt
+                                CameraManager.current?.focus(at: devPt, shouldLock: true)
+                                self.showRemoteFocusIndicator(at: CGPoint(x: UIScreen.main.bounds.width * rawX, y: UIScreen.main.bounds.height * rawY))
+                                return
+                            }
 
-                            var devicePoint = CGPoint(x: 0.5, y: 0.5)
-                            if let layer = VideoPreviewView.activePreviewLayer {
-                                let converted = layer.captureDevicePointConverted(fromLayerPoint: screenPoint)
-                                if !converted.x.isNaN && !converted.y.isNaN && !converted.x.isInfinite && !converted.y.isInfinite {
-                                    devicePoint = converted
-                                }
-                            } else {
-                                devicePoint = CameraManager.current?.convertVideoNormalizedPointToDevicePoint(CGPoint(x: x, y: y)) ?? CGPoint(x: 0.5, y: 0.5)
+                            let isFront = (CameraManager.current?.cameraPosition == .front)
+                            // Nếu là Cam Trước: Vì PreviewLayer trên iPhone bị soi gương (mirrored) trong khi luồng video phát Web không mirror,
+                            // ta bù trừ trục X để điểm trên layer và điểm trên Web ăn khớp tuyệt đối:
+                            let targetX = isFront ? (1.0 - rawX) : rawX
+                            let targetY = rawY
+
+                            let screenPoint = CGPoint(x: layer.bounds.width * targetX, y: layer.bounds.height * targetY)
+                            let converted = layer.captureDevicePointConverted(fromLayerPoint: screenPoint)
+
+                            var devicePoint = converted
+                            if converted.x.isNaN || converted.y.isNaN || converted.x.isInfinite || converted.y.isInfinite {
+                                devicePoint = CameraManager.current?.convertVideoNormalizedPointToDevicePoint(CGPoint(x: rawX, y: rawY)) ?? CGPoint(x: 0.5, y: 0.5)
                             }
 
                             CameraManager.current?.focus(at: devicePoint, shouldLock: true)

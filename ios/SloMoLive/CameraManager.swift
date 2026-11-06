@@ -519,7 +519,13 @@ public class CameraManager: NSObject, ObservableObject {
     /// Đồng bộ videoOrientation của camera output theo orientation nhận diện từ cảm biến
     private func updateVideoOrientation() {
         sessionQueue.async { [weak self] in
-            self?.configureVideoOutputConnection()
+            guard let self = self else { return }
+            self.configureVideoOutputConnection()
+            DispatchQueue.main.async {
+                if let layer = VideoPreviewView.activePreviewLayer, let conn = layer.connection, conn.isVideoOrientationSupported {
+                    conn.videoOrientation = self.currentCaptureOrientation
+                }
+            }
         }
     }
 
