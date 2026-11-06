@@ -90,16 +90,15 @@ function ensureRtcRelay(streamKey) {
         '-rtsp_transport', 'tcp',
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', 'copy',
-        '-bsf:v', 'setts=ts=N/(120*TB)',
-        '-c:a', 'libopus',
-        '-b:a', '64k',
-        '-ar', '48000',
-        '-ac', '2',
-        '-af', 'aresample=async=1000',
-        '-application', 'lowdelay',
-        '-frame_duration', '20',
+        '-vf', "scale='if(gt(iw,ih),-2,min(720,iw))':'if(gt(iw,ih),min(720,ih),-2)',fps=60",
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-b:v', '2200k',
+        '-maxrate', '2500k',
+        '-bufsize', '800k',
+        '-g', '60',
+        '-an',
         '-f', 'rtsp',
         '-rtsp_transport', 'tcp',
         `rtsp://127.0.0.1:8554/live/${streamKey}${exports.RTC_RELAY_SUFFIX}`
@@ -107,7 +106,7 @@ function ensureRtcRelay(streamKey) {
     const proc = (0, child_process_1.spawn)(resolveFfmpegPath(), ffmpegArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
     const relay = { proc, startedAt: Date.now(), alive: true };
     rtcRelays.set(streamKey, relay);
-    console.log(`[MediaServer] 🔊 Khởi động WebRTC Audio Relay (AAC -> Opus, video copy): live/${streamKey}${exports.RTC_RELAY_SUFFIX}`);
+    console.log(`[MediaServer] 🔊 Khởi động WebRTC Live Transcode (720p 60fps 2.2M, không audio): live/${streamKey}${exports.RTC_RELAY_SUFFIX}`);
     proc.stderr?.on('data', (data) => {
         const line = data.toString().trim();
         if (line)
@@ -251,12 +250,10 @@ function resetReplaySession(streamKey) {
         '-fflags', '+nobuffer+flush_packets',
         '-rtsp_transport', 'tcp',
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
+        '-map', '0:v:0',
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb,setts=ts=N/(120*TB)',
-        // Cố ý giữ track AAC (copy, 0% CPU), KHÔNG dùng '-an' vì làm Replay mất tiếng (xem .agent/DEBUG_LOG.md 2026-11-03)
-        '-map', '0:v',
-        '-map', '0:a?',
-        '-c:a', 'copy',
+        '-an',
         '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),
@@ -300,12 +297,10 @@ function startHlsSession(streamKey) {
         '-fflags', '+nobuffer+flush_packets',
         '-rtsp_transport', 'tcp',
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
+        '-map', '0:v:0',
         '-c:v', 'copy',
         '-bsf:v', 'h264_mp4toannexb,setts=ts=N/(120*TB)',
-        // Cố ý giữ track AAC (copy, 0% CPU), KHÔNG dùng '-an' vì làm Replay mất tiếng (xem .agent/DEBUG_LOG.md 2026-11-03)
-        '-map', '0:v',
-        '-map', '0:a?',
-        '-c:a', 'copy',
+        '-an',
         '-flush_packets', '1',
         '-f', 'hls',
         '-hls_time', String(HLS_SEGMENT_SECONDS),

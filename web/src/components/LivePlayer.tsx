@@ -1135,7 +1135,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peerConnectionRef.current = peer;
           let receivedVideoTrack = false;
           peer.addTransceiver('video', { direction: 'recvonly' });
-          peer.addTransceiver('audio', { direction: 'recvonly' });
           peer.ontrack = (event) => {
             const { streams, receiver } = event;
             // Đồng bộ nhịp hiển thị WebRTC Live (0.55s) khớp 1:1 với nhịp đóng gói segment HLS 0.5s:
