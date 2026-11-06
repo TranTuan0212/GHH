@@ -51,10 +51,15 @@ server.on('upgrade', (request, socket, head) => {
 wssControl.on('connection', (ws: WsWebSocket, req) => {
   let boundUserId = '';
 
+  // Gửi ngay tín hiệu sẵn sàng để iOS kích hoạt receive
+  try {
+    ws.send(JSON.stringify({ type: 'ready', serverTime: Date.now() }));
+  } catch {}
+
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      if (msg.type === 'register_device' || msg.type === 'device_telemetry') {
+      if (msg.type === 'register_device' || msg.type === 'register_ios_client' || msg.type === 'device_telemetry') {
         const uid = msg.userId || msg.data?.userId;
         if (uid) {
           boundUserId = uid;
@@ -62,6 +67,7 @@ wssControl.on('connection', (ws: WsWebSocket, req) => {
             iosControlClients.set(uid, new Set());
           }
           iosControlClients.get(uid)!.add(ws);
+          console.log(`[CameraControl] 📱 Đã đăng ký iPhone userId=${uid} vào kênh điều khiển từ xa`);
         }
       }
       if (msg.type === 'ios_ping') {
@@ -760,14 +766,16 @@ io.on('connection', (socket) => {
   });
 
 
-  // Điều khiển camera từ xa (Focus, Zoom, Exposure) từ Web -> iPhone
+  // Điều khiển camera từ xa (Focus, Zoom, Exposure) từ Web -> iPhone (Đúng theo room của user)
   socket.on('camera_control', (data) => {
-    if (!data || !data.roomId) return;
-    const roomId = data.roomId;
+    if (!data) return;
+    const roomId = data.roomId || (user?.role === 'ADMIN' ? '' : user?.id) || '';
     console.log(`[CameraControl] Room ${roomId} action=${data.action}:`, data);
 
     // 1. Phát lại cho các web viewer khác trong phòng để đồng bộ trạng thái (khung vàng / mức zoom / mức sáng)
-    socket.to(`room_${roomId}`).emit('camera_control_state', data);
+    if (roomId) {
+      socket.to(`room_${roomId}`).emit('camera_control_state', data);
+    }
 
     // 2. Chuyển tiếp tới iPhone đang live trong phòng này qua WebSocket
     const payload = JSON.stringify({
@@ -779,18 +787,32 @@ io.on('connection', (socket) => {
       bias: data.bias
     });
 
-    const targets = iosControlClients.get(roomId);
+    // Ưu tiên tìm đúng iPhone thuộc phòng (roomId hoặc userId)
+    let targets = roomId ? iosControlClients.get(roomId) : undefined;
+
+    // Nếu roomId là streamKey, tìm userId của stream đó
+    if ((!targets || targets.size === 0) && roomId) {
+      const activeStream = db.getStreams().find(s => s.streamKey === roomId || s.id === roomId);
+      if (activeStream && activeStream.userId) {
+        targets = iosControlClients.get(activeStream.userId);
+      }
+    }
+
     if (targets && targets.size > 0) {
       targets.forEach((client) => {
         if (client.readyState === WsWebSocket.OPEN) client.send(payload);
       });
-    } else {
-      // Nếu iPhone chưa gắn roomId chính xác, gửi tới tất cả thiết bị iPhone đang kết nối
+      console.log(`[CameraControl] ✅ Đã chuyển tiếp lệnh ${data.action} tới ${targets.size} iPhone thuộc room ${roomId}`);
+    } else if (iosControlClients.size === 1) {
+      // Fallback nếu hệ thống chỉ có 1 iPhone đang kết nối
       iosControlClients.forEach((clients) => {
         clients.forEach((client) => {
           if (client.readyState === WsWebSocket.OPEN) client.send(payload);
         });
       });
+      console.log(`[CameraControl] ⚠️ Chuyển tiếp lệnh ${data.action} tới iPhone duy nhất đang online`);
+    } else {
+      console.warn(`[CameraControl] ❌ Không tìm thấy iPhone nào thuộc room: ${roomId}`);
     }
   });
 

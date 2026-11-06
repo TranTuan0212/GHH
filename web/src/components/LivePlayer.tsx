@@ -277,9 +277,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
     focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 2000);
 
-    if (socket && roomId) {
+    const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+    if (socket) {
       socket.emit('camera_control', {
-        roomId,
+        roomId: targetRoom,
         action: 'focus',
         x: normX,
         y: normY
@@ -289,16 +290,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   const handleSetRemoteZoom = (factor: number) => {
     setRemoteZoom(factor);
-    if (socket && roomId) {
-      socket.emit('camera_control', { roomId, action: 'zoom', factor });
+    const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+    if (socket) {
+      socket.emit('camera_control', { roomId: targetRoom, action: 'zoom', factor });
     }
     showModeNotice('live', `ZOOM ${factor}x`, `Đã chỉnh ống kính camera iPhone phóng to ${factor}x`, '');
   };
 
   const handleSetRemoteExposure = (bias: number) => {
     setRemoteExposure(bias);
-    if (socket && roomId) {
-      socket.emit('camera_control', { roomId, action: 'exposure', bias });
+    const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+    if (socket) {
+      socket.emit('camera_control', { roomId: targetRoom, action: 'exposure', bias });
     }
     const label = bias > 0 ? `+${bias} EV` : `${bias} EV`;
     showModeNotice('live', `ĐỘ SÁNG ${label}`, `Đã chỉnh bù sáng camera iPhone ${label}`, '');
@@ -1361,6 +1364,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Tối ưu Mobile/Tablet: Dừng decoder replay video khi Live sẵn sàng để dồn 100% phần cứng cho WebRTC Live
         replayVideoRef.current.pause();
       }
+      if (isLiveRef.current && isMobileDevice && hlsRef.current) {
+        // Trên điện thoại: Tạm ngắt tải HLS ngầm khi Live đang phát, dồn 100% băng thông 4G/Wi-Fi cho WebRTC Live
+        try {
+          (hlsRef.current as any).stopLoad();
+        } catch {}
+      }
     };
     const onLiveVideoResize = () => {
       if (video.videoWidth > 0 && video.videoHeight > 0) {
@@ -1541,10 +1550,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
         // Mở rộng bộ đệm 90s - 180s nạp liên tục một mạch, loại bỏ triệt để hiện tượng đứt đoạn / lủng lỗ:
         // Cấu hình đệm tinh gọn, bám sát Live 0.8s, giải phóng triệt để CPU và băng thông server:
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        maxBufferSize: 128 * 1024 * 1024,
-        backBufferLength: 60,
+        maxBufferLength: isMobileDevice ? 12 : 60,
+        maxMaxBufferLength: isMobileDevice ? 24 : 120,
+        maxBufferSize: isMobileDevice ? (24 * 1024 * 1024) : (128 * 1024 * 1024),
+        backBufferLength: isMobileDevice ? 10 : 60,
         maxBufferHole: 0.3,
         nudgeOffset: 0.1,
         nudgeMaxRetry: 5,
@@ -2028,7 +2037,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
     if (hlsRef.current) {
       try {
-        (hlsRef.current as any).startLoad();
+        if (isMobileDevice) {
+          (hlsRef.current as any).stopLoad();
+        } else {
+          (hlsRef.current as any).startLoad();
+        }
       } catch {}
     }
 
@@ -2955,8 +2968,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (socket && roomId) {
-                    socket.emit('camera_control', { roomId, action: 'focus', x: 0.5, y: 0.5 });
+                  const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+                  if (socket) {
+                    socket.emit('camera_control', { roomId: targetRoom, action: 'focus', x: 0.5, y: 0.5 });
                     showModeNotice('live', 'TỰ ĐỘNG LẤY NÉT', 'Đã yêu cầu iPhone lấy nét lại tâm bàn', '');
                   }
                 }}

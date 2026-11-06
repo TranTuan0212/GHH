@@ -243,6 +243,53 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                     }
 
+                    // Khung lấy nét từ xa gửi từ Web
+                    if let rpt = roiSync.remoteFocusPoint {
+                        VStack(spacing: 4) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.yellow, lineWidth: 2)
+                                    .frame(width: 70, height: 70)
+                                Circle()
+                                    .fill(Color.yellow)
+                                    .frame(width: 6, height: 6)
+                            }
+                            Text("WEB LẤY NÉT 🔒")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.yellow)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.black.opacity(0.85))
+                                .cornerRadius(6)
+                        }
+                        .position(x: UIScreen.main.bounds.width * rpt.x, y: UIScreen.main.bounds.height * rpt.y)
+                        .transition(.scale.combined(with: .opacity))
+                        .allowsHitTesting(false)
+                    }
+
+                    // Thông báo điều khiển từ xa gửi từ Web
+                    if !roiSync.remoteNoticeText.isEmpty {
+                        VStack {
+                            HStack(spacing: 6) {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                                    .foregroundColor(.green)
+                                Text(roiSync.remoteNoticeText)
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.85))
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(Color.green.opacity(0.6), lineWidth: 1.5))
+                            .shadow(radius: 8)
+                            .padding(.top, 40)
+                            Spacer()
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                    }
+
                     // Overlay: thanh trạng thái (trên) + lưới điều khiển & nút live (dưới).
                     // Co giãn theo bề ngang màn hình và tôn trọng safe area (tai thỏ / Dynamic Island / iPhone SE).
                     VStack(spacing: 8) {
@@ -1073,6 +1120,32 @@ public class RoiSyncManager: ObservableObject {
         }
     }
 
+    // Điều khiển camera từ xa từ Web
+    @Published public var remoteNoticeText: String = ""
+    @Published public var remoteFocusPoint: CGPoint? = nil
+    private var remoteNoticeTimer: Timer? = nil
+    private var remoteFocusTimer: Timer? = nil
+
+    public func showRemoteNoticeText(_ text: String) {
+        DispatchQueue.main.async {
+            self.remoteNoticeText = text
+            self.remoteNoticeTimer?.invalidate()
+            self.remoteNoticeTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+                DispatchQueue.main.async { self?.remoteNoticeText = "" }
+            }
+        }
+    }
+
+    public func showRemoteFocusIndicator(at point: CGPoint) {
+        DispatchQueue.main.async {
+            self.remoteFocusPoint = point
+            self.remoteFocusTimer?.invalidate()
+            self.remoteFocusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                DispatchQueue.main.async { self?.remoteFocusPoint = nil }
+            }
+        }
+    }
+
     private var webSocketTask: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
     private var isConnecting: Bool = false
@@ -1118,7 +1191,7 @@ public class RoiSyncManager: ObservableObject {
         let uid = NetworkManager.shared.currentUserId ?? ""
         let uname = NetworkManager.shared.currentUsername ?? ""
         let payload: [String: Any] = [
-            "type": "register_ios_client",
+            "type": "register_device",
             "userId": uid,
             "username": uname
         ]
@@ -1277,12 +1350,15 @@ public class RoiSyncManager: ObservableObject {
                         let x = json["x"] as? CGFloat ?? 0.5
                         let y = json["y"] as? CGFloat ?? 0.5
                         CameraManager.current?.focus(at: CGPoint(x: x, y: y), shouldLock: true)
+                        self.showRemoteFocusIndicator(at: CGPoint(x: x, y: y))
                     case "zoom":
                         let factor = json["factor"] as? CGFloat ?? 1.0
                         CameraManager.current?.setRemoteZoom(factor: factor)
+                        self.showRemoteNoticeText("🔍 Web Zoom: \(String(format: "%.1f", factor))x")
                     case "exposure":
                         let bias = (json["bias"] as? NSNumber)?.floatValue ?? 0.0
                         CameraManager.current?.setRemoteExposure(bias: bias)
+                        self.showRemoteNoticeText("☀️ Web Bù Sáng: \(String(format: "%.1f", bias)) EV")
                     default:
                         break
                     }
