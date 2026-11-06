@@ -21,26 +21,11 @@ class VideoPreviewView: UIView {
 
     func syncOrientation() {
         guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
-        if let windowScene = self.window?.windowScene {
-            let orientation = windowScene.interfaceOrientation
-            let targetOri: AVCaptureVideoOrientation
-            switch orientation {
-            case .landscapeLeft:
-                targetOri = .landscapeLeft
-            case .landscapeRight:
-                targetOri = .landscapeRight
-            case .portraitUpsideDown:
-                targetOri = .portraitUpsideDown
-            default:
-                targetOri = .portrait
-            }
-            if conn.videoOrientation != targetOri {
-                conn.videoOrientation = targetOri
-            }
-        } else if let current = CameraManager.current?.currentCaptureOrientation {
-            if conn.videoOrientation != current {
-                conn.videoOrientation = current
-            }
+        // Với Camera Độ: Luôn giữ khung hình Ngang 16:9 to tràn viền
+        let isLeft = (CameraManager.current?.currentCaptureOrientation == .landscapeLeft)
+        let targetOri: AVCaptureVideoOrientation = isLeft ? .landscapeLeft : .landscapeRight
+        if conn.videoOrientation != targetOri {
+            conn.videoOrientation = targetOri
         }
     }
 }
@@ -611,15 +596,15 @@ extension ContentView {
                 )
             }
 
-            // Đặt máy (Úp / Ngửa / Tự động)
+            // Đảo 180 độ (Chuyên dụng cho Camera Độ)
             Button(action: {
-                cameraManager.cycleFlatPlacementMode()
+                cameraManager.flip180Degrees()
             }) {
                 ControlTile(
-                    icon: placementIcon,
-                    title: placementTitle,
-                    tint: .yellow,
-                    isActive: cameraManager.flatPlacementMode != .auto
+                    icon: "arrow.triangle.2.circlepath",
+                    title: "Đảo 180° 🔄",
+                    tint: .orange,
+                    isActive: false
                 )
             }
 
@@ -1422,11 +1407,8 @@ public class RoiSyncManager: ObservableObject {
                             // Ta tính chính xác kích thước hiển thị (renderW, renderH) và phần dải đen (offsetX, offsetY)
                             let layerW = layer.bounds.width
                             let layerH = layer.bounds.height
-                            let currentOri = CameraManager.current?.currentCaptureOrientation ?? .portrait
-                            let isLandscape = (currentOri == .landscapeLeft || currentOri == .landscapeRight)
-
-                            // Tỷ lệ khung hình video thực tế (16:9 khi ngang, 9:16 khi dọc)
-                            let videoRatio: CGFloat = isLandscape ? (16.0 / 9.0) : (9.0 / 16.0)
+                            // Với Camera Độ: Khung hình video luôn luôn là Ngang 16:9
+                            let videoRatio: CGFloat = 16.0 / 9.0
                             let layerRatio: CGFloat = layerW / layerH
 
                             var renderW: CGFloat = layerW

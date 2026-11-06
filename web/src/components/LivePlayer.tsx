@@ -583,113 +583,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     });
   };
 
-  // Zoom & Pan cho màn hình video chính (hỗ trợ phóng to cận cảnh 1x - 4x bằng 2 ngón tay khi xem Fullscreen hoặc xem thường)
-  const [mainZoom, setMainZoom] = useState<number>(1.0);
-  const [mainPan, setMainPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const mainPinchStartRef = useRef<{ initialDistance: number; initialZoom: number } | null>(null);
-  const mainPanStartRef = useRef<{ startX: number; startY: number; origPan: { x: number; y: number } } | null>(null);
-  const lastTapTimeRef = useRef<number>(0);
-
-  const handleContainerTouchStart = (e: React.TouchEvent) => {
-    const target = e.target as HTMLElement;
-    // Bỏ qua nếu chạm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
-    if (target.closest('[data-live-keypad="true"]')) {
-      return;
-    }
-    if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
-      return;
-    }
-    if (target.closest('[data-text-overlay="true"]') || target.closest('button')) {
-      return;
-    }
-
-    if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      mainPinchStartRef.current = {
-        initialDistance: dist,
-        initialZoom: mainZoom,
-      };
-      mainPanStartRef.current = null;
-      return;
-    }
-
-    if (e.touches.length === 1) {
-      // Nhấp đúp để reset zoom 1x (hoặc phóng to 2x nếu đang 1x)
-      const now = Date.now();
-      if (now - lastTapTimeRef.current < 300) {
-        if (mainZoom > 1.05) {
-          setMainZoom(1.0);
-          setMainPan({ x: 0, y: 0 });
-        } else {
-          setMainZoom(2.0);
-        }
-        lastTapTimeRef.current = 0;
-        return;
-      }
-      lastTapTimeRef.current = now;
-
-      if (mainZoom > 1.05) {
-        mainPanStartRef.current = {
-          startX: e.touches[0].clientX,
-          startY: e.touches[0].clientY,
-          origPan: { ...mainPan },
-        };
-      }
-    }
-  };
-
-  const handleContainerTouchMove = (e: React.TouchEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-live-keypad="true"]')) {
-      return;
-    }
-    if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
-      return;
-    }
-    if (target.closest('[data-text-overlay="true"]') || target.closest('button')) {
-      return;
-    }
-
-    if (e.touches.length === 2 && mainPinchStartRef.current) {
-      if (e.cancelable) e.preventDefault();
-      const currentDist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const scale = currentDist / mainPinchStartRef.current.initialDistance;
-      const newZoom = Math.max(1.0, Math.min(4.0, Number((mainPinchStartRef.current.initialZoom * scale).toFixed(2))));
-      setMainZoom(newZoom);
-      if (newZoom <= 1.02) {
-        setMainPan({ x: 0, y: 0 });
-      }
-      return;
-    }
-
-    if (e.touches.length === 1 && mainPanStartRef.current && mainZoom > 1.05) {
-      if (e.cancelable) e.preventDefault();
-      const dx = e.touches[0].clientX - mainPanStartRef.current.startX;
-      const dy = e.touches[0].clientY - mainPanStartRef.current.startY;
-      const maxPanX = (mainZoom - 1) * 220;
-      const maxPanY = (mainZoom - 1) * 160;
-      setMainPan({
-        x: Math.max(-maxPanX, Math.min(maxPanX, mainPanStartRef.current.origPan.x + dx)),
-        y: Math.max(-maxPanY, Math.min(maxPanY, mainPanStartRef.current.origPan.y + dy)),
-      });
-    }
-  };
-
-  const handleContainerTouchEnd = (e: React.TouchEvent) => {
-    if (e.touches.length < 2) {
-      mainPinchStartRef.current = null;
-    }
-    if (e.touches.length === 0) {
-      mainPanStartRef.current = null;
-    }
-  };
-
   // Fullscreen state & ref giống YouTube
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -2922,32 +2815,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         ref={videoContainerRef}
         onClick={handleLiveVideoClick}
         onDoubleClick={toggleFullscreen}
-        onTouchStart={handleContainerTouchStart}
-        onTouchMove={handleContainerTouchMove}
-        onTouchEnd={handleContainerTouchEnd}
         style={{ touchAction: 'none' }}
         className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
         title="Chạm bất kỳ đâu để lấy nét. Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F)."
       >
-        {/* Nút đặt lại zoom khi đang phóng to cận cảnh */}
-        {mainZoom > 1.05 && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setMainZoom(1.0);
-              setMainPan({ x: 0, y: 0 });
-            }}
-            className="absolute top-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white text-xs font-mono font-bold shadow-xl backdrop-blur flex items-center space-x-1.5 border border-indigo-400 active:scale-95 cursor-pointer animate-fadeIn"
-            title="Bấm để đưa về kích thước chuẩn 1x"
-          >
-            <ZoomIn className="w-3.5 h-3.5 text-amber-300" />
-            <span>Zoom: {mainZoom}x (Chạm để về 1x)</span>
-          </button>
-        )}
-
         {/* 🎯 Khung ngắm Lấy Nét Tap-to-Focus màu vàng chớp sáng trên video */}
         {remoteFocusPoint && (
           <div
@@ -2974,32 +2847,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             className="absolute top-3 right-3 z-40 flex flex-col items-end space-y-1 pointer-events-auto"
           >
             <div className="flex items-center space-x-1 bg-slate-950/85 backdrop-blur-md px-2 py-1 rounded-xl border border-white/20 shadow-2xl">
-              {/* Zoom Buttons: 1x, 1.5x, 2x, 3x */}
-              <span className="text-[10px] text-slate-400 font-bold mr-1 flex items-center">
-                <ZoomIn className="w-3 h-3 mr-0.5 text-indigo-400" />
-                ZOOM:
-              </span>
-              {[1.0, 1.5, 2.0, 3.0].map((z) => (
-                <button
-                  key={z}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSetRemoteZoom(z);
-                  }}
-                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
-                    remoteZoom === z
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/50 ring-1 ring-indigo-400'
-                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
-                  }`}
-                  title={`Phóng to ống kính camera iPhone ${z}x`}
-                >
-                  {z}x
-                </button>
-              ))}
-
-              <span className="w-px h-3.5 bg-white/20 mx-1" />
-
               {/* Exposure Buttons: -0.5, 0, +0.5, +1.0 */}
               <span className="text-[10px] text-slate-400 font-bold mr-1 flex items-center">
                 <Sun className="w-3 h-3 mr-0.5 text-amber-400" />
@@ -3099,10 +2946,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-0 invisible z-0 pointer-events-none'
           }`}
           style={{
-            transform: (!isLive
-              ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`
-              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`) + ' translateZ(0)',
-            transition: 'transform 0.1s ease-out',
+            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`,
             position: 'absolute',
             inset: 0,
             imageRendering: 'auto' as any,
@@ -3145,9 +2989,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ref={liveVideoRef}
             className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
-              transform: (isLive
-                ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`
-                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`) + ' translateZ(0)',
+              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`,
               transition: 'transform 0.1s ease-out',
               imageRendering: 'auto' as any,
               willChange: 'transform',
