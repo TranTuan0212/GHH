@@ -109,14 +109,14 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Hướng camera Cam Độ: Mặc định .landscapeRight, người dùng tự bấm nút trên iPhone để đảo 180 độ sang .landscapeLeft
     @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .landscapeRight
 
-    /// Lật đảo 180 độ camera (LandscapeRight <-> LandscapeLeft) — chuyên dụng cho Camera Độ nếu bị ngược mắt nhìn
-    public func flip180Degrees() {
-        let newOri: AVCaptureVideoOrientation = (currentCaptureOrientation == .landscapeLeft) ? .landscapeRight : .landscapeLeft
+    public func toggleLandscapeFlip() {
+        let newOri: AVCaptureVideoOrientation = (currentCaptureOrientation == .landscapeRight) ? .landscapeLeft : .landscapeRight
         currentCaptureOrientation = newOri
         updateVideoOrientation()
-        if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+        if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
             rebuildLiveSession()
         }
     }
@@ -443,50 +443,14 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     @objc private func deviceOrientationDidChange() {
-        guard !isConnecting else { return }
-        let deviceOri = UIDevice.current.orientation
-        let newOrientation: AVCaptureVideoOrientation
-
-        switch deviceOri {
-        case .landscapeLeft:
-            newOrientation = .landscapeRight
-        case .landscapeRight:
-            newOrientation = .landscapeLeft
-        default:
-            return
-        }
-
-        guard newOrientation != currentCaptureOrientation else { return }
-        currentCaptureOrientation = newOrientation
-        updateVideoOrientation()
-        if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
-            rebuildLiveSession()
-        }
+        // Khóa màn hình ngang cố định cho Cam Độ — người dùng tự bấm nút để xoay
+        return
     }
 
     /// Xử lý vector trọng lực đọc từ con quay gia tốc kế của iPhone.
-    /// Chuyên dụng cho Camera Độ: Luôn giữ khung NGANG 16:9 to cực đại,
-    /// chỉ đảo chiều 180 độ (LandscapeRight <-> LandscapeLeft) khi người dùng đổi đầu gá máy.
+    /// Khóa màn hình ngang cố định cho Cam Độ — người dùng tự bấm nút để xoay
     private func handleAcceleration(_ acceleration: CMAcceleration) {
-        guard !isConnecting else { return }
-
-        let x = acceleration.x
-        let newOrientation: AVCaptureVideoOrientation
-
-        if x < -0.30 {
-            newOrientation = .landscapeRight // Notch bên trái, cổng sạc bên phải
-        } else if x > 0.30 {
-            newOrientation = .landscapeLeft  // Notch bên phải, cổng sạc bên trái
-        } else {
-            return
-        }
-
-        guard newOrientation != currentCaptureOrientation else { return }
-        currentCaptureOrientation = newOrientation
-        updateVideoOrientation()
-        if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
-            rebuildLiveSession()
-        }
+        return
     }
 
     /// Cấu hình toàn diện video connection của AVCaptureVideoDataOutput:
@@ -496,8 +460,7 @@ public class CameraManager: NSObject, ObservableObject {
     public func configureVideoOutputConnection() {
         guard let connection = self.videoDataOutput.connection(with: .video) else { return }
         if connection.isVideoOrientationSupported {
-            let isLeft = (currentCaptureOrientation == .landscapeLeft)
-            connection.videoOrientation = isLeft ? .landscapeLeft : .landscapeRight
+            connection.videoOrientation = self.currentCaptureOrientation
         }
         if connection.isVideoMirroringSupported {
             // Tắt mirror ở nguồn để tránh resample thêm trên GPU, player web/app đã có nút lật ảnh
@@ -586,10 +549,10 @@ public class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // VỚI CAMERA ĐỘ: LUÔN LUÔN ÉP KHUNG NGANG 16:9 (1920x1080 / 1280x720) TO CỰC ĐẠI TRÀN VIỀN
+        // LUÔN LUÔN KHÓA CHUẨN NGANG 16:9 CHO CAM ĐỘ (To căng tràn màn hình, không bị dải đen co cụm)
         videoCfg.videoSize = CGSize(width: captureWidth, height: captureHeight)
-        let isLeft = (currentCaptureOrientation == .landscapeLeft)
-        videoCfg.outputImageOrientation = isLeft ? .landscapeLeft : .landscapeRight
+        let uiOrientation: UIInterfaceOrientation = (currentCaptureOrientation == .landscapeLeft) ? .landscapeLeft : .landscapeRight
+        videoCfg.outputImageOrientation = uiOrientation
 
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
         // Chuẩn Full HD 1080p 120fps Master Replay tối ưu cho cả 4G/5G và Cloudflare Tunnel:
@@ -1337,22 +1300,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
 
-    /// Điều khiển phóng to thu nhỏ quang học / cảm biến từ xa qua Web
-    public func setRemoteZoom(factor: CGFloat) {
-        sessionQueue.async { [weak self] in
-            guard let self = self, let device = self.videoDeviceInput?.device else { return }
-            do {
-                try device.lockForConfiguration()
-                let maxZoom = min(5.0, device.activeFormat.videoMaxZoomFactor)
-                let clamped = max(1.0, min(factor, maxZoom))
-                device.videoZoomFactor = clamped
-                device.unlockForConfiguration()
-                print("[CameraManager] 🔍 Đã chỉnh Zoom phần cứng từ xa: \(String(format: "%.1f", clamped))x")
-            } catch {
-                print("[CameraManager] Không thể lock device để chỉnh Zoom: \(error)")
-            }
-        }
-    }
+
 
     /// Điều khiển bù trừ sáng (Exposure Bias) từ xa qua Web
     public func setRemoteExposure(bias: Float) {

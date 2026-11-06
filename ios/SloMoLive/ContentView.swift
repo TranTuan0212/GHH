@@ -21,11 +21,26 @@ class VideoPreviewView: UIView {
 
     func syncOrientation() {
         guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
-        // Với Camera Độ: Luôn giữ khung hình Ngang 16:9 to tràn viền
-        let isLeft = (CameraManager.current?.currentCaptureOrientation == .landscapeLeft)
-        let targetOri: AVCaptureVideoOrientation = isLeft ? .landscapeLeft : .landscapeRight
-        if conn.videoOrientation != targetOri {
-            conn.videoOrientation = targetOri
+        if let windowScene = self.window?.windowScene {
+            let orientation = windowScene.interfaceOrientation
+            let targetOri: AVCaptureVideoOrientation
+            switch orientation {
+            case .landscapeLeft:
+                targetOri = .landscapeLeft
+            case .landscapeRight:
+                targetOri = .landscapeRight
+            case .portraitUpsideDown:
+                targetOri = .portraitUpsideDown
+            default:
+                targetOri = .portrait
+            }
+            if conn.videoOrientation != targetOri {
+                conn.videoOrientation = targetOri
+            }
+        } else if let current = CameraManager.current?.currentCaptureOrientation {
+            if conn.videoOrientation != current {
+                conn.videoOrientation = current
+            }
         }
     }
 }
@@ -596,15 +611,15 @@ extension ContentView {
                 )
             }
 
-            // Đảo 180 độ (Chuyên dụng cho Camera Độ)
+            // Xoay Ngang Cam Độ (Đảo 180 độ Cam Trái <-> Cam Phải)
             Button(action: {
-                cameraManager.flip180Degrees()
+                cameraManager.toggleLandscapeFlip()
             }) {
                 ControlTile(
                     icon: "arrow.triangle.2.circlepath",
-                    title: "Đảo 180° 🔄",
+                    title: cameraManager.currentCaptureOrientation == .landscapeRight ? "Ngang: Cam Phải" : "Ngang: Cam Trái",
                     tint: .orange,
-                    isActive: false
+                    isActive: true
                 )
             }
 
@@ -1407,8 +1422,11 @@ public class RoiSyncManager: ObservableObject {
                             // Ta tính chính xác kích thước hiển thị (renderW, renderH) và phần dải đen (offsetX, offsetY)
                             let layerW = layer.bounds.width
                             let layerH = layer.bounds.height
-                            // Với Camera Độ: Khung hình video luôn luôn là Ngang 16:9
-                            let videoRatio: CGFloat = 16.0 / 9.0
+                            let currentOri = CameraManager.current?.currentCaptureOrientation ?? .portrait
+                            let isLandscape = (currentOri == .landscapeLeft || currentOri == .landscapeRight)
+
+                            // Tỷ lệ khung hình video thực tế (16:9 khi ngang, 9:16 khi dọc)
+                            let videoRatio: CGFloat = isLandscape ? (16.0 / 9.0) : (9.0 / 16.0)
                             let layerRatio: CGFloat = layerW / layerH
 
                             var renderW: CGFloat = layerW
@@ -1443,10 +1461,7 @@ public class RoiSyncManager: ObservableObject {
                             CameraManager.current?.focus(at: devicePoint, shouldLock: true)
                             self.showRemoteFocusIndicator(at: screenPoint)
                         }
-                    case "zoom":
-                        let factor = json["factor"] as? CGFloat ?? 1.0
-                        CameraManager.current?.setRemoteZoom(factor: factor)
-                        self.showRemoteNoticeText("🔍 Web Zoom: \(String(format: "%.1f", factor))x")
+
                     case "exposure":
                         let bias = (json["bias"] as? NSNumber)?.floatValue ?? 0.0
                         CameraManager.current?.setRemoteExposure(bias: bias)

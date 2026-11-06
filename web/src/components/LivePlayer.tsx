@@ -228,8 +228,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   // Bước nhảy frame: 60 FPS (~16.6ms) hoặc 120 FPS (~8.3ms)
   const [stepFps, setStepFps] = useState<60 | 120>(120);
 
-  // Remote Camera Control (Tap-to-Focus, Hardware Zoom, Exposure Bias)
-  const [remoteZoom, setRemoteZoom] = useState<number>(1.0);
+  // Remote Camera Control (Tap-to-Focus, Exposure Bias)
   const [remoteExposure, setRemoteExposure] = useState<number>(0.0);
   const [remoteFocusPoint, setRemoteFocusPoint] = useState<{ x: number; y: number } | null>(null);
   const focusTimeoutRef = useRef<number | null>(null);
@@ -241,9 +240,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   useEffect(() => {
     if (!socket) return;
     const onCameraState = (data: any) => {
-      if (data.action === 'zoom' && typeof data.factor === 'number') {
-        setRemoteZoom(data.factor);
-      }
       if (data.action === 'exposure' && typeof data.bias === 'number') {
         setRemoteExposure(data.bias);
       }
@@ -351,14 +347,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   };
 
-  const handleSetRemoteZoom = (factor: number) => {
-    setRemoteZoom(factor);
-    const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
-    if (socket) {
-      socket.emit('camera_control', { roomId: targetRoom, action: 'zoom', factor });
-    }
-    showModeNotice('live', `ZOOM ${factor}x`, `Đã chỉnh ống kính camera iPhone phóng to ${factor}x`, '');
-  };
+
 
   const handleSetRemoteExposure = (bias: number) => {
     setRemoteExposure(bias);
@@ -582,6 +571,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       };
     });
   };
+
+
 
   // Fullscreen state & ref giống YouTube
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1564,9 +1555,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHlsLiveEdge(end);
 
             // Chế độ On-Demand: khi đang xem Live bình thường (không có hẹn slow),
-            // giữ video ngầm ở trạng thái pause để không ngốn CPU/băng thông
-            if (!scheduledSlowRef.current && !video.paused) {
-              video.pause();
+            // dừng hoàn toàn nạp segment HLS và dừng video ngầm để giải phóng 100% CPU/GPU cho WebRTC Live!
+            if (!scheduledSlowRef.current) {
+              if (!video.paused) video.pause();
+              try { hls.stopLoad(); } catch {}
             }
           }
         }
@@ -1986,18 +1978,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
     }
 
-    // 2. Tạm dừng giải mã video replay để giải phóng GPU, nhưng HLS VẪN TIẾP TỤC tải playlist
-    // để biến hlsLiveEdge luôn cập nhật theo thời gian thực (không gọi stopLoad làm đóng băng mốc hẹn lần 2)
+    // 2. Dừng giải mã và dừng nạp HLS khi đang xem Live trực tiếp để giải phóng 100% GPU/CPU
     if (replayVideoRef.current) {
       replayVideoRef.current.pause();
     }
     if (hlsRef.current) {
       try {
-        if (isMobileDevice) {
-          (hlsRef.current as any).stopLoad();
-        } else {
-          (hlsRef.current as any).startLoad();
-        }
+        (hlsRef.current as any).stopLoad();
       } catch {}
     }
 
@@ -2278,6 +2265,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const performScrub = (targetTime: number, isFinal = false) => {
     const video = videoRef.current;
     if (!video) return;
+
+    if (hlsRef.current) {
+      try {
+        (hlsRef.current as any).startLoad();
+      } catch {}
+    }
 
     const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
     const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
@@ -2946,7 +2939,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-0 invisible z-0 pointer-events-none'
           }`}
           style={{
-            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`,
+            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) translateZ(0)`,
+            transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
             imageRendering: 'auto' as any,
@@ -2989,7 +2983,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ref={liveVideoRef}
             className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
-              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`,
+              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) translateZ(0)`,
               transition: 'transform 0.1s ease-out',
               imageRendering: 'auto' as any,
               willChange: 'transform',
