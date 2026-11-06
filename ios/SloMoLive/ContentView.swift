@@ -4,6 +4,8 @@ import Foundation
 import Combine
 
 class VideoPreviewView: UIView {
+    static weak var activePreviewLayer: AVCaptureVideoPreviewLayer?
+
     override class var layerClass: AnyClass {
         return AVCaptureVideoPreviewLayer.self
     }
@@ -26,6 +28,7 @@ struct CameraPreviewView: UIViewRepresentable {
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
+        VideoPreviewView.activePreviewLayer = view.videoPreviewLayer
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
@@ -35,6 +38,7 @@ struct CameraPreviewView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: VideoPreviewView, context: Context) {
+        VideoPreviewView.activePreviewLayer = uiView.videoPreviewLayer
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
         }
@@ -262,7 +266,7 @@ struct ContentView: View {
                                 .background(Color.black.opacity(0.85))
                                 .cornerRadius(6)
                         }
-                        .position(x: UIScreen.main.bounds.width * rpt.x, y: UIScreen.main.bounds.height * rpt.y)
+                        .position(rpt)
                         .transition(.scale.combined(with: .opacity))
                         .allowsHitTesting(false)
                     }
@@ -1349,8 +1353,20 @@ public class RoiSyncManager: ObservableObject {
                     case "focus":
                         let x = json["x"] as? CGFloat ?? 0.5
                         let y = json["y"] as? CGFloat ?? 0.5
-                        CameraManager.current?.focusFromRemote(normPoint: CGPoint(x: x, y: y), shouldLock: true)
-                        self.showRemoteFocusIndicator(at: CGPoint(x: x, y: y))
+                        let normPt = CGPoint(x: x, y: y)
+                        let devPt = CameraManager.current?.convertVideoNormalizedPointToDevicePoint(normPt) ?? normPt
+                        CameraManager.current?.focus(at: devPt, shouldLock: true)
+
+                        DispatchQueue.main.async {
+                            var screenPoint = CGPoint(x: UIScreen.main.bounds.width * x, y: UIScreen.main.bounds.height * y)
+                            if let layer = VideoPreviewView.activePreviewLayer {
+                                let layerPt = layer.layerPointConverted(fromCaptureDevicePoint: devPt)
+                                if !layerPt.x.isNaN && !layerPt.y.isNaN && !layerPt.x.isInfinite && !layerPt.y.isInfinite {
+                                    screenPoint = layerPt
+                                }
+                            }
+                            self.showRemoteFocusIndicator(at: screenPoint)
+                        }
                     case "zoom":
                         let factor = json["factor"] as? CGFloat ?? 1.0
                         CameraManager.current?.setRemoteZoom(factor: factor)

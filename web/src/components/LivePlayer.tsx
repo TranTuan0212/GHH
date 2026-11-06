@@ -273,8 +273,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     // Lấy kích thước thực tế của luồng video (loại bỏ dải đen letterbox/pillarbox)
     const activeVid = (isLiveRef.current && hasLiveFrame) ? liveVideoRef.current : replayVideoRef.current;
-    const videoW = activeVid?.videoWidth || (sourceIsPortrait ? 720 : 1280);
-    const videoH = activeVid?.videoHeight || (sourceIsPortrait ? 1280 : 720);
+    const videoW = activeVid?.videoWidth || 1280;
+    const videoH = activeVid?.videoHeight || 720;
 
     const containerRatio = rect.width / rect.height;
     const videoRatio = videoW / videoH;
@@ -296,6 +296,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const relativeX = clickX - offsetX;
     const relativeY = clickY - offsetY;
+
+    // Nếu click ra ngoài diện tích thực của video (bấm trúng dải đen 2 bên), không kích hoạt lấy nét sai
+    if (relativeX < 0 || relativeX > actualRenderW || relativeY < 0 || relativeY > actualRenderH) {
+      return;
+    }
 
     // Chuẩn hóa tọa độ chính xác trong khung hình video (0.01 đến 0.99)
     const normX = Math.max(0.01, Math.min(0.99, relativeX / actualRenderW));
@@ -2890,15 +2895,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         onTouchStart={handleContainerTouchStart}
         onTouchMove={handleContainerTouchMove}
         onTouchEnd={handleContainerTouchEnd}
-        style={{
-          touchAction: 'none',
-          aspectRatio: isFullscreen ? undefined : (rotation % 180 === 0 ? (sourceIsPortrait ? '9 / 16' : '16 / 9') : (sourceIsPortrait ? '16 / 9' : '9 / 16')),
-          maxHeight: isFullscreen ? undefined : (rotation % 180 === 0 ? (sourceIsPortrait ? '75vh' : '58vh') : (sourceIsPortrait ? '58vh' : '75vh')),
-          maxWidth: isFullscreen ? undefined : (rotation % 180 === 0 ? (sourceIsPortrait ? '43vh' : '100%') : (sourceIsPortrait ? '100%' : '43vh')),
-          margin: '0 auto'
-        }}
-        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer transition-all duration-150 ${
-          isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : ''
+        style={{ touchAction: 'none' }}
+        className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
+          isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
         title="Chạm bất kỳ đâu để lấy nét. Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F)."
       >
@@ -3071,8 +3070,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           }`}
           style={{
             transform: (!isLive
-              ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
-              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`) + ' translateZ(0)',
+              ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`
+              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`) + ' translateZ(0)',
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
@@ -3117,8 +3116,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
               transform: (isLive
-                ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
-                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`) + ' translateZ(0)',
+                ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`
+                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg)`) + ' translateZ(0)',
               transition: 'transform 0.1s ease-out',
               imageRendering: 'auto' as any,
               willChange: 'transform',
