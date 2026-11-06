@@ -1349,7 +1349,7 @@ public class RoiSyncManager: ObservableObject {
                     case "focus":
                         let x = json["x"] as? CGFloat ?? 0.5
                         let y = json["y"] as? CGFloat ?? 0.5
-                        CameraManager.current?.focus(at: CGPoint(x: x, y: y), shouldLock: true)
+                        CameraManager.current?.focusFromRemote(normPoint: CGPoint(x: x, y: y), shouldLock: true)
                         self.showRemoteFocusIndicator(at: CGPoint(x: x, y: y))
                     case "zoom":
                         let factor = json["factor"] as? CGFloat ?? 1.0

@@ -1240,6 +1240,49 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Chuyển đổi tọa độ chuẩn hóa từ Web (0..1, 0..1 từ góc trên-trái khung hình video)
+    /// sang không gian tọa độ cảm biến quang học của AVCaptureDevice (focusPointOfInterest / exposurePointOfInterest)
+    public func convertVideoNormalizedPointToDevicePoint(_ normPoint: CGPoint) -> CGPoint {
+        let isFront = (self.cameraPosition == .front)
+        let orientation = self.currentCaptureOrientation
+
+        switch orientation {
+        case .portrait:
+            if isFront {
+                return CGPoint(x: normPoint.y, y: normPoint.x)
+            } else {
+                return CGPoint(x: normPoint.y, y: 1.0 - normPoint.x)
+            }
+        case .portraitUpsideDown:
+            if isFront {
+                return CGPoint(x: 1.0 - normPoint.y, y: 1.0 - normPoint.x)
+            } else {
+                return CGPoint(x: 1.0 - normPoint.y, y: normPoint.x)
+            }
+        case .landscapeRight:
+            if isFront {
+                return CGPoint(x: 1.0 - normPoint.x, y: normPoint.y)
+            } else {
+                return CGPoint(x: normPoint.x, y: normPoint.y)
+            }
+        case .landscapeLeft:
+            if isFront {
+                return CGPoint(x: normPoint.x, y: 1.0 - normPoint.y)
+            } else {
+                return CGPoint(x: 1.0 - normPoint.x, y: 1.0 - normPoint.y)
+            }
+        @unknown default:
+            return CGPoint(x: normPoint.y, y: 1.0 - normPoint.x)
+        }
+    }
+
+    /// Lấy nét từ xa qua Web (tự động chuyển đổi ma trận tọa độ cảm biến)
+    public func focusFromRemote(normPoint: CGPoint, shouldLock: Bool = true) {
+        let devicePoint = convertVideoNormalizedPointToDevicePoint(normPoint)
+        print("[CameraManager] 🎯 Tap-to-Focus từ Web: norm=(\(String(format: "%.2f", normPoint.x)), \(String(format: "%.2f", normPoint.y))) -> sensor=(\(String(format: "%.2f", devicePoint.x)), \(String(format: "%.2f", devicePoint.y)))")
+        focus(at: devicePoint, shouldLock: shouldLock)
+    }
+
     /// Lấy nét tại điểm chạm và KHÓA CỨNG tiêu cự mặt bàn (ngăn hiện tượng đảo nét khi tay người chia bài đưa vào)
     public func focus(at devicePoint: CGPoint, shouldLock: Bool = false) {
         sessionQueue.async { [weak self] in
