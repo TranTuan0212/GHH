@@ -95,9 +95,9 @@ public class CameraManager: NSObject, ObservableObject {
         case .auto:
             return
         case .faceUp:
-            newOrientation = .landscapeRight
+            newOrientation = isFront ? .landscapeLeft : .landscapeRight
         case .faceDown:
-            newOrientation = .landscapeLeft
+            newOrientation = isFront ? .landscapeRight : .landscapeLeft
         }
 
         if newOrientation != currentCaptureOrientation {

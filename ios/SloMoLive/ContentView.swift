@@ -45,22 +45,6 @@ struct CameraPreviewView: UIViewRepresentable {
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
         }
-        uiView.syncOrientation()
-        if let windowScene = uiView.window?.windowScene {
-            let orientation = windowScene.interfaceOrientation
-            let targetOri: AVCaptureVideoOrientation
-            switch orientation {
-            case .landscapeLeft:
-                targetOri = .landscapeLeft
-            case .landscapeRight:
-                targetOri = .landscapeRight
-            case .portraitUpsideDown:
-                targetOri = .portraitUpsideDown
-            default:
-                targetOri = .portrait
-            }
-            CameraManager.current?.syncOrientationFromUI(targetOri)
-        }
         context.coordinator.parent = self
     }
 
@@ -414,21 +398,7 @@ extension ContentView {
         }
     }
 
-    private var placementTitle: String {
-        switch cameraManager.flatPlacementMode {
-        case .auto: return "Đặt: Tự động"
-        case .faceUp: return "Máy: Ngửa"
-        case .faceDown: return "Máy: Úp"
-        }
-    }
 
-    private var placementIcon: String {
-        switch cameraManager.flatPlacementMode {
-        case .auto: return "iphone"
-        case .faceUp: return "book.closed.fill"
-        case .faceDown: return "iphone.slash"
-        }
-    }
 
     /// Thẻ trạng thái trên cùng: LIVE · FPS · bitrate · mạng · GPS + hạn dùng / user / mode.
     private var liveStatusCard: some View {
