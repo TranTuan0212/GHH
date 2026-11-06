@@ -95,7 +95,7 @@ public class CameraManager: NSObject, ObservableObject {
             // Tự động nhận diện qua gia tốc kế
             break
         case .landscape:
-            let newOri: AVCaptureVideoOrientation = isFront ? .landscapeLeft : .landscapeRight
+            let newOri: AVCaptureVideoOrientation = .landscapeRight
             if newOri != currentCaptureOrientation {
                 currentCaptureOrientation = newOri
                 updateVideoOrientation()
@@ -142,9 +142,9 @@ public class CameraManager: NSObject, ObservableObject {
         case .auto:
             return
         case .faceUp:
-            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+            newOrientation = .landscapeRight
         case .faceDown:
-            newOrientation = isFront ? .landscapeRight : .landscapeLeft
+            newOrientation = .landscapeLeft
         }
 
         if newOrientation != currentCaptureOrientation {
@@ -481,13 +481,12 @@ public class CameraManager: NSObject, ObservableObject {
 
     @objc private func deviceOrientationDidChange() {
         guard !isStreamingAtomic && !isConnecting && orientationLockMode == .auto && flatPlacementMode == .auto else { return }
-        let isFront = (self.cameraPosition == .front)
         let newOrientation: AVCaptureVideoOrientation
         switch UIDevice.current.orientation {
         case .landscapeLeft:
-            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+            newOrientation = .landscapeRight
         case .landscapeRight:
-            newOrientation = isFront ? .landscapeRight : .landscapeLeft
+            newOrientation = .landscapeLeft
         case .portraitUpsideDown:
             newOrientation = .portraitUpsideDown
         default:
@@ -510,18 +509,16 @@ public class CameraManager: NSObject, ObservableObject {
 
         let x = acceleration.x
         let y = acceleration.y
-        let isFront = (self.cameraPosition == .front)
 
         let newOrientation: AVCaptureVideoOrientation
         if abs(x) > abs(y) {
             // Thiết bị đang nằm ngang (Landscape)
-            // x > 0: đỉnh máy nghiêng sang trái (top left, home right) -> UIDeviceOrientation.landscapeLeft
-            // Với camera sau: tương ứng AVCaptureVideoOrientation.landscapeRight
-            // Với camera trước: đối xứng gương nên là .landscapeLeft
+            // x > 0: đỉnh máy nghiêng sang trái (nút Home/sạc bên phải) -> AVCaptureVideoOrientation.landscapeRight
+            // x < -0: đỉnh máy nghiêng sang phải (nút Home/sạc bên trái) -> AVCaptureVideoOrientation.landscapeLeft
             if x > 0.15 {
-                newOrientation = isFront ? .landscapeLeft : .landscapeRight
+                newOrientation = .landscapeRight
             } else if x < -0.15 {
-                newOrientation = isFront ? .landscapeRight : .landscapeLeft
+                newOrientation = .landscapeLeft
             } else {
                 return
             }
