@@ -27,7 +27,7 @@ struct CameraPreviewView: UIViewRepresentable {
         let view = VideoPreviewView()
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
-        view.videoPreviewLayer.videoGravity = .resizeAspect
+        view.videoPreviewLayer.videoGravity = .resizeAspectFill
         if let conn = view.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
             conn.videoOrientation = CameraManager.current?.currentCaptureOrientation ?? .portrait
         }

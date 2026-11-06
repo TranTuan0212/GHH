@@ -161,7 +161,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             console.log('[LivePlayer] 🎯 Tự động kích hoạt Slow tại mốc hẹn:', sched);
             sched.triggered = true;
             setScheduledSlow({ ...sched, triggered: true });
-            const jumpTime = Math.max(0, sched.targetTime - 1.0);
+            const jumpTime = Math.max(0, sched.targetTime - 0.1);
             switchToSlowAtTime(jumpTime, sched.speed);
           }
         }
@@ -2138,7 +2138,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (!scheduledSlowRef.current) return;
     const sched = scheduledSlowRef.current;
     // Lùi nhẹ 1.0s trước mốc hẹn để xem trọn vẹn tình huống
-    const jumpTime = Math.max(0, sched.targetTime - 1.0);
+    const jumpTime = Math.max(0, sched.targetTime - 0.1);
     switchToSlowAtTime(jumpTime, sched.speed);
   };
 
@@ -2420,7 +2420,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
-      if (scheduledSlowRef.current) {
+      if (!isLiveRef.current && scheduledSlowRef.current) {
         jumpToScheduledSlow();
       } else {
         toggleScheduledSlow();
@@ -2912,7 +2912,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-0 invisible z-0 pointer-events-none'
           }`}
           style={{
-            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) translateZ(0)`,
+            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)}) translateZ(0)`,
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
@@ -2956,7 +2956,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ref={liveVideoRef}
             className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
-              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) translateZ(0)`,
+              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)}) translateZ(0)`,
               transition: 'transform 0.1s ease-out',
               imageRendering: 'auto' as any,
               willChange: 'transform',
