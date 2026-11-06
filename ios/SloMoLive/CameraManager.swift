@@ -109,47 +109,6 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
-    public enum FlatPlacementMode: String, CaseIterable {
-        case auto = "Tự Động 📱"
-        case faceUp = "Máy: NGỬA 📖"
-        case faceDown = "Máy: ÚP 📱"
-    }
-
-    @Published public var flatPlacementMode: FlatPlacementMode = .auto
-
-    public func cycleFlatPlacementMode() {
-        switch flatPlacementMode {
-        case .auto:
-            flatPlacementMode = .faceUp
-        case .faceUp:
-            flatPlacementMode = .faceDown
-        case .faceDown:
-            flatPlacementMode = .auto
-        }
-        applyOrientationForPlacementMode()
-    }
-
-    public func applyOrientationForPlacementMode() {
-        let isFront = (self.cameraPosition == .front)
-        let newOrientation: AVCaptureVideoOrientation
-        switch flatPlacementMode {
-        case .auto:
-            return
-        case .faceUp:
-            newOrientation = isFront ? .landscapeLeft : .landscapeRight
-        case .faceDown:
-            newOrientation = isFront ? .landscapeRight : .landscapeLeft
-        }
-
-        if newOrientation != currentCaptureOrientation {
-            currentCaptureOrientation = newOrientation
-            updateVideoOrientation()
-            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
-                rebuildLiveSession()
-            }
-        }
-    }
 
     @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
 
