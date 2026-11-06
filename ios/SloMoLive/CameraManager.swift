@@ -279,8 +279,8 @@ public class CameraManager: NSObject, ObservableObject {
                 let targetRates: [Double] = [self.selectedResolution.targetFPS, 120.0, 60.0]
                 if let (format, fps) = self.selectBestHFRFormat(for: videoDevice, targetRates: targetRates) {
                     videoDevice.activeFormat = format
-                    if format.supportedColorSpaces.contains(.sRGB_BT709) {
-                        videoDevice.activeColorSpace = .sRGB_BT709
+                    if format.supportedColorSpaces.contains(.sRGB) {
+                        videoDevice.activeColorSpace = .sRGB
                     }
                     let timescale = Int32(fps)
                     videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: timescale)
@@ -786,7 +786,7 @@ public class CameraManager: NSObject, ObservableObject {
                         }
 
                         // Ưu tiên format ISP thế hệ mới (hỗ trợ dải màu rộng P3_D65 + Full Range 420f + maxISO cao ở cuối danh sách)
-                        if format.supportedColorSpaces.contains(.sRGB_BT709) {
+                        if format.supportedColorSpaces.contains(.sRGB) {
                             score += 30
                         }
                         if isVideoRange8Bit {
@@ -912,8 +912,8 @@ public class CameraManager: NSObject, ObservableObject {
 
                 if let (format, fps) = result {
                     videoDevice.activeFormat = format
-                    if format.supportedColorSpaces.contains(.sRGB_BT709) {
-                        videoDevice.activeColorSpace = .sRGB_BT709
+                    if format.supportedColorSpaces.contains(.sRGB) {
+                        videoDevice.activeColorSpace = .sRGB
                     }
 
                     // Đặt frame rate chính xác (đã được verify là format hỗ trợ)
@@ -1173,8 +1173,8 @@ public class CameraManager: NSObject, ObservableObject {
                     let result = self.selectBestHFRFormat(for: newDevice, targetRates: [120.0, 60.0])
                     if let (format, fps) = result {
                         newDevice.activeFormat = format
-                        if format.supportedColorSpaces.contains(.sRGB_BT709) {
-                            newDevice.activeColorSpace = .sRGB_BT709
+                        if format.supportedColorSpaces.contains(.sRGB) {
+                            newDevice.activeColorSpace = .sRGB
                         }
                         let targetTimescale = Int32(fps)
                         newDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: targetTimescale)
