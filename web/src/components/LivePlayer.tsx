@@ -27,6 +27,7 @@ import {
   ArrowLeftRight,
   Move,
   ZoomIn,
+  Sun,
   Sparkles,
   Settings,
   RefreshCw,
@@ -226,6 +227,77 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
   // Bước nhảy frame: 60 FPS (~16.6ms) hoặc 120 FPS (~8.3ms)
   const [stepFps, setStepFps] = useState<60 | 120>(120);
+
+  // Remote Camera Control (Tap-to-Focus, Hardware Zoom, Exposure Bias)
+  const [remoteZoom, setRemoteZoom] = useState<number>(1.0);
+  const [remoteExposure, setRemoteExposure] = useState<number>(0.0);
+  const [remoteFocusPoint, setRemoteFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const focusTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onCameraState = (data: any) => {
+      if (data.action === 'zoom' && typeof data.factor === 'number') {
+        setRemoteZoom(data.factor);
+      }
+      if (data.action === 'exposure' && typeof data.bias === 'number') {
+        setRemoteExposure(data.bias);
+      }
+      if (data.action === 'focus' && typeof data.x === 'number' && typeof data.y === 'number') {
+        const container = videoContainerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          setRemoteFocusPoint({ x: data.x * rect.width, y: data.y * rect.height });
+          if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
+          focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 1500);
+        }
+      }
+    };
+    socket.on('camera_control_state', onCameraState);
+    return () => {
+      socket.off('camera_control_state', onCameraState);
+    };
+  }, [socket]);
+
+  const handleLiveVideoClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isLiveRef.current || !hasLiveFrame) return;
+    const container = e.currentTarget;
+    const rect = container.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const normX = Math.max(0.05, Math.min(0.95, clickX / rect.width));
+    const normY = Math.max(0.05, Math.min(0.95, clickY / rect.height));
+
+    setRemoteFocusPoint({ x: clickX, y: clickY });
+    if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
+    focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 1500);
+
+    if (socket && roomId) {
+      socket.emit('camera_control', {
+        roomId,
+        action: 'focus',
+        x: normX,
+        y: normY
+      });
+    }
+  };
+
+  const handleSetRemoteZoom = (factor: number) => {
+    setRemoteZoom(factor);
+    if (socket && roomId) {
+      socket.emit('camera_control', { roomId, action: 'zoom', factor });
+    }
+    showModeNotice('live', `ZOOM ${factor}x`, `Đã chỉnh ống kính camera iPhone phóng to ${factor}x`, '');
+  };
+
+  const handleSetRemoteExposure = (bias: number) => {
+    setRemoteExposure(bias);
+    if (socket && roomId) {
+      socket.emit('camera_control', { roomId, action: 'exposure', bias });
+    }
+    const label = bias > 0 ? `+${bias} EV` : `${bias} EV`;
+    showModeNotice('live', `ĐỘ SÁNG ${label}`, `Đã chỉnh bù sáng camera iPhone ${label}`, '');
+  };
 
   // Vị trí & kích thước tuỳ chỉnh của màn hình nhỏ PiP Live (tính theo % x, y từ góc trên-trái và width theo pixel)
   const [pipPos, setPipPos] = useState<{ xPercent: number; yPercent: number } | null>(null);
@@ -2869,6 +2941,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 }
               : undefined
           }
+          onClick={isLive ? handleLiveVideoClick : undefined}
           onMouseDown={!isLive ? (e) => handlePipMouseDown(e.clientX, e.clientY) : undefined}
           onTouchStart={!isLive ? handlePipTouchStart : undefined}
           className={`select-none ${

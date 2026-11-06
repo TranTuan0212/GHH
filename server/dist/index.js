@@ -10,6 +10,7 @@ const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const socket_io_1 = require("socket.io");
+const ws_1 = require("ws");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const auth_1 = require("./routes/auth");
 const admin_1 = require("./routes/admin");
@@ -33,6 +34,47 @@ const io = new socket_io_1.Server(server, {
         methods: ['GET', 'POST', 'PUT', 'DELETE']
     },
     maxHttpBufferSize: 1e7
+});
+// Kênh WebSocket điều khiển camera từ xa (/ws/control & /ws/roi cho iPhone)
+const wssControl = new ws_1.WebSocketServer({ noServer: true });
+const iosControlClients = new Map();
+server.on('upgrade', (request, socket, head) => {
+    const pathname = request.url?.split('?')[0] || '';
+    if (pathname === '/ws/control' || pathname === '/ws/roi') {
+        wssControl.handleUpgrade(request, socket, head, (ws) => {
+            wssControl.emit('connection', ws, request);
+        });
+    }
+});
+wssControl.on('connection', (ws, req) => {
+    let boundUserId = '';
+    ws.on('message', (raw) => {
+        try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'register_device' || msg.type === 'device_telemetry') {
+                const uid = msg.userId || msg.data?.userId;
+                if (uid) {
+                    boundUserId = uid;
+                    if (!iosControlClients.has(uid)) {
+                        iosControlClients.set(uid, new Set());
+                    }
+                    iosControlClients.get(uid).add(ws);
+                }
+            }
+            if (msg.type === 'ios_ping') {
+                ws.send(JSON.stringify({ type: 'ios_pong', t: msg.t }));
+            }
+        }
+        catch { }
+    });
+    ws.on('close', () => {
+        if (boundUserId && iosControlClients.has(boundUserId)) {
+            iosControlClients.get(boundUserId).delete(ws);
+            if (iosControlClients.get(boundUserId).size === 0) {
+                iosControlClients.delete(boundUserId);
+            }
+        }
+    });
 });
 // Middleware xác thực JWT cho mọi kết nối Socket.IO
 io.use((socket, next) => {
@@ -665,6 +707,40 @@ io.on('connection', (socket) => {
         const ts = Date.now();
         io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
         io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
+    });
+    // Điều khiển camera từ xa (Focus, Zoom, Exposure) từ Web -> iPhone
+    socket.on('camera_control', (data) => {
+        if (!data || !data.roomId)
+            return;
+        const roomId = data.roomId;
+        console.log(`[CameraControl] Room ${roomId} action=${data.action}:`, data);
+        // 1. Phát lại cho các web viewer khác trong phòng để đồng bộ trạng thái (khung vàng / mức zoom / mức sáng)
+        socket.to(`room_${roomId}`).emit('camera_control_state', data);
+        // 2. Chuyển tiếp tới iPhone đang live trong phòng này qua WebSocket
+        const payload = JSON.stringify({
+            type: 'camera_control',
+            action: data.action,
+            x: data.x,
+            y: data.y,
+            factor: data.factor,
+            bias: data.bias
+        });
+        const targets = iosControlClients.get(roomId);
+        if (targets && targets.size > 0) {
+            targets.forEach((client) => {
+                if (client.readyState === ws_1.WebSocket.OPEN)
+                    client.send(payload);
+            });
+        }
+        else {
+            // Nếu iPhone chưa gắn roomId chính xác, gửi tới tất cả thiết bị iPhone đang kết nối
+            iosControlClients.forEach((clients) => {
+                clients.forEach((client) => {
+                    if (client.readyState === ws_1.WebSocket.OPEN)
+                        client.send(payload);
+                });
+            });
+        }
     });
     socket.on('disconnect', () => {
         const roomId = socket._viewerRoomId;

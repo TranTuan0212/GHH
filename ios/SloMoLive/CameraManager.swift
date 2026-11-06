@@ -309,8 +309,11 @@ public class CameraManager: NSObject, ObservableObject {
     private static let savedFrontLensKey = "SloMoLive.frontLensPosition"
     private static let defaultFrontLensPosition: Float = 0.35
 
+    public static var current: CameraManager? = nil
+
     public override init() {
         super.init()
+        CameraManager.current = self
         startMotionUpdates()
         setupAudioSessionObservers()
     }
@@ -1271,6 +1274,40 @@ public class CameraManager: NSObject, ObservableObject {
                 print("[CameraManager] 🎯 Đã lấy nét & đo sáng tại điểm (\(String(format: "%.2f", devicePoint.x)), \(String(format: "%.2f", devicePoint.y)))")
             } catch {
                 print("[CameraManager] Không thể lock device để lấy nét: \(error)")
+            }
+        }
+    }
+
+
+    /// Điều khiển phóng to thu nhỏ quang học / cảm biến từ xa qua Web
+    public func setRemoteZoom(factor: CGFloat) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                let maxZoom = min(5.0, device.activeFormat.videoMaxZoomFactor)
+                let clamped = max(1.0, min(factor, maxZoom))
+                device.videoZoomFactor = clamped
+                device.unlockForConfiguration()
+                print("[CameraManager] 🔍 Đã chỉnh Zoom phần cứng từ xa: \(String(format: "%.1f", clamped))x")
+            } catch {
+                print("[CameraManager] Không thể lock device để chỉnh Zoom: \(error)")
+            }
+        }
+    }
+
+    /// Điều khiển bù trừ sáng (Exposure Bias) từ xa qua Web
+    public func setRemoteExposure(bias: Float) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                let clamped = max(device.minExposureTargetBias, min(bias, device.maxExposureTargetBias))
+                device.setExposureTargetBias(clamped, completionHandler: nil)
+                device.unlockForConfiguration()
+                print("[CameraManager] ☀️ Đã chỉnh bù sáng từ xa: \(String(format: "%.1f", clamped)) EV")
+            } catch {
+                print("[CameraManager] Không thể lock device để chỉnh Exposure: \(error)")
             }
         }
     }

@@ -1182,6 +1182,15 @@ public class RoiSyncManager: ObservableObject {
                     if !self.isConnected {
                         self.isConnected = true
                         self.isConnecting = false
+                        let reg: [String: Any] = [
+                            "type": "register_device",
+                            "userId": NetworkManager.shared.currentUserId ?? "",
+                            "username": NetworkManager.shared.currentUsername ?? ""
+                        ]
+                        if let data = try? JSONSerialization.data(withJSONObject: reg),
+                           let str = String(data: data, encoding: .utf8) {
+                            self.webSocketTask?.send(.string(str)) { _ in }
+                        }
                     }
                 }
                 switch message {
@@ -1260,6 +1269,24 @@ public class RoiSyncManager: ObservableObject {
                 self.detectedCard = nil
                 self.hasRecentDetection = false
                 self.clearDetectionWorkItem?.cancel()
+
+            case "camera_control":
+                if let action = json["action"] as? String {
+                    switch action {
+                    case "focus":
+                        let x = json["x"] as? CGFloat ?? 0.5
+                        let y = json["y"] as? CGFloat ?? 0.5
+                        CameraManager.current?.focus(at: CGPoint(x: x, y: y), shouldLock: true)
+                    case "zoom":
+                        let factor = json["factor"] as? CGFloat ?? 1.0
+                        CameraManager.current?.setRemoteZoom(factor: factor)
+                    case "exposure":
+                        let bias = (json["bias"] as? NSNumber)?.floatValue ?? 0.0
+                        CameraManager.current?.setRemoteExposure(bias: bias)
+                    default:
+                        break
+                    }
+                }
 
             case "mode_changed":
                 if let modeData = json["data"] as? [String: Any] {
