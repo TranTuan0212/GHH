@@ -559,6 +559,17 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Đồng bộ tức thời hướng quay theo UIWindowScene của iOS khi giao diện xoay ngang/dọc
+    public func syncOrientationFromUI(_ targetOri: AVCaptureVideoOrientation) {
+        guard !isConnecting && flatPlacementMode == .auto else { return }
+        guard targetOri != currentCaptureOrientation else { return }
+        currentCaptureOrientation = targetOri
+        updateVideoOrientation()
+        if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+            rebuildLiveSession()
+        }
+    }
+
     /// Cấu hình RTMP ingest + stream key trước khi bấm Start Live. App iOS lấy 2 giá trị này từ
     /// POST /api/stream/start (server trả `rtmpIngestUrl` + `streamKey` qua field session.streamKey).
     /// Trước đây có fallback "rtmp://localhost:1935/live" làm crash qua 5G — đã bỏ.

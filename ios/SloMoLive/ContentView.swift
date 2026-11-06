@@ -20,11 +20,26 @@ class VideoPreviewView: UIView {
     }
 
     func syncOrientation() {
-        if let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported {
-            if let current = CameraManager.current?.currentCaptureOrientation {
-                if conn.videoOrientation != current {
-                    conn.videoOrientation = current
-                }
+        guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
+        if let windowScene = self.window?.windowScene {
+            let orientation = windowScene.interfaceOrientation
+            let targetOri: AVCaptureVideoOrientation
+            switch orientation {
+            case .landscapeLeft:
+                targetOri = .landscapeLeft
+            case .landscapeRight:
+                targetOri = .landscapeRight
+            case .portraitUpsideDown:
+                targetOri = .portraitUpsideDown
+            default:
+                targetOri = .portrait
+            }
+            if conn.videoOrientation != targetOri {
+                conn.videoOrientation = targetOri
+            }
+        } else if let current = CameraManager.current?.currentCaptureOrientation {
+            if conn.videoOrientation != current {
+                conn.videoOrientation = current
             }
         }
     }
@@ -61,6 +76,21 @@ struct CameraPreviewView: UIViewRepresentable {
             uiView.videoPreviewLayer.session = session
         }
         uiView.syncOrientation()
+        if let windowScene = uiView.window?.windowScene {
+            let orientation = windowScene.interfaceOrientation
+            let targetOri: AVCaptureVideoOrientation
+            switch orientation {
+            case .landscapeLeft:
+                targetOri = .landscapeLeft
+            case .landscapeRight:
+                targetOri = .landscapeRight
+            case .portraitUpsideDown:
+                targetOri = .portraitUpsideDown
+            default:
+                targetOri = .portrait
+            }
+            CameraManager.current?.syncOrientationFromUI(targetOri)
+        }
         context.coordinator.parent = self
     }
 
