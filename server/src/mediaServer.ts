@@ -92,7 +92,7 @@ export function ensureRtcRelay(streamKey: string): void {
     '-rtsp_transport', 'tcp',
     '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
     '-map', '0:v:0',
-    '-vf', "scale='if(gt(iw,ih),-2,min(720,iw))':'if(gt(iw,ih),min(720,ih),-2)',fps=60,eq=brightness=0.04:contrast=1.03:gamma=1.08",
+    '-vf', "scale='if(gt(iw,ih),-2,min(720,iw))':'if(gt(iw,ih),min(720,ih),-2)',fps=60",
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
     '-tune', 'zerolatency',

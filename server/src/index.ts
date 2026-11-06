@@ -362,6 +362,11 @@ app.post('/api/whep/:streamKey', express.text({ type: ['application/sdp', 'text/
     res.status(upstreamRes.status);
     res.setHeader('Content-Type', upstreamRes.headers.get('content-type') || 'application/sdp');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    const upstreamLoc = upstreamRes.headers.get('location');
+    if (upstreamLoc) {
+      res.setHeader('Location', upstreamLoc);
+      res.setHeader('Access-Control-Expose-Headers', 'Location, Content-Type');
+    }
     res.send(answerText);
   } catch (err: any) {
     res.status(502).send('WHEP upstream unavailable');

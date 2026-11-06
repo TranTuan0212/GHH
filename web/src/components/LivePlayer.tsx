@@ -260,8 +260,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   }, [socket]);
 
   const handleLiveVideoClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isLiveRef.current || !hasLiveFrame) return;
-    const container = e.currentTarget;
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('[data-text-overlay="true"]') || target.closest('[data-ptz-toolbar="true"]') || target.closest('[data-pip-window="true"]') || target.closest('[data-live-keypad="true"]')) {
+      return;
+    }
+    if (!isLiveRef.current) return;
+    const container = videoContainerRef.current;
+    if (!container) return;
     const rect = container.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
@@ -270,7 +275,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     setRemoteFocusPoint({ x: clickX, y: clickY });
     if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
-    focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 1500);
+    focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 2000);
 
     if (socket && roomId) {
       socket.emit('camera_control', {
@@ -2813,11 +2818,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         <div className="flex items-center space-x-2 sm:space-x-3 w-full sm:w-auto justify-between sm:justify-start">
           <div className={`flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-semibold flex-shrink-0 border ${
             isLive
-              ? 'bg-red-500/10 border-red-500/30 text-red-400 animate-pulse'
+              ? hasLiveFrame
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                : 'bg-red-500/15 border-red-500/30 text-red-400 animate-pulse'
               : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
           }`}>
             {isLive ? <Radio className="w-3 h-3 animate-spin" /> : <Gauge className="w-3 h-3" />}
-            <span>{isLive ? 'LIVE - WEBRTC' : `SLOW - ${playbackRate}x`}</span>
+            <span>{isLive ? (hasLiveFrame ? '🔴 WebRTC LIVE (0.2s)' : '🟡 LIVE (HLS Đang Nối...)') : `SLOW - ${playbackRate}x`}</span>
           </div>
           <span className="text-xs font-medium text-slate-300 truncate max-w-[180px] sm:max-w-none">
             {roomName ? `Room: ${roomName}` : (stream ? `Streamer: ${stream.username}` : 'Đang chờ luồng Live...')}
@@ -2837,6 +2844,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       {/* Video Container */}
       <div
         ref={videoContainerRef}
+        onClick={handleLiveVideoClick}
         onDoubleClick={toggleFullscreen}
         onTouchStart={handleContainerTouchStart}
         onTouchMove={handleContainerTouchMove}
@@ -2845,7 +2853,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
-        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay để zoom cận cảnh."
+        title="Chạm bất kỳ đâu để lấy nét. Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F)."
       >
         {/* Nút đặt lại zoom khi đang phóng to cận cảnh */}
         {mainZoom > 1.05 && (
@@ -2862,6 +2870,108 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             <ZoomIn className="w-3.5 h-3.5 text-amber-300" />
             <span>Zoom: {mainZoom}x (Chạm để về 1x)</span>
           </button>
+        )}
+
+        {/* 🎯 Khung ngắm Lấy Nét Tap-to-Focus màu vàng chớp sáng trên video */}
+        {remoteFocusPoint && (
+          <div
+            className="absolute pointer-events-none z-50 -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
+            style={{ left: `${remoteFocusPoint.x}px`, top: `${remoteFocusPoint.y}px` }}
+          >
+            <div className="relative w-14 h-14 border-2 border-amber-400 rounded-lg shadow-xl shadow-amber-400/50 animate-pulse flex items-center justify-center bg-amber-400/15">
+              <span className="absolute -top-1 w-2 h-0.5 bg-amber-300" />
+              <span className="absolute -bottom-1 w-2 h-0.5 bg-amber-300" />
+              <span className="absolute -left-1 h-2 w-0.5 bg-amber-300" />
+              <span className="absolute -right-1 h-2 w-0.5 bg-amber-300" />
+              <span className="w-2 h-2 rounded-full bg-amber-400 shadow animate-ping" />
+            </div>
+            <div className="text-[10px] text-amber-300 font-mono font-black bg-black/85 px-2 py-0.5 rounded-full shadow-lg mt-1 border border-amber-400/40 whitespace-nowrap text-center">
+              LẤY NÉT
+            </div>
+          </div>
+        )}
+
+        {/* Cụm Điều Khiển Camera iPhone Từ Xa (PTZ Toolbar) - Chỉ hiện khi đang xem Live */}
+        {isLive && (
+          <div
+            data-ptz-toolbar="true"
+            className="absolute top-3 right-3 z-40 flex flex-col items-end space-y-1 pointer-events-auto"
+          >
+            <div className="flex items-center space-x-1 bg-slate-950/85 backdrop-blur-md px-2 py-1 rounded-xl border border-white/20 shadow-2xl">
+              {/* Zoom Buttons: 1x, 1.5x, 2x, 3x */}
+              <span className="text-[10px] text-slate-400 font-bold mr-1 flex items-center">
+                <ZoomIn className="w-3 h-3 mr-0.5 text-indigo-400" />
+                ZOOM:
+              </span>
+              {[1.0, 1.5, 2.0, 3.0].map((z) => (
+                <button
+                  key={z}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSetRemoteZoom(z);
+                  }}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                    remoteZoom === z
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/50 ring-1 ring-indigo-400'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+                  }`}
+                  title={`Phóng to ống kính camera iPhone ${z}x`}
+                >
+                  {z}x
+                </button>
+              ))}
+
+              <span className="w-px h-3.5 bg-white/20 mx-1" />
+
+              {/* Exposure Buttons: -0.5, 0, +0.5, +1.0 */}
+              <span className="text-[10px] text-slate-400 font-bold mr-1 flex items-center">
+                <Sun className="w-3 h-3 mr-0.5 text-amber-400" />
+                SÁNG:
+              </span>
+              {[-0.5, 0.0, 0.5, 1.0].map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSetRemoteExposure(b);
+                  }}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                    remoteExposure === b
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/50 ring-1 ring-amber-300 font-black'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+                  }`}
+                  title={`Chỉnh bù sáng camera iPhone ${b > 0 ? `+${b}` : b} EV`}
+                >
+                  {b === 0 ? '0' : (b > 0 ? `+${b}` : b)}
+                </button>
+              ))}
+
+              <span className="w-px h-3.5 bg-white/20 mx-1" />
+
+              {/* Re-focus Button */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (socket && roomId) {
+                    socket.emit('camera_control', { roomId, action: 'focus', x: 0.5, y: 0.5 });
+                    showModeNotice('live', 'TỰ ĐỘNG LẤY NÉT', 'Đã yêu cầu iPhone lấy nét lại tâm bàn', '');
+                  }
+                }}
+                className="px-1.5 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 text-[10px] font-mono font-bold flex items-center space-x-1 transition-all cursor-pointer border border-emerald-500/30"
+                title="Lấy nét lại tâm bàn (Center Auto-Focus)"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                <span>Nét Tâm</span>
+              </button>
+            </div>
+
+            <div className="text-[9px] text-slate-400/90 font-medium bg-black/60 backdrop-blur px-2 py-0.5 rounded-md pointer-events-none border border-white/5">
+              💡 Chạm vào bàn Live để lấy nét điểm đó
+            </div>
+          </div>
         )}
 
         {textOverlays.map((item) => (
