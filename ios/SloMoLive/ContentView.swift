@@ -398,22 +398,6 @@ extension ContentView {
         }
     }
 
-    private var orientationTitle: String {
-        switch cameraManager.orientationLockMode {
-        case .auto: return "Xoay: Tự động"
-        case .landscape: return "Ngang 16:9"
-        case .portrait: return "Dọc 9:16"
-        }
-    }
-
-    private var orientationIcon: String {
-        switch cameraManager.orientationLockMode {
-        case .auto: return "arrow.triangle.2.circlepath"
-        case .landscape: return "rectangle.fill.on.rectangle.fill"
-        case .portrait: return "iphone"
-        }
-    }
-
     private var placementTitle: String {
         switch cameraManager.flatPlacementMode {
         case .auto: return "Đặt: Tự động"
@@ -597,15 +581,15 @@ extension ContentView {
                 )
             }
 
-            // Hướng quay (Ngang 16:9 / Dọc 9:16 / Tự động)
+            // Đặt máy (Úp / Ngửa / Tự động)
             Button(action: {
-                cameraManager.cycleOrientationLockMode()
+                cameraManager.cycleFlatPlacementMode()
             }) {
                 ControlTile(
-                    icon: orientationIcon,
-                    title: orientationTitle,
-                    tint: .orange,
-                    isActive: cameraManager.orientationLockMode != .auto
+                    icon: placementIcon,
+                    title: placementTitle,
+                    tint: .yellow,
+                    isActive: cameraManager.flatPlacementMode != .auto
                 )
             }
 
@@ -1404,7 +1388,39 @@ public class RoiSyncManager: ObservableObject {
                             let targetX = isFront ? (1.0 - rawX) : rawX
                             let targetY = rawY
 
-                            let screenPoint = CGPoint(x: layer.bounds.width * targetX, y: layer.bounds.height * targetY)
+                            // Khi videoGravity = .resizeAspect, video hiển thị lọt trong layer.bounds
+                            // Ta tính chính xác kích thước hiển thị (renderW, renderH) và phần dải đen (offsetX, offsetY)
+                            let layerW = layer.bounds.width
+                            let layerH = layer.bounds.height
+                            let currentOri = CameraManager.current?.currentCaptureOrientation ?? .portrait
+                            let isLandscape = (currentOri == .landscapeLeft || currentOri == .landscapeRight)
+
+                            // Tỷ lệ khung hình video thực tế (16:9 khi ngang, 9:16 khi dọc)
+                            let videoRatio: CGFloat = isLandscape ? (16.0 / 9.0) : (9.0 / 16.0)
+                            let layerRatio: CGFloat = layerW / layerH
+
+                            var renderW: CGFloat = layerW
+                            var renderH: CGFloat = layerH
+                            var offsetX: CGFloat = 0
+                            var offsetY: CGFloat = 0
+
+                            if layerRatio > videoRatio {
+                                // Màn hình bè hơn video -> dải đen 2 bên trái phải
+                                renderH = layerH
+                                renderW = layerH * videoRatio
+                                offsetX = (layerW - renderW) / 2.0
+                            } else {
+                                // Màn hình dài hơn video -> dải đen trên dưới
+                                renderW = layerW
+                                renderH = layerW / videoRatio
+                                offsetY = (layerH - renderH) / 2.0
+                            }
+
+                            let screenPoint = CGPoint(
+                                x: max(offsetX, min(offsetX + renderW, offsetX + renderW * targetX)),
+                                y: max(offsetY, min(offsetY + renderH, offsetY + renderH * targetY))
+                            )
+
                             let converted = layer.captureDevicePointConverted(fromLayerPoint: screenPoint)
 
                             var devicePoint = converted

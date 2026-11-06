@@ -67,53 +67,6 @@ public class CameraManager: NSObject, ObservableObject {
     /// không bị ảnh hưởng bởi iOS 16 UIWindowScene orientation suppression, và nhận biết được kể cả khi đặt nằm ngang trước).
     private let motionManager = CMMotionManager()
 
-    /// Chế độ khóa hướng quay camera: Tự động nhận diện vs Ép Ngang 16:9 vs Ép Dọc 9:16
-    public enum OrientationLockMode: String, CaseIterable {
-        case auto = "Tự Động 🔄"
-        case landscape = "Ngang 16:9 🖥️"
-        case portrait = "Dọc 9:16 📱"
-    }
-
-    @Published public var orientationLockMode: OrientationLockMode = .auto
-
-    public func cycleOrientationLockMode() {
-        switch orientationLockMode {
-        case .auto:
-            setOrientationLockMode(.landscape)
-        case .landscape:
-            setOrientationLockMode(.portrait)
-        case .portrait:
-            setOrientationLockMode(.auto)
-        }
-    }
-
-    public func setOrientationLockMode(_ mode: OrientationLockMode) {
-        orientationLockMode = mode
-        switch mode {
-        case .auto:
-            // Tự động nhận diện qua gia tốc kế
-            break
-        case .landscape:
-            let accelX = motionManager.accelerometerData?.acceleration.x ?? 1.0
-            let newOri: AVCaptureVideoOrientation = (accelX < -0.15) ? .landscapeLeft : .landscapeRight
-            if newOri != currentCaptureOrientation {
-                currentCaptureOrientation = newOri
-                updateVideoOrientation()
-                if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
-                    rebuildLiveSession()
-                }
-            }
-        case .portrait:
-            if currentCaptureOrientation != .portrait {
-                currentCaptureOrientation = .portrait
-                updateVideoOrientation()
-                if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
-                    rebuildLiveSession()
-                }
-            }
-        }
-    }
-
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
     public enum FlatPlacementMode: String, CaseIterable {
         case auto = "Tự Động 📱"
@@ -482,39 +435,23 @@ public class CameraManager: NSObject, ObservableObject {
     @objc private func deviceOrientationDidChange() {
         guard !isConnecting && flatPlacementMode == .auto else { return }
         let deviceOri = UIDevice.current.orientation
-        var newOrientation: AVCaptureVideoOrientation? = nil
+        let newOrientation: AVCaptureVideoOrientation
 
-        switch orientationLockMode {
-        case .landscape:
-            // Đang khóa chế độ Ngang: Cho phép đảo 180 độ giữa Cam Trái và Cam Phải
-            if deviceOri == .landscapeLeft {
-                newOrientation = .landscapeRight // Cam bên trái
-            } else if deviceOri == .landscapeRight {
-                newOrientation = .landscapeLeft // Cam bên phải
-            }
+        switch deviceOri {
+        case .landscapeLeft:
+            newOrientation = .landscapeRight
+        case .landscapeRight:
+            newOrientation = .landscapeLeft
+        case .portraitUpsideDown:
+            newOrientation = .portraitUpsideDown
         case .portrait:
-            if deviceOri == .portrait {
-                newOrientation = .portrait
-            } else if deviceOri == .portraitUpsideDown {
-                newOrientation = .portraitUpsideDown
-            }
-        case .auto:
-            switch deviceOri {
-            case .landscapeLeft:
-                newOrientation = .landscapeRight
-            case .landscapeRight:
-                newOrientation = .landscapeLeft
-            case .portraitUpsideDown:
-                newOrientation = .portraitUpsideDown
-            case .portrait:
-                newOrientation = .portrait
-            default:
-                break
-            }
+            newOrientation = .portrait
+        default:
+            return
         }
 
-        guard let targetOri = newOrientation, targetOri != currentCaptureOrientation else { return }
-        currentCaptureOrientation = targetOri
+        guard newOrientation != currentCaptureOrientation else { return }
+        currentCaptureOrientation = newOrientation
         updateVideoOrientation()
         if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
             rebuildLiveSession()
@@ -523,49 +460,68 @@ public class CameraManager: NSObject, ObservableObject {
 
     /// Xử lý vector trọng lực đọc từ con quay gia tốc kế của iPhone.
     /// Nhận biết chính xác điện thoại đang nằm ngang hay đứng bất kể góc ngửa trên tripod hay khóa xoay iOS.
+    /// Có vùng đệm chống trôi (Hysteresis) để không bị tự động xoay 90 độ khi gá máy soi bàn bài.
     private func handleAcceleration(_ acceleration: CMAcceleration) {
         guard !isConnecting && flatPlacementMode == .auto else { return }
 
         let x = acceleration.x
         let y = acceleration.y
+        let z = acceleration.z
 
-        var newOrientation: AVCaptureVideoOrientation? = nil
+        // Nếu máy nằm gần như song song mặt bàn (|z| > 0.85 và lực x, y quá yếu < 0.25),
+        // giữ nguyên hướng hiện tại để không bị nhảy lung tung khi soi bàn bài.
+        if abs(z) > 0.85 && abs(x) < 0.25 && abs(y) < 0.25 {
+            return
+        }
 
-        switch orientationLockMode {
-        case .landscape:
-            // Đang ở chế độ Ngang: Tự động lật 180 độ khi đổi đầu (Cam bên Trái vs Cam bên Phải)
-            if x > 0.15 {
-                newOrientation = .landscapeRight // Cam bên trái
-            } else if x < -0.15 {
-                newOrientation = .landscapeLeft // Cam bên phải
-            }
-        case .portrait:
-            // Đang ở chế độ Dọc: Cho phép đảo ngược nếu dốc ngược đầu máy
-            if y < -0.15 {
-                newOrientation = .portrait
-            } else if y > 0.15 {
-                newOrientation = .portraitUpsideDown
-            }
-        case .auto:
-            if abs(x) > abs(y) {
-                // Thiết bị đang nằm ngang (Landscape)
-                if x > 0.15 {
-                    newOrientation = .landscapeRight // Cam bên trái
-                } else if x < -0.15 {
-                    newOrientation = .landscapeLeft // Cam bên phải
+        let isCurrentlyLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
+        let hysteresis: Double = 0.20 // Vùng đệm chống giật 90 độ
+
+        let newOrientation: AVCaptureVideoOrientation
+        if isCurrentlyLandscape {
+            // Đang ở Ngang: Chỉ chuyển về Dọc khi lực dọc vượt trội hơn lực ngang + hysteresis
+            if abs(y) > abs(x) + hysteresis && abs(y) > 0.30 {
+                if y < -0.25 {
+                    newOrientation = .portrait
+                } else if y > 0.25 {
+                    newOrientation = .portraitUpsideDown
+                } else {
+                    return
                 }
             } else {
-                // Thiết bị đang dựng đứng (Portrait)
-                if y < -0.15 {
+                // Tiếp tục ở Ngang: Cho phép lật 180 độ nếu người dùng đổi chiều đặt điện thoại
+                if x < -0.25 {
+                    newOrientation = .landscapeRight // Notch bên trái, cổng sạc bên phải
+                } else if x > 0.25 {
+                    newOrientation = .landscapeLeft  // Notch bên phải, cổng sạc bên trái
+                } else {
+                    return
+                }
+            }
+        } else {
+            // Đang ở Dọc: Chỉ chuyển sang Ngang khi lực ngang vượt trội hơn lực dọc + hysteresis
+            if abs(x) > abs(y) + hysteresis && abs(x) > 0.30 {
+                if x < -0.25 {
+                    newOrientation = .landscapeRight // Notch bên trái, cổng sạc bên phải
+                } else if x > 0.25 {
+                    newOrientation = .landscapeLeft  // Notch bên phải, cổng sạc bên trái
+                } else {
+                    return
+                }
+            } else {
+                // Tiếp tục ở Dọc: Cho phép đảo ngược nếu dốc ngược đầu máy
+                if y < -0.25 {
                     newOrientation = .portrait
-                } else if y > 0.15 {
+                } else if y > 0.25 {
                     newOrientation = .portraitUpsideDown
+                } else {
+                    return
                 }
             }
         }
 
-        guard let targetOri = newOrientation, targetOri != currentCaptureOrientation else { return }
-        currentCaptureOrientation = targetOri
+        guard newOrientation != currentCaptureOrientation else { return }
+        currentCaptureOrientation = newOrientation
         updateVideoOrientation()
         if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
             rebuildLiveSession()
@@ -627,7 +583,7 @@ public class CameraManager: NSObject, ObservableObject {
         audioCfg.audioSampleRate = ._48000Hz
         audioCfg.audioBitrate = ._64Kbps
 
-        let isLandscape = (orientationLockMode == .landscape) || (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
+        let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
         let uiOrientation: UIInterfaceOrientation = {
             switch currentCaptureOrientation {
             case .landscapeLeft: return .landscapeLeft
