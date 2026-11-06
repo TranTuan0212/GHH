@@ -1353,18 +1353,23 @@ public class RoiSyncManager: ObservableObject {
                     case "focus":
                         let x = json["x"] as? CGFloat ?? 0.5
                         let y = json["y"] as? CGFloat ?? 0.5
-                        let normPt = CGPoint(x: x, y: y)
-                        let devPt = CameraManager.current?.convertVideoNormalizedPointToDevicePoint(normPt) ?? normPt
-                        CameraManager.current?.focus(at: devPt, shouldLock: true)
 
                         DispatchQueue.main.async {
-                            var screenPoint = CGPoint(x: UIScreen.main.bounds.width * x, y: UIScreen.main.bounds.height * y)
+                            let screenW = (VideoPreviewView.activePreviewLayer?.bounds.width ?? 0) > 0 ? VideoPreviewView.activePreviewLayer!.bounds.width : UIScreen.main.bounds.width
+                            let screenH = (VideoPreviewView.activePreviewLayer?.bounds.height ?? 0) > 0 ? VideoPreviewView.activePreviewLayer!.bounds.height : UIScreen.main.bounds.height
+                            let screenPoint = CGPoint(x: screenW * x, y: screenH * y)
+
+                            var devicePoint = CGPoint(x: 0.5, y: 0.5)
                             if let layer = VideoPreviewView.activePreviewLayer {
-                                let layerPt = layer.layerPointConverted(fromCaptureDevicePoint: devPt)
-                                if !layerPt.x.isNaN && !layerPt.y.isNaN && !layerPt.x.isInfinite && !layerPt.y.isInfinite {
-                                    screenPoint = layerPt
+                                let converted = layer.captureDevicePointConverted(fromLayerPoint: screenPoint)
+                                if !converted.x.isNaN && !converted.y.isNaN && !converted.x.isInfinite && !converted.y.isInfinite {
+                                    devicePoint = converted
                                 }
+                            } else {
+                                devicePoint = CameraManager.current?.convertVideoNormalizedPointToDevicePoint(CGPoint(x: x, y: y)) ?? CGPoint(x: 0.5, y: 0.5)
                             }
+
+                            CameraManager.current?.focus(at: devicePoint, shouldLock: true)
                             self.showRemoteFocusIndicator(at: screenPoint)
                         }
                     case "zoom":
