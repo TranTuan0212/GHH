@@ -119,8 +119,8 @@ public class CameraManager: NSObject, ObservableObject {
     @Published public var currentShutterText: String = "Auto Sáng"
 
     /// Mức độ bù sáng EV cho phòng thiếu sáng (0: Chuẩn 0.0, 1: +0.7 EV Sáng, 2: +1.5 EV Rất Sáng)
-    @Published public var exposureBiasLevel: Int = 0
-    @Published public var exposureBiasText: String = "EV: Chuẩn"
+    @Published public var exposureBiasLevel: Int = 1
+    @Published public var exposureBiasText: String = "+0.7 EV ☀️"
 
     /// Thông số chi tiết hiển thị trực tiếp lên màn hình app để đối chiếu (iPhone 13 vs 14 Pro Max)
     @Published public var debugFormatInfo: String = ""
@@ -279,6 +279,9 @@ public class CameraManager: NSObject, ObservableObject {
                 let targetRates: [Double] = [self.selectedResolution.targetFPS, 120.0, 60.0]
                 if let (format, fps) = self.selectBestHFRFormat(for: videoDevice, targetRates: targetRates) {
                     videoDevice.activeFormat = format
+                    if format.supportedColorSpaces.contains(.sRGB_BT709) {
+                        videoDevice.activeColorSpace = .sRGB_BT709
+                    }
                     let timescale = Int32(fps)
                     videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: timescale)
                     videoDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: timescale)
@@ -783,11 +786,11 @@ public class CameraManager: NSObject, ObservableObject {
                         }
 
                         // Ưu tiên format ISP thế hệ mới (hỗ trợ dải màu rộng P3_D65 + Full Range 420f + maxISO cao ở cuối danh sách)
-                        if format.supportedColorSpaces.contains(.P3_D65) {
+                        if format.supportedColorSpaces.contains(.sRGB_BT709) {
                             score += 30
                         }
-                        if isFullRange8Bit {
-                            score += 20
+                        if isVideoRange8Bit {
+                            score += 40
                         }
                         score += Int64(format.maxISO / 100.0)
 
@@ -909,6 +912,9 @@ public class CameraManager: NSObject, ObservableObject {
 
                 if let (format, fps) = result {
                     videoDevice.activeFormat = format
+                    if format.supportedColorSpaces.contains(.sRGB_BT709) {
+                        videoDevice.activeColorSpace = .sRGB_BT709
+                    }
 
                     // Đặt frame rate chính xác (đã được verify là format hỗ trợ)
                     let timescale = Int32(fps)
@@ -1167,6 +1173,9 @@ public class CameraManager: NSObject, ObservableObject {
                     let result = self.selectBestHFRFormat(for: newDevice, targetRates: [120.0, 60.0])
                     if let (format, fps) = result {
                         newDevice.activeFormat = format
+                        if format.supportedColorSpaces.contains(.sRGB_BT709) {
+                            newDevice.activeColorSpace = .sRGB_BT709
+                        }
                         let targetTimescale = Int32(fps)
                         newDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: targetTimescale)
                         newDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: targetTimescale)
@@ -1431,8 +1440,8 @@ public class CameraManager: NSObject, ObservableObject {
             targetBias = min(1.5, device.maxExposureTargetBias)
             biasLabel = "+1.5 EV 🌟"
         default:
-            targetBias = 0.0
-            biasLabel = "EV: Chuẩn"
+            targetBias = min(0.3, device.maxExposureTargetBias)
+            biasLabel = "+0.3 EV ☀️"
         }
         device.setExposureTargetBias(targetBias, completionHandler: nil)
         DispatchQueue.main.async {

@@ -284,7 +284,7 @@ app.post('/api/whep/:streamKey', express_1.default.text({ type: ['application/sd
         let upstreamRes = null;
         let answerText = '';
         // Nếu relay vừa khởi động, đợi tối đa 1.2s (6 lần x 200ms) để MediaMTX nhận luồng _rtc thay vì trả 404/502
-        for (let retry = 0; retry < 6; retry++) {
+        for (let retry = 0; retry < 10; retry++) {
             for (const port of ports) {
                 try {
                     let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {

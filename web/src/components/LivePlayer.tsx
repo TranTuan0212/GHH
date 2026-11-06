@@ -2986,7 +2986,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             <div className="absolute top-0 inset-x-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-b from-black/85 via-black/40 to-transparent">
               <div className="flex items-center space-x-1 bg-red-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                <span>LIVE</span>
+                <span>{hasLiveFrame ? 'LIVE (0.2s)' : 'LIVE'}</span>
               </div>
               <div className="flex items-center space-x-1 pointer-events-auto">
                 <button
@@ -3550,7 +3550,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ) : (
               <div className="flex items-center space-x-1 px-1.5 py-0.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-400 text-[10px] font-bold flex-shrink-0">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
-                <span>LIVE</span>
+                <span>{hasLiveFrame ? 'LIVE (0.2s)' : 'LIVE'}</span>
               </div>
             )}
 
