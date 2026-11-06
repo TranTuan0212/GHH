@@ -109,17 +109,49 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Hướng camera Cam Độ: Mặc định .landscapeRight, người dùng tự bấm nút trên iPhone để đảo 180 độ sang .landscapeLeft
-    @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .landscapeRight
+    /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
+    public enum FlatPlacementMode: String, CaseIterable {
+        case auto = "Tự Động 📱"
+        case faceUp = "Máy: NGỬA 📖"
+        case faceDown = "Máy: ÚP 📱"
+    }
 
-    public func toggleLandscapeFlip() {
-        let newOri: AVCaptureVideoOrientation = (currentCaptureOrientation == .landscapeRight) ? .landscapeLeft : .landscapeRight
-        currentCaptureOrientation = newOri
-        updateVideoOrientation()
-        if !isStreamingAtomic && !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
-            rebuildLiveSession()
+    @Published public var flatPlacementMode: FlatPlacementMode = .auto
+
+    public func cycleFlatPlacementMode() {
+        switch flatPlacementMode {
+        case .auto:
+            flatPlacementMode = .faceUp
+        case .faceUp:
+            flatPlacementMode = .faceDown
+        case .faceDown:
+            flatPlacementMode = .auto
+        }
+        applyOrientationForPlacementMode()
+    }
+
+    public func applyOrientationForPlacementMode() {
+        let isFront = (self.cameraPosition == .front)
+        let newOrientation: AVCaptureVideoOrientation
+        switch flatPlacementMode {
+        case .auto:
+            return
+        case .faceUp:
+            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+        case .faceDown:
+            newOrientation = isFront ? .landscapeRight : .landscapeLeft
+        }
+
+        if newOrientation != currentCaptureOrientation {
+            currentCaptureOrientation = newOrientation
+            updateVideoOrientation()
+            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                rebuildLiveSession()
+            }
         }
     }
+
+    @Published public private(set) var currentCaptureOrientation: AVCaptureVideoOrientation = .portrait
 
     /// Trạng thái khóa tiêu cự (Lock Focus) tại mặt bàn — ngăn hiện tượng đảo nét (focus hunting) khi chia bài
     @Published public var isFocusLocked: Bool = false
@@ -443,14 +475,69 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     @objc private func deviceOrientationDidChange() {
-        // Khóa màn hình ngang cố định cho Cam Độ — người dùng tự bấm nút để xoay
-        return
+        guard !isStreamingAtomic && !isConnecting && flatPlacementMode == .auto else { return }
+        let isFront = (self.cameraPosition == .front)
+        let newOrientation: AVCaptureVideoOrientation
+        switch UIDevice.current.orientation {
+        case .landscapeLeft:
+            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+        case .landscapeRight:
+            newOrientation = isFront ? .landscapeRight : .landscapeLeft
+        case .portraitUpsideDown:
+            newOrientation = .portraitUpsideDown
+        default:
+            newOrientation = .portrait
+        }
+        if newOrientation != currentCaptureOrientation {
+            currentCaptureOrientation = newOrientation
+            updateVideoOrientation()
+            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                rebuildLiveSession()
+            }
+        }
     }
 
     /// Xử lý vector trọng lực đọc từ con quay gia tốc kế của iPhone.
-    /// Khóa màn hình ngang cố định cho Cam Độ — người dùng tự bấm nút để xoay
+    /// Nhận biết chính xác điện thoại đang nằm ngang hay đứng bất kể góc ngửa trên tripod hay khóa xoay iOS.
     private func handleAcceleration(_ acceleration: CMAcceleration) {
-        return
+        // Trong lúc live stream: KHÔNG đổi orientation giữa chừng để tránh vỡ SPS/PPS của H.264 encoder
+        guard !isStreamingAtomic && !isConnecting && flatPlacementMode == .auto else { return }
+
+        let x = acceleration.x
+        let y = acceleration.y
+        let isFront = (self.cameraPosition == .front)
+
+        let newOrientation: AVCaptureVideoOrientation
+        if abs(x) > abs(y) {
+            // Thiết bị đang nằm ngang (Landscape)
+            // x > 0: đỉnh máy nghiêng sang trái (top left, home right) -> UIDeviceOrientation.landscapeLeft
+            // Với camera sau: tương ứng AVCaptureVideoOrientation.landscapeRight
+            // Với camera trước: đối xứng gương nên là .landscapeLeft
+            if x > 0.15 {
+                newOrientation = isFront ? .landscapeLeft : .landscapeRight
+            } else if x < -0.15 {
+                newOrientation = isFront ? .landscapeRight : .landscapeLeft
+            } else {
+                return
+            }
+        } else {
+            // Thiết bị đang dựng đứng (Portrait)
+            if y < -0.15 {
+                newOrientation = .portrait
+            } else if y > 0.15 {
+                newOrientation = .portraitUpsideDown
+            } else {
+                return
+            }
+        }
+
+        if newOrientation != currentCaptureOrientation {
+            currentCaptureOrientation = newOrientation
+            updateVideoOrientation()
+            if !streamKey.isEmpty && !rtmpIngestUrl.isEmpty {
+                rebuildLiveSession()
+            }
+        }
     }
 
     /// Cấu hình toàn diện video connection của AVCaptureVideoDataOutput:
@@ -540,10 +627,23 @@ public class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // LUÔN LUÔN KHÓA CHUẨN NGANG 16:9 CHO CAM ĐỘ (To căng tràn màn hình, không bị dải đen co cụm)
-        videoCfg.videoSize = CGSize(width: captureWidth, height: captureHeight)
-        let uiOrientation: UIInterfaceOrientation = (currentCaptureOrientation == .landscapeLeft) ? .landscapeLeft : .landscapeRight
-        videoCfg.outputImageOrientation = uiOrientation
+        let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
+        let uiOrientation: UIInterfaceOrientation = {
+            switch currentCaptureOrientation {
+            case .landscapeLeft: return .landscapeLeft
+            case .landscapeRight: return .landscapeRight
+            case .portraitUpsideDown: return .portraitUpsideDown
+            default: return .portrait
+            }
+        }()
+
+        if isLandscape {
+            videoCfg.videoSize = CGSize(width: captureWidth, height: captureHeight)
+            videoCfg.outputImageOrientation = uiOrientation
+        } else {
+            videoCfg.videoSize = CGSize(width: captureHeight, height: captureWidth)
+            videoCfg.outputImageOrientation = .portrait
+        }
 
         let targetFps: UInt = max(30, UInt(activeCaptureFPS.rounded()))
         // Chuẩn Full HD 1080p 120fps Master Replay tối ưu cho cả 4G/5G và Cloudflare Tunnel:

@@ -13,36 +13,6 @@ class VideoPreviewView: UIView {
     var videoPreviewLayer: AVCaptureVideoPreviewLayer {
         return layer as! AVCaptureVideoPreviewLayer
     }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        syncOrientation()
-    }
-
-    func syncOrientation() {
-        guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
-        if let windowScene = self.window?.windowScene {
-            let orientation = windowScene.interfaceOrientation
-            let targetOri: AVCaptureVideoOrientation
-            switch orientation {
-            case .landscapeLeft:
-                targetOri = .landscapeLeft
-            case .landscapeRight:
-                targetOri = .landscapeRight
-            case .portraitUpsideDown:
-                targetOri = .portraitUpsideDown
-            default:
-                targetOri = .portrait
-            }
-            if conn.videoOrientation != targetOri {
-                conn.videoOrientation = targetOri
-            }
-        } else if let current = CameraManager.current?.currentCaptureOrientation {
-            if conn.videoOrientation != current {
-                conn.videoOrientation = current
-            }
-        }
-    }
 }
 
 struct CameraPreviewView: UIViewRepresentable {
@@ -444,6 +414,22 @@ extension ContentView {
         }
     }
 
+    private var placementTitle: String {
+        switch cameraManager.flatPlacementMode {
+        case .auto: return "Đặt: Tự động"
+        case .faceUp: return "Máy: Ngửa"
+        case .faceDown: return "Máy: Úp"
+        }
+    }
+
+    private var placementIcon: String {
+        switch cameraManager.flatPlacementMode {
+        case .auto: return "iphone"
+        case .faceUp: return "book.closed.fill"
+        case .faceDown: return "iphone.slash"
+        }
+    }
+
     /// Thẻ trạng thái trên cùng: LIVE · FPS · bitrate · mạng · GPS + hạn dùng / user / mode.
     private var liveStatusCard: some View {
         let net = networkChipInfo
@@ -611,15 +597,15 @@ extension ContentView {
                 )
             }
 
-            // Xoay Ngang Cam Độ (Đảo 180 độ Cam Trái <-> Cam Phải)
+            // Đặt máy (Úp / Ngửa / Tự động)
             Button(action: {
-                cameraManager.toggleLandscapeFlip()
+                cameraManager.cycleFlatPlacementMode()
             }) {
                 ControlTile(
-                    icon: "arrow.triangle.2.circlepath",
-                    title: cameraManager.currentCaptureOrientation == .landscapeRight ? "Ngang: Cam Phải" : "Ngang: Cam Trái",
-                    tint: .orange,
-                    isActive: true
+                    icon: placementIcon,
+                    title: placementTitle,
+                    tint: .yellow,
+                    isActive: cameraManager.flatPlacementMode != .auto
                 )
             }
 
