@@ -627,7 +627,7 @@ public class CameraManager: NSObject, ObservableObject {
         audioCfg.audioSampleRate = ._48000Hz
         audioCfg.audioBitrate = ._64Kbps
 
-        let isLandscape = (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
+        let isLandscape = (orientationLockMode == .landscape) || (currentCaptureOrientation == .landscapeLeft || currentCaptureOrientation == .landscapeRight)
         let uiOrientation: UIInterfaceOrientation = {
             switch currentCaptureOrientation {
             case .landscapeLeft: return .landscapeLeft
