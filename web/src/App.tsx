@@ -23,29 +23,15 @@ export const App: React.FC = () => {
   const [finishRoundTrigger, setFinishRoundTrigger] = useState<number>(0);
   const [viewerBlocked, setViewerBlocked] = useState<boolean>(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState<boolean>(false);
-  const [appMode, setAppMode] = useState<'mode1' | 'mode2'>('mode1');
+  
 
-  const handleSetAppMode = (mode: 'mode1' | 'mode2') => {
-    setAppMode(mode);
-    localStorage.setItem('app_mode', mode);
-    if (socket) {
-      socket.emit('set_active_app_mode', { roomId: currentRoomId || user?.id, appMode: mode });
-    }
-  };
-
+  
   // Set initial currentRoomId & sync allowedMode when user logs in
   useEffect(() => {
     if (user) {
       setCurrentRoomId(user.id);
-      if (user.role !== 'ADMIN' && user.allowedMode) {
-        if (user.allowedMode === 'mode1' && appMode !== 'mode1') {
-          handleSetAppMode('mode1');
-        } else if (user.allowedMode === 'mode2' && appMode !== 'mode2') {
-          handleSetAppMode('mode2');
-        }
-      }
     }
-  }, [user, user?.allowedMode]);
+  }, [user]);
 
   // Initialize Socket.io and Room Joining
   useEffect(() => {
@@ -118,15 +104,7 @@ export const App: React.FC = () => {
       if (token) fetchAdminUsers(token);
     });
 
-    newSocket.on('user_mode_changed', (data: any) => {
-      if (!data) return;
-      setUser((prev) => (prev && prev.id === data.userId ? { ...prev, allowedMode: data.allowedMode } : prev));
-      if (data.userId === currentRoomIdRef.current && (data.effectiveMode === 'mode1' || data.effectiveMode === 'mode2')) {
-        setAppMode(data.effectiveMode);
-        localStorage.setItem('app_mode', data.effectiveMode);
-      }
-    });
-
+    
     if (false) newSocket.on('_noop', () => {
       if (token) fetchAdminUsers(token);
     });
@@ -145,8 +123,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (socket && currentRoomId) {
       setViewerBlocked(false); // Reset khi đổi phòng
-      socket.emit('set_active_app_mode', { roomId: currentRoomId, appMode });
-      socket.emit('join_room', {
+            socket.emit('join_room', {
         roomId: currentRoomId
       });
     }
@@ -315,8 +292,6 @@ export const App: React.FC = () => {
         onLogout={handleLogout}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        appMode={appMode}
-        setAppMode={handleSetAppMode}
       />
 
       <main className="flex-1 max-w-[1700px] w-full mx-auto p-2 sm:p-3.5 space-y-2.5">

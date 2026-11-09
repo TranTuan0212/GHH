@@ -57,7 +57,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [newDays, setNewDays] = useState(30);
   const [newRole, setNewRole] = useState<'USER' | 'ADMIN'>('USER');
-  const [newAllowedMode, setNewAllowedMode] = useState<'mode1' | 'mode2' | 'all'>('all');
 
   const [renewDays, setRenewDays] = useState<{ [userId: string]: number }>({});
   const [loading, setLoading] = useState(false);
@@ -271,8 +270,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           password: newPassword,
           daysValid: newDays,
           role: newRole,
-          allowedMode: newAllowedMode
-        })
+                  })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Tạo tài khoản thất bại.');
@@ -281,8 +279,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setShowCreateModal(false);
       setNewUsername('');
       setNewPassword('');
-      setNewAllowedMode('all');
-      onRefreshUsers();
+            onRefreshUsers();
     } catch (err: any) {
       showMsg(err.message, 'error');
     } finally {
@@ -997,21 +994,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           )}
                         </div>
 
-                        {/* Allowed Mode selector */}
-                        {u.role !== 'ADMIN' && (
-                          <div className="flex items-center space-x-1.5 pt-0.5">
-                            <span className="text-[10px] text-slate-400 font-mono">Chế độ:</span>
-                            <select
-                              value={u.allowedMode || 'all'}
-                              onChange={(e) => handleUpdateUserMode(u.id, e.target.value as 'mode1' | 'mode2' | 'all')}
-                              className="bg-slate-900/90 border border-slate-700 text-[11px] rounded px-1.5 py-0.5 text-red-300 font-bold outline-none cursor-pointer hover:border-indigo-400"
-                            >
-                              <option value="all">Tất cả (1 + 2)</option>
-                              <option value="mode1">Chỉ Chế độ 1</option>
-                              <option value="mode2">Chỉ Chế độ 2</option>
-                            </select>
-                          </div>
-                        )}
+                        
 
                         {/* Status Badge */}
                         <div>
@@ -1269,20 +1252,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block text-[11px] sm:text-xs font-semibold text-slate-300 mb-1">
-                  Chế Độ Được Phép Truy Cập
-                </label>
-                <select
-                  value={newAllowedMode}
-                  onChange={(e) => setNewAllowedMode(e.target.value as 'mode1' | 'mode2' | 'all')}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-red-500 outline-none"
-                >
-                  <option value="all">Tất cả (Chế độ 1 + Chế độ 2)</option>
-                  <option value="mode1">Chỉ Chế độ 1 (DVR Tua chậm)</option>
-                  <option value="mode2">Chỉ Chế độ 2 (Bàn cược AI)</option>
-                </select>
-              </div>
+              
 
               <div className="flex items-center justify-end space-x-2.5 pt-1">
                 <button

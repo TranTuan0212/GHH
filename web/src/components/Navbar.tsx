@@ -8,8 +8,6 @@ interface NavbarProps {
   onLogout: () => void;
   activeTab: 'viewer' | 'admin';
   setActiveTab: (tab: 'viewer' | 'admin') => void;
-  appMode?: 'mode1' | 'mode2';
-  setAppMode?: (mode: 'mode1' | 'mode2') => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,8 +15,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLogout,
   activeTab,
   setActiveTab,
-  appMode = 'mode2',
-  setAppMode
 }) => {
   const [showChangePw, setShowChangePw] = useState(false);
   const [currentPw, setCurrentPw] = useState('');
