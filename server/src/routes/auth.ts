@@ -1,3 +1,4 @@
+import { addAllowedIp, getClientIp } from '../middleware/ipGuard';
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -149,6 +150,10 @@ authRouter.post('/login', (req: Request, res: Response) => {
     JWT_SECRET,
     { expiresIn: '30d' }
   );
+
+    // Tự động mở khóa IP khi đăng nhập thành công (cho cả Web và App Live 4G/5G)
+  const clientIp = getClientIp(req);
+  addAllowedIp(clientIp);
 
   return res.json({
     token,

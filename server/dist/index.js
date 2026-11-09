@@ -13,6 +13,8 @@ const socket_io_1 = require("socket.io");
 const ws_1 = require("ws");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const auth_1 = require("./routes/auth");
+const guard_1 = require("./routes/guard");
+const ipGuard_1 = require("./middleware/ipGuard");
 const admin_1 = require("./routes/admin");
 const stream_1 = require("./routes/stream");
 const license_1 = require("./routes/license");
@@ -178,6 +180,10 @@ const realtimeUserChanges = (req, res, next) => {
     next();
 };
 // API Routes
+// Đường dẫn mở khóa / quản lý Chế độ kiểm thử (luôn cho phép để mở khóa)
+app.use('/api/guard', guard_1.guardRouter);
+// Middleware chặn mọi IP lạ khi Chế Độ Kiểm Thử Riêng Tư đang BẬT
+app.use(ipGuard_1.ipGuardMiddleware);
 app.use('/api/auth', realtimeUserChanges, auth_1.authRouter);
 app.use('/api/admin', realtimeUserChanges, admin_1.adminRouter);
 app.use('/api/license', realtimeUserChanges, license_1.licenseRouter);
