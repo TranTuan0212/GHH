@@ -45,6 +45,12 @@ struct CameraPreviewView: UIViewRepresentable {
         if uiView.videoPreviewLayer.session !== session {
             uiView.videoPreviewLayer.session = session
         }
+        if let conn = uiView.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
+            let targetOri = CameraManager.current?.currentCaptureOrientation ?? .portrait
+            if conn.videoOrientation != targetOri {
+                conn.videoOrientation = targetOri
+            }
+        }
         context.coordinator.parent = self
     }
 
@@ -384,17 +390,19 @@ extension ContentView {
 
     private var placementTitle: String {
         switch cameraManager.flatPlacementMode {
-        case .auto: return "Đặt: Tự động"
-        case .faceUp: return "Máy: Ngửa"
-        case .faceDown: return "Máy: Úp"
+        case .auto: return "Tự Động"
+        case .landscape: return "Cam Ngang"
+        case .faceUp: return "Máy Ngửa"
+        case .portrait: return "Cam Dọc"
         }
     }
 
     private var placementIcon: String {
         switch cameraManager.flatPlacementMode {
-        case .auto: return "iphone"
+        case .auto: return "bolt.badge.automatic"
+        case .landscape: return "rotate.right.fill"
         case .faceUp: return "book.closed.fill"
-        case .faceDown: return "iphone.slash"
+        case .portrait: return "iphone"
         }
     }
 
