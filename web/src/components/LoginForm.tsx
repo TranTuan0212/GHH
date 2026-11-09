@@ -49,17 +49,17 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   return (
     <div className="min-h-screen flex items-center justify-center p-3 sm:p-4 py-6 relative overflow-y-auto bg-dark-400">
       {/* Background Animated Glowing Blobs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl animate-pulse-slow pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl animate-pulse-slow pointer-events-none" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-red-600/20 rounded-full blur-3xl animate-pulse-slow pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-rose-600/20 rounded-full blur-3xl animate-pulse-slow pointer-events-none" />
 
-      <div className="max-w-md w-full glass-panel p-5 sm:p-7 rounded-2xl sm:rounded-3xl border border-indigo-500/30 shadow-2xl relative z-10 space-y-4 sm:space-y-5 my-auto">
+      <div className="max-w-md w-full glass-panel p-5 sm:p-7 rounded-2xl sm:rounded-3xl border border-rose-500/30 shadow-2xl relative z-10 space-y-4 sm:space-y-5 my-auto">
         {/* Header Logo */}
         <div className="text-center space-y-1.5">
-          <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 mx-auto flex items-center justify-center text-white shadow-xl shadow-indigo-600/40 animate-glow">
+          <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-red-600 to-rose-600 mx-auto flex items-center justify-center text-white shadow-xl shadow-red-600/40 animate-glow">
             <Radio className="w-6 h-6 sm:w-8 sm:h-8" />
           </div>
-          <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">SloMo Live 240FPS</h2>
-          <p className="text-xs text-slate-400">Hệ thống Phát trực tiếp & Tự động Phân loại Dữ liệu theo Nhóm</p>
+          <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight flex items-center justify-center gap-2"><span className="text-red-500">ProStream</span> <span className="text-white">Redline</span></h2>
+          <p className="text-xs text-slate-400">Hệ Thống Phân Tích & Giám Sát Video Chiến Thuật Tốc Độ Cao</p>
         </div>
 
         {/* Error Alert */}
@@ -81,7 +81,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900/90 border border-white/10 text-white font-mono text-sm focus:border-indigo-500 outline-none"
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900/90 border border-white/10 text-white font-mono text-sm focus:border-red-500 outline-none"
                 placeholder="Nhập username"
               />
             </div>
@@ -96,7 +96,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900/90 border border-white/10 text-white font-mono text-sm focus:border-indigo-500 outline-none"
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900/90 border border-white/10 text-white font-mono text-sm focus:border-red-500 outline-none"
                 placeholder="******"
               />
             </div>
@@ -148,7 +148,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-sm shadow-xl shadow-indigo-600/30 transition-all active:scale-95"
+            className="w-full py-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-sm shadow-xl shadow-red-600/30 transition-all active:scale-95"
           >
             {loading ? 'Đang xác thực...' : 'Đăng Nhập'}
           </button>
@@ -159,7 +159,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           <button
             type="button"
             onClick={() => setShowIosModal(true)}
-            className="w-full py-2.5 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-indigo-300 hover:text-white border border-indigo-500/30 hover:border-indigo-400 font-bold text-xs flex items-center justify-center space-x-2 transition-all shadow-lg active:scale-95 cursor-pointer"
+            className="w-full py-2.5 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-indigo-300 hover:text-white border border-rose-500/30 hover:border-indigo-400 font-bold text-xs flex items-center justify-center space-x-2 transition-all shadow-lg active:scale-95 cursor-pointer"
           >
             <Smartphone className="w-4 h-4 text-indigo-400 animate-pulse" />
             <span>📲 Cài Đặt App iPhone (iOS có sẵn chứng chỉ)</span>

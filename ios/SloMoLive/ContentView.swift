@@ -114,16 +114,16 @@ struct ContentView: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         VStack(spacing: 8) {
-                            Image(systemName: "camera.metering.matrix")
+                            Image(systemName: "bolt.fill")
                                 .font(.system(size: 50))
-                                .foregroundColor(.indigo)
+                                .foregroundColor(.red)
 
-                            Text("LensMonitor Pro")
+                            Text("ProStream Redline")
                                 .font(.title)
                                 .fontWeight(.bold)
                                 .foregroundColor(.white)
 
-                            Text("Digital Optical & High Frame Rate Monitor")
+                            Text("High Frame Rate Tactical Live Engine")
                                 .font(.caption)
                                 .foregroundColor(.gray)
                         }
@@ -187,7 +187,7 @@ struct ContentView: View {
                                     .foregroundColor(.white)
                                     .frame(maxWidth: .infinity)
                                     .padding()
-                                    .background(Color.indigo)
+                                    .background(LinearGradient(colors: [Color.red, Color(red: 0.7, green: 0.05, blue: 0.15)], startPoint: .leading, endPoint: .trailing))
                                     .cornerRadius(16)
                             }
                         }
@@ -728,7 +728,7 @@ extension ContentView {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
             .padding(.horizontal, 12)
-            .background(active ? Color.red : Color.indigo)
+            .background(active ? Color(red: 0.8, green: 0.1, blue: 0.2) : LinearGradient(colors: [Color.red, Color(red: 0.65, green: 0.05, blue: 0.15)], startPoint: .leading, endPoint: .trailing))
             .cornerRadius(18)
             .shadow(radius: 8)
         }

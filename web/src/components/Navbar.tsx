@@ -86,12 +86,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="h-12 sm:h-13 flex items-center justify-between">
             {/* Brand Logo */}
             <div className="flex items-center space-x-2 sm:space-x-3">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white shadow shadow-indigo-600/40 flex-shrink-0">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-tr from-red-600 to-rose-500 flex items-center justify-center text-white shadow shadow-red-600/40 flex-shrink-0">
                 <Radio className="w-4 h-4 sm:w-4.5 sm:h-4.5 animate-pulse" />
               </div>
               <div>
                 <h1 className="font-bold text-xs sm:text-base text-white tracking-tight flex items-center gap-1.5">
-                  SloMo Live <span className="text-indigo-400 font-mono text-[9px] sm:text-[10px] px-1 py-0.2 rounded bg-indigo-500/20">120FPS PRO</span>
+                  ProStream <span className="text-red-400 font-mono text-[9px] sm:text-[10px] px-1.5 py-0.2 rounded bg-red-500/20 border border-red-500/30 font-bold">REDLINE</span>
                 </h1>
               </div>
 
@@ -103,7 +103,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     onClick={() => setActiveTab('viewer')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       activeTab === 'viewer'
-                        ? 'bg-indigo-600 text-white shadow-md'
+                        ? 'bg-red-600 text-white shadow-md'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
@@ -113,7 +113,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     onClick={() => setActiveTab('admin')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 transition-all ${
                       activeTab === 'admin'
-                        ? 'bg-indigo-600 text-white shadow-md'
+                        ? 'bg-red-600 text-white shadow-md'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
@@ -129,7 +129,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="hidden sm:flex flex-col items-end text-xs">
                 <div className="flex items-center space-x-1.5">
                   <span className="font-bold text-slate-200">{user.username}</span>
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-indigo-500/20 text-indigo-300 font-mono">
+                  <span className="px-2 py-0.5 rounded text-[10px] bg-red-500/20 text-red-300 font-mono">
                     {user.role}
                   </span>
                 </div>
@@ -142,10 +142,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               {/* Cài App iOS button */}
               <button
                 onClick={() => setShowIosModal(true)}
-                className="p-2 sm:px-3 sm:py-2 rounded-xl bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-300 text-slate-400 border border-white/10 transition-all active:scale-95 flex items-center space-x-1 text-xs"
+                className="p-2 sm:px-3 sm:py-2 rounded-xl bg-slate-800 hover:bg-red-600/20 hover:text-red-300 text-slate-400 border border-white/10 transition-all active:scale-95 flex items-center space-x-1 text-xs"
                 title="Cài đặt App iPhone (iOS có chứng chỉ)"
               >
-                <Smartphone className="w-4 h-4 text-indigo-400" />
+                <Smartphone className="w-4 h-4 text-red-400" />
                 <span className="hidden md:inline">Cài App iOS</span>
               </button>
 
@@ -176,7 +176,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onClick={() => setActiveTab('viewer')}
                 className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center space-x-1 transition-all ${
                   activeTab === 'viewer'
-                    ? 'bg-indigo-600 text-white shadow-md'
+                    ? 'bg-red-600 text-white shadow-md'
                     : 'bg-slate-900/60 text-slate-400 border border-white/5'
                 }`}
               >
@@ -187,7 +187,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onClick={() => setActiveTab('admin')}
                 className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center space-x-1 transition-all ${
                   activeTab === 'admin'
-                    ? 'bg-indigo-600 text-white shadow-md'
+                    ? 'bg-red-600 text-white shadow-md'
                     : 'bg-slate-900/60 text-slate-400 border border-white/5'
                 }`}
               >

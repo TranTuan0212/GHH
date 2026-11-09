@@ -333,7 +333,7 @@ export const App: React.FC = () => {
           <div className="space-y-2.5">
             {/* Room Indicator & Admin Room Switcher Bar */}
             {user.role === 'ADMIN' ? (
-              <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar bg-slate-900/90 p-1.5 rounded-xl border border-indigo-500/30">
+              <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar bg-slate-900/90 p-1.5 rounded-xl border border-red-500/30">
                 <span className="text-[11px] font-bold text-slate-400 px-1 whitespace-nowrap">
                   Chuyển Room:
                 </span>
@@ -341,7 +341,7 @@ export const App: React.FC = () => {
                   onClick={() => setCurrentRoomId(user.id)}
                   className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
                     currentRoomId === user.id
-                      ? 'bg-indigo-600 text-white shadow'
+                      ? 'bg-red-600 text-white shadow'
                       : 'bg-slate-800/80 text-slate-400 hover:text-white'
                   }`}
                 >
@@ -355,7 +355,7 @@ export const App: React.FC = () => {
                       onClick={() => setCurrentRoomId(u.id)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center space-x-1 ${
                         currentRoomId === u.id
-                          ? 'bg-indigo-600 text-white shadow'
+                          ? 'bg-red-600 text-white shadow'
                           : 'bg-slate-800/80 text-slate-400 hover:text-white'
                       }`}
                     >
@@ -364,14 +364,14 @@ export const App: React.FC = () => {
                   ))}
               </div>
             ) : (
-              <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-900/80 border border-indigo-500/30 text-xs">
+              <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-900/80 border border-red-500/30 text-xs">
                 <div className="flex items-center space-x-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                   <span className="text-slate-300">
                     Đang xem: <strong className="text-white font-mono">Room: {user.username}</strong>
                   </span>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-mono border border-indigo-500/30">
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-red-500/20 text-red-300 font-mono border border-red-500/30">
                   Quyền Xem (Viewer)
                 </span>
               </div>
