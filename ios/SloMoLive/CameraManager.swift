@@ -69,10 +69,9 @@ public class CameraManager: NSObject, ObservableObject {
 
     /// Hướng camera hiện tại (mặc định .portrait, tự động cập nhật bởi CoreMotion)
     public enum FlatPlacementMode: String, CaseIterable {
-        case auto = "Tự Động ⚡"
-        case landscape = "Cam Ngang 🔄"
-        case faceUp = "Máy Ngửa 📖"
-        case portrait = "Cam Dọc 📱"
+        case auto = "Tự Động 📱"
+        case faceUp = "Máy: NGỬA 📖"
+        case faceDown = "Máy: ÚP 📱"
     }
 
     @Published public var flatPlacementMode: FlatPlacementMode = .auto
@@ -80,15 +79,12 @@ public class CameraManager: NSObject, ObservableObject {
     public func cycleFlatPlacementMode() {
         switch flatPlacementMode {
         case .auto:
-            flatPlacementMode = .landscape
-        case .landscape:
             flatPlacementMode = .faceUp
         case .faceUp:
-            flatPlacementMode = .portrait
-        case .portrait:
+            flatPlacementMode = .faceDown
+        case .faceDown:
             flatPlacementMode = .auto
         }
-        UserDefaults.standard.set(flatPlacementMode.rawValue, forKey: "saved_placement_mode")
         applyOrientationForPlacementMode()
     }
 
@@ -98,12 +94,10 @@ public class CameraManager: NSObject, ObservableObject {
         switch flatPlacementMode {
         case .auto:
             return
-        case .landscape:
-            newOrientation = isFront ? .landscapeLeft : .landscapeRight
         case .faceUp:
+            newOrientation = isFront ? .landscapeLeft : .landscapeRight
+        case .faceDown:
             newOrientation = isFront ? .landscapeRight : .landscapeLeft
-        case .portrait:
-            newOrientation = .portrait
         }
 
         if newOrientation != currentCaptureOrientation {

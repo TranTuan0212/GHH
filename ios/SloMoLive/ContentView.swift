@@ -390,19 +390,17 @@ extension ContentView {
 
     private var placementTitle: String {
         switch cameraManager.flatPlacementMode {
-        case .auto: return "Tự Động"
-        case .landscape: return "Cam Ngang"
-        case .faceUp: return "Máy Ngửa"
-        case .portrait: return "Cam Dọc"
+        case .auto: return "Đặt: Tự động"
+        case .faceUp: return "Máy: Ngửa"
+        case .faceDown: return "Máy: Úp"
         }
     }
 
     private var placementIcon: String {
         switch cameraManager.flatPlacementMode {
-        case .auto: return "bolt.badge.automatic"
-        case .landscape: return "rotate.right.fill"
+        case .auto: return "iphone"
         case .faceUp: return "book.closed.fill"
-        case .portrait: return "iphone"
+        case .faceDown: return "iphone.slash"
         }
     }
 
