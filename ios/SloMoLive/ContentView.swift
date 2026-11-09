@@ -728,7 +728,7 @@ extension ContentView {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
             .padding(.horizontal, 12)
-            .background(active ? Color(red: 0.8, green: 0.1, blue: 0.2) : LinearGradient(colors: [Color.red, Color(red: 0.65, green: 0.05, blue: 0.15)], startPoint: .leading, endPoint: .trailing))
+            .background(active ? Color(red: 0.8, green: 0.1, blue: 0.2) : Color.red)
             .cornerRadius(18)
             .shadow(radius: 8)
         }
