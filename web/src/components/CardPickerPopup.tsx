@@ -33,8 +33,6 @@ interface CardPickerPopupProps {
   entries?: DataEntry[];
   gameMode?: GameMode;
   danGroups?: { [groupIndex: number]: boolean };
-  isRoundRobin?: boolean;
-  onResetToRoundRobin?: () => void;
   onSelectCard: (cardValue: string, targetGroup: number, editCardId?: string) => void;
   onDeleteCard?: (cardId: string) => void;
   onChangeTargetGroup?: (groupNum: number) => void;
@@ -73,16 +71,6 @@ const POKER_SUITS = [
     bg: 'bg-gradient-to-b from-red-950/70 to-slate-900',
     hoverBg: 'hover:bg-red-800 hover:text-white',
     activeBg: 'bg-red-600 text-white shadow-red-500/50'
-  },
-  {
-    key: 'diamonds',
-    symbol: '♦',
-    name: 'RÔ',
-    color: 'text-rose-400',
-    border: 'border-rose-500/50 hover:border-rose-300',
-    bg: 'bg-gradient-to-b from-rose-950/70 to-slate-900',
-    hoverBg: 'hover:bg-rose-800 hover:text-white',
-    activeBg: 'bg-rose-600 text-white shadow-rose-500/50'
   },
   {
     key: 'clubs',
@@ -150,8 +138,6 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   entries = [],
   gameMode = '2cards',
   danGroups = {},
-  isRoundRobin = true,
-  onResetToRoundRobin,
   onSelectCard,
   onDeleteCard,
   onChangeTargetGroup,
@@ -211,34 +197,21 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     return getDefaultPosition();
   });
 
-  const popupRef = useRef<HTMLDivElement>(null);
-
   const [popupWidth, setPopupWidth] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('card_picker_size');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (typeof parsed.w === 'number' && parsed.w >= 400 && parsed.w <= 2400) return parsed.w;
+        if (typeof parsed.w === 'number' && parsed.w >= 420 && parsed.w <= 950) return parsed.w;
       }
     } catch {}
     return getDefaultWidth();
   });
 
-  const [popupHeight, setPopupHeight] = useState<number | null>(() => {
-    try {
-      const saved = localStorage.getItem('card_picker_size');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed.h === 'number' && parsed.h >= 250 && parsed.h <= 2000) return parsed.h;
-      }
-    } catch {}
-    return null;
-  });
-
-  // Tự động mở rộng bề ngang khi chuyển sang Poker hoặc 3 Lá Xì để dàn 13 cột phím to rõ
+  // Tự động mở rộng bề ngang khi chuyển sang Poker để dàn 13 cột ngang phím to rõ
   useEffect(() => {
-    if ((gameMode === 'poker' || gameMode === '2cards') && popupWidth < 760 && windowWidth >= 800) {
-      setPopupWidth(Math.min(windowWidth - 20, 840));
+    if (gameMode === 'poker' && popupWidth < 760 && windowWidth >= 800) {
+      setPopupWidth(Math.min(windowWidth - 20, 820));
     }
   }, [gameMode, windowWidth]);
 
@@ -251,12 +224,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
   });
 
   const isResizingRef = useRef(false);
-  const resizeStartRef = useRef<{ mouseX: number; mouseY: number; startW: number; startH: number }>({
-    mouseX: 0,
-    mouseY: 0,
-    startW: 600,
-    startH: 450
-  });
+  const resizeStartRef = useRef<{ mouseX: number; startW: number }>({ mouseX: 0, startW: 600 });
 
   useEffect(() => {
     try {
@@ -266,15 +234,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
   useEffect(() => {
     try {
-      localStorage.setItem('card_picker_size', JSON.stringify({ w: popupWidth, h: popupHeight }));
+      localStorage.setItem('card_picker_size', JSON.stringify({ w: popupWidth }));
     } catch {}
-  }, [popupWidth, popupHeight]);
+  }, [popupWidth]);
 
   const handleResetPosition = () => {
     const def = getDefaultPosition();
     setPosition(def);
     setPopupWidth(getDefaultWidth());
-    setPopupHeight(null);
     try {
       localStorage.removeItem('card_picker_position');
       localStorage.removeItem('card_picker_size');
@@ -363,35 +330,18 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     onSelectCard('0', target.groupNum, target.cardId);
   };
 
-  // Kéo dãn kích thước popup (Cạnh đáy = chiều cao, Cạnh phải = chiều rộng, Góc = cả hai)
-  const handleResizeMouseDown = (direction: 'both' | 'height' | 'width' = 'both') => (e: React.MouseEvent) => {
+  // Kéo dãn kích thước popup
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     isResizingRef.current = true;
-    const currentH = popupRef.current ? popupRef.current.offsetHeight : (popupHeight || 450);
-    resizeStartRef.current = {
-      mouseX: e.clientX,
-      mouseY: e.clientY,
-      startW: popupWidth,
-      startH: currentH
-    };
+    resizeStartRef.current = { mouseX: e.clientX, startW: popupWidth };
 
     const onMouseMove = (mv: MouseEvent) => {
       if (!isResizingRef.current) return;
-      const deltaX = mv.clientX - resizeStartRef.current.mouseX;
-      const deltaY = mv.clientY - resizeStartRef.current.mouseY;
-
-      const maxW = Math.max(420, window.innerWidth - position.x - 10);
-      const maxH = Math.max(250, window.innerHeight - position.y - 10);
-
-      if (direction === 'both' || direction === 'width') {
-        const newW = Math.max(420, Math.min(maxW, resizeStartRef.current.startW + deltaX));
-        setPopupWidth(newW);
-      }
-      if (direction === 'both' || direction === 'height') {
-        const newH = Math.max(250, Math.min(maxH, resizeStartRef.current.startH + deltaY));
-        setPopupHeight(newH);
-      }
+      const delta = mv.clientX - resizeStartRef.current.mouseX;
+      const newW = Math.max(420, Math.min(window.innerWidth - 16, resizeStartRef.current.startW + delta));
+      setPopupWidth(newW);
     };
     const onMouseUp = () => {
       isResizingRef.current = false;
@@ -402,34 +352,17 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const handleResizeTouchStart = (direction: 'both' | 'height' | 'width' = 'both') => (e: React.TouchEvent) => {
+  const handleResizeTouchStart = (e: React.TouchEvent) => {
     if (!e.touches[0]) return;
     e.stopPropagation();
     isResizingRef.current = true;
-    const currentH = popupRef.current ? popupRef.current.offsetHeight : (popupHeight || 450);
-    resizeStartRef.current = {
-      mouseX: e.touches[0].clientX,
-      mouseY: e.touches[0].clientY,
-      startW: popupWidth,
-      startH: currentH
-    };
+    resizeStartRef.current = { mouseX: e.touches[0].clientX, startW: popupWidth };
 
     const onTouchMove = (tv: TouchEvent) => {
       if (!isResizingRef.current || !tv.touches[0]) return;
-      const deltaX = tv.touches[0].clientX - resizeStartRef.current.mouseX;
-      const deltaY = tv.touches[0].clientY - resizeStartRef.current.mouseY;
-
-      const maxW = Math.max(420, window.innerWidth - position.x - 10);
-      const maxH = Math.max(250, window.innerHeight - position.y - 10);
-
-      if (direction === 'both' || direction === 'width') {
-        const newW = Math.max(420, Math.min(maxW, resizeStartRef.current.startW + deltaX));
-        setPopupWidth(newW);
-      }
-      if (direction === 'both' || direction === 'height') {
-        const newH = Math.max(250, Math.min(maxH, resizeStartRef.current.startH + deltaY));
-        setPopupHeight(newH);
-      }
+      const delta = tv.touches[0].clientX - resizeStartRef.current.mouseX;
+      const newW = Math.max(420, Math.min(window.innerWidth - 16, resizeStartRef.current.startW + delta));
+      setPopupWidth(newW);
     };
     const onTouchEnd = () => {
       isResizingRef.current = false;
@@ -472,18 +405,16 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
   const popupContent = (
     <div
-      ref={popupRef}
       style={{
         position: 'fixed',
         left: `${position.x}px`,
         top: `${position.y}px`,
         zIndex: 999999,
         width: `${popupWidth}px`,
-        height: popupHeight ? `${popupHeight}px` : undefined,
         maxWidth: `calc(100vw - ${Math.max(8, position.x + 8)}px)`,
         maxHeight: `calc(100vh - ${Math.max(8, position.y + 8)}px)`
       }}
-      className="relative bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
+      className="bg-slate-900/98 backdrop-blur-xl border-2 border-amber-400/70 rounded-2xl shadow-2xl shadow-black/90 overflow-hidden flex flex-col select-none animate-scaleIn ring-2 ring-indigo-500/50"
     >
       {/* 1. Header Bar: Kéo thả vị trí */}
       <div
@@ -500,8 +431,6 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 ? 'Sửa Lá Bài'
                 : gameMode === 'poker'
                 ? 'Bảng Poker (4 Chất ♥ ♦ ♣ ♠)'
-                : gameMode === '2cards'
-                ? 'Bảng 3 Lá Xì (4 Chất ♥ ♦ ♣ ♠)'
                 : 'Bảng Số (1 ➔ 13 | 0: Không thấy)'}
             </span>
             <span className="text-slate-400 text-xs">•</span>
@@ -547,7 +476,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
       {/* 2. Body: Toàn bộ dàn hàng ngang, tuyệt đối không cuộn */}
       {!isMinimized && (
-        <div className="p-2 sm:p-2.5 space-y-1.5 flex flex-col flex-1 overflow-y-auto no-scrollbar">
+        <div className="p-2 sm:p-2.5 space-y-1.5 flex flex-col overflow-y-auto no-scrollbar">
           {/* Thanh chuyển chế độ & số tụ */}
           <div className="flex flex-wrap items-center justify-between gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-white/10 shadow-inner">
             <div className="flex items-center space-x-1">
@@ -566,14 +495,13 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               <button
                 type="button"
                 onClick={() => onChangeGameMode && onChangeGameMode('2cards')}
-                className={`px-2 py-0.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center space-x-1 ${
+                className={`px-2 py-0.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
                   gameMode === '2cards'
                     ? 'bg-amber-500 text-slate-950 shadow-sm border border-amber-300 font-black'
                     : 'bg-slate-800/90 text-slate-400 hover:text-white'
                 }`}
               >
-                <span>🃏</span>
-                <span>3 Lá Xì (4 Chất)</span>
+                2 Lá
               </button>
               <button
                 type="button"
@@ -741,7 +669,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                           </span>
                         )}
                       </div>
-                      {gameMode !== '2cards' && ans.rankBadgeText ? (
+                      {ans.rankBadgeText ? (
                         <span className={`px-1 py-0.2 rounded font-black text-[8px] flex items-center gap-0.5 shadow-sm whitespace-nowrap ${ans.rankBadgeClass}`}>
                           {ans.rankBadgeText}
                         </span>
@@ -782,19 +710,17 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                       )}
                     </div>
 
-                    {/* Badge Điểm số sau cùng (Ẩn ở chế độ 3 Lá Xì) */}
-                    {gameMode !== '2cards' && (
-                      <div className={`mt-0.5 py-0.2 px-1 rounded text-[9px] font-mono font-bold text-center truncate border ${ans.highlightClass}`}>
-                        {ans.label}
-                      </div>
-                    )}
+                    {/* Badge Điểm số sau cùng */}
+                    <div className={`mt-0.5 py-0.2 px-1 rounded text-[9px] font-mono font-bold text-center truncate border ${ans.highlightClass}`}>
+                      {ans.label}
+                    </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Dòng kết quả xếp hạng duy nhất (Ẩn ở 3 Lá Xì) */}
-            {gameMode !== '2cards' && completeGroupsCount > 1 && leaderboardText && (
+            {/* Dòng kết quả xếp hạng duy nhất */}
+            {completeGroupsCount > 1 && leaderboardText && (
               <div className="mt-0.5 px-2 py-0.5 rounded-lg bg-indigo-950/70 border border-indigo-500/30 text-[10px] font-mono text-indigo-200 flex items-center space-x-2 overflow-x-auto no-scrollbar shadow-inner">
                 <span className="font-black text-amber-300 whitespace-nowrap">👑 BXH:</span>
                 <span className="whitespace-nowrap font-bold text-white">{leaderboardText}</span>
@@ -808,24 +734,6 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               Gán vào:
             </span>
             <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar flex-1 justify-end">
-              {/* Nút Chế độ Tự Động Chia Vòng theo chuẩn App */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (onResetToRoundRobin) {
-                    onResetToRoundRobin();
-                  }
-                }}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-black transition-all whitespace-nowrap cursor-pointer flex items-center space-x-1 ${
-                  isRoundRobin
-                    ? 'bg-emerald-600 text-white shadow-sm border border-emerald-400 ring-1 ring-emerald-400'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-white/10'
-                }`}
-                title="Bấm để quay về chế độ Tự Động Chia Vòng lần lượt như trên App"
-              >
-                <span>🔄 Chia Vòng</span>
-              </button>
-
               {/* Nút Bài Chung nếu ở Poker */}
               {gameMode === 'poker' && (
                 <button
@@ -886,28 +794,9 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                 </button>
               </div>
             ) : (
-              <div className={`flex items-center justify-between px-2 py-0.5 text-[11px] rounded-lg border ${
-                target.groupNum === 0
-                  ? 'bg-amber-950/60 text-amber-300 border-amber-500/60 shadow-sm'
-                  : 'text-slate-400 bg-slate-950/40 border-white/5'
-              }`}>
-                <div className="flex items-center space-x-1 truncate">
-                  <span>Đang nhập: </span>
-                  <strong className={target.groupNum === 0 ? 'text-amber-300 font-black' : 'text-white'}>
-                    {target.groupNum === 0
-                      ? `👑 BÀI CHUNG (Lá ${communityEntries.length + 1}/5)`
-                      : `${currentTargetName} (Lá ${(entries.filter(e => Number(e.groupIndex) === target.groupNum)).length + 1}/${gameMode === 'poker' ? 2 : (gameMode === '3cards' ? 3 : 2)})`}
-                  </strong>
-                </div>
-                <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
-                  {isRoundRobin && (
-                    <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-bold text-[9px] border border-emerald-500/40 flex items-center space-x-0.5">
-                      <span>🔄</span>
-                      <span>Chia Vòng</span>
-                    </span>
-                  )}
-                  <span className="text-amber-400/90 font-medium text-[10px]">1 Click = Gán</span>
-                </div>
+              <div className="flex items-center justify-between px-2 py-0.5 text-[11px] text-slate-400 bg-slate-950/40 rounded-lg border border-white/5">
+                <span>Đang nhập: <strong className="text-white">{currentTargetName}</strong></span>
+                <span className="text-amber-400/90 font-medium text-[10px]">1 Click = Gán Ngay</span>
               </div>
             )}
 
@@ -939,32 +828,24 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
 
           {/* =========================================================================
               BÀN PHÍM POKER HÀNG NGANG: 4 CHẤT X 13 PHÍM A ➔ K TRẢI RỘNG KHÔNG CUỘN
-              (TỰ ĐỘNG CO DÃN CHIỀU CAO & BỀ RỘNG LINH HOẠT KHI KÉO BẢNG)
               ========================================================================= */}
-          {gameMode === 'poker' || gameMode === '2cards' ? (
-            <div className="bg-slate-950/95 p-1 rounded-xl border border-red-500/40 shadow-inner flex-1 flex flex-col justify-between gap-1 min-h-[140px]">
+          {gameMode === 'poker' ? (
+            <div className="bg-slate-950/95 p-1 rounded-xl border border-red-500/40 shadow-inner space-y-0.5">
               {POKER_SUITS.map((suit) => (
                 <div
                   key={suit.key}
-                  className="flex items-center gap-1 bg-slate-900/70 px-1 py-0.5 rounded-lg border border-white/5 flex-1 min-h-[28px]"
+                  className="flex items-center gap-1 bg-slate-900/70 px-1 py-0.5 rounded-lg border border-white/5"
                 >
                   {/* Nhãn chất bên trái */}
                   <span
-                    className={`w-12 sm:w-14 text-[10px] sm:text-xs font-black ${suit.color} flex items-center gap-0.5 flex-shrink-0 select-none pl-0.5`}
+                    className={`w-12 sm:w-14 text-[10px] font-black ${suit.color} flex items-center gap-0.5 flex-shrink-0 select-none pl-0.5`}
                   >
-                    <span className="text-xs sm:text-sm">{suit.symbol}</span>
+                    <span className="text-xs">{suit.symbol}</span>
                     <span>{suit.name}</span>
                   </span>
 
-                  {/* 13 Phím số A ➔ K trải ngang tự động dãn cả ngang lẫn cao */}
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(13, minmax(0, 1fr))',
-                      gap: '2px'
-                    }}
-                    className="flex-1 h-full items-stretch"
-                  >
+                  {/* 13 Phím số A ➔ K trải ngang */}
+                  <div className="grid grid-cols-13 gap-0.5 flex-1">
                     {POKER_RANKS.map((r) => {
                       const cardVal = `${r.num}${suit.symbol}`;
                       const isCurrent = target.mode === 'edit' && target.currentValue === cardVal;
@@ -973,14 +854,14 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                           key={cardVal}
                           type="button"
                           onClick={() => handleCardClick(cardVal)}
-                          className={`h-full min-h-[28px] rounded-md flex items-center justify-center font-black transition-all active:scale-95 border cursor-pointer ${
+                          className={`h-7 sm:h-7.5 rounded-md flex items-center justify-center font-black transition-all active:scale-95 border cursor-pointer ${
                             isCurrent
                               ? 'ring-2 ring-amber-400 border-amber-400 scale-105 z-10 bg-amber-500 text-slate-950 font-black'
                               : `${suit.bg} ${suit.border} ${suit.color} ${suit.hoverBg}`
                           }`}
                           title={`Chọn ${cardVal}`}
                         >
-                          <span className="text-xs sm:text-[13px] md:text-sm leading-none font-bold">
+                          <span className="text-xs sm:text-[13px] leading-none font-bold">
                             {r.num}
                           </span>
                         </button>
@@ -991,56 +872,17 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
               ))}
             </div>
           ) : (
-            /* CHẾ ĐỘ 3 LÁ & 2 LÁ (TỰ CO DÃN CHIỀU CAO KHI KÉO) */
-            <div className="flex-1 flex flex-col justify-between space-y-1 min-h-[140px]">
-              {/* DÃY CHẤT RÔ ♦ */}
-              <div className="bg-slate-950/90 p-1 rounded-xl border border-rose-500/40 shadow-inner space-y-0.5 flex-1 flex flex-col justify-between">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[10px] font-black text-rose-400 flex items-center space-x-1">
-                    <span className="text-xs">♦</span>
-                    <span>DÃY CHẤT RÔ (ĐỎ) • CÙNG ĐIỂM LUÔN LỚN HƠN</span>
-                  </span>
-                  <span className="text-[9px] text-rose-300 font-mono font-bold bg-rose-950/80 px-1 py-0.2 rounded border border-rose-500/30">1♦ ➔ 13♦</span>
-                </div>
-                <div className="grid grid-cols-7 gap-1 flex-1">
-                  {RO_CARDS.map((card) => {
-                    const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
-                    return (
-                      <button
-                        key={card.rank}
-                        type="button"
-                        onClick={() => handleCardClick(card.rank)}
-                        className={`h-full min-h-[28px] rounded-lg flex items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
-                          card.bg
-                        } ${card.border} ${
-                          isCurrent
-                            ? 'ring-2 ring-rose-400 border-rose-400 scale-105 z-10 shadow-rose-500/40'
-                            : 'hover:scale-105 hover:border-rose-400'
-                        }`}
-                      >
-                        <span className={`text-xs sm:text-sm leading-none font-black ${card.color} flex items-center gap-0.5`}>
-                          <span>{card.num}</span>
-                          <span className="text-[10px] text-rose-500">♦</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                  <div className="h-full min-h-[28px] rounded-lg border border-rose-500/30 bg-rose-950/40 flex flex-col items-center justify-center text-center p-0.5 select-none">
-                    <span className="text-[9px] font-black text-rose-300 leading-tight">Ưu Tiên</span>
-                    <span className="text-[8px] text-rose-400 font-bold leading-tight">Chất Rô ♦</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* DÃY SỐ THƯỜNG */}
-              <div className="bg-slate-950/80 p-1 rounded-xl border border-white/10 shadow-inner space-y-0.5 flex-1 flex flex-col justify-between">
+            /* CHẾ ĐỘ 3 LÁ & 2 LÁ */
+            <div className="space-y-1">
+{/* DÃY SỐ THƯỜNG */}
+              <div className="bg-slate-950/80 p-1 rounded-xl border border-white/10 shadow-inner space-y-0.5">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[10px] font-bold text-slate-300">
                     DÃY SỐ THƯỜNG (1 ➔ 13)
                   </span>
                   <span className="text-[9px] text-slate-400 font-mono">1 ➔ 13</span>
                 </div>
-                <div className="grid grid-cols-7 gap-1 flex-1">
+                <div className="grid grid-cols-7 gap-1">
                   {CARDS.map((card) => {
                     const isCurrent = target.mode === 'edit' && target.currentValue === card.rank;
                     return (
@@ -1048,7 +890,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                         key={card.rank}
                         type="button"
                         onClick={() => handleCardClick(card.rank)}
-                        className={`h-full min-h-[28px] rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
+                        className={`h-7 sm:h-8 rounded-lg flex flex-col items-center justify-center font-black transition-all active:scale-95 border shadow-sm cursor-pointer ${
                           card.bg
                         } ${card.border} ${
                           isCurrent
@@ -1056,7 +898,7 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
                             : 'hover:scale-105 hover:border-amber-400/60'
                         }`}
                       >
-                        <span className={`text-xs sm:text-sm leading-none font-black ${card.color}`}>
+                        <span className={`text-xs leading-none font-black ${card.color}`}>
                           {card.rank}
                         </span>
                         {card.sublabel && (
@@ -1072,51 +914,26 @@ export const CardPickerPopup: React.FC<CardPickerPopupProps> = ({
             </div>
           )}
 
-          {/* Footer */}
-          <div className="relative flex items-center justify-between text-[9px] text-slate-500 px-2 pt-0.5 pb-1.5 border-t border-white/5">
-            <span>Kéo viền đáy/phải để đổi kích thước · Kéo header để di chuyển</span>
+          {/* Footer + Resize Handle */}
+          <div className="relative flex items-center justify-between text-[9px] text-slate-500 px-1 pt-0.5 pb-1 border-t border-white/5">
+            <span>Kéo header để di chuyển · Kéo góc ↘ đổi kích thước</span>
             <span className="text-amber-400/90 font-medium">Bố Cục Hàng Ngang Không Cuộn</span>
+            <div
+              onMouseDown={handleResizeMouseDown}
+              onTouchStart={handleResizeTouchStart}
+              className="absolute bottom-0.5 right-0.5 w-4 h-4 flex items-center justify-center cursor-se-resize text-slate-500 hover:text-amber-400 transition-colors"
+              title="Kéo đổi kích thước"
+            >
+              <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor">
+                <path d="M10 0L10 10L0 10Z" opacity="0.5" />
+                <circle cx="8.5" cy="8.5" r="1.2" />
+                <circle cx="5.5" cy="8.5" r="1.2" />
+                <circle cx="8.5" cy="5.5" r="1.2" />
+              </svg>
+            </div>
           </div>
         </div>
       )}
-
-      {/* =========================================================================
-          CÁC VIỀN KÉO THẢ KÍCH THƯỚC CHUẨN WINDOWS (BORDER RESIZERS)
-          ========================================================================= */}
-      {/* 1. Viền kéo cạnh đáy: Rộng suốt mép dưới, cao 10px, con trỏ ↕ cursor-ns-resize */}
-      <div
-        onMouseDown={handleResizeMouseDown('height')}
-        onTouchStart={handleResizeTouchStart('height')}
-        className="absolute bottom-0 left-0 right-5 h-2.5 cursor-ns-resize z-50 group flex items-end justify-center pb-0.5 hover:bg-amber-400/20 transition-colors"
-        title="Kéo viền này để tăng/giảm chiều cao bảng"
-      >
-        <div className="w-16 h-1 rounded-full bg-amber-400/40 group-hover:bg-amber-400 group-hover:h-1.5 transition-all shadow-sm" />
-      </div>
-
-      {/* 2. Viền kéo cạnh phải: Cao suốt mép phải, rộng 10px, con trỏ ↔ cursor-ew-resize */}
-      <div
-        onMouseDown={handleResizeMouseDown('width')}
-        onTouchStart={handleResizeTouchStart('width')}
-        className="absolute top-8 right-0 bottom-5 w-2.5 cursor-ew-resize z-50 group flex items-center justify-end pr-0.5 hover:bg-amber-400/20 transition-colors"
-        title="Kéo viền này để tăng/giảm chiều rộng bảng"
-      >
-        <div className="h-16 w-1 rounded-full bg-amber-400/40 group-hover:bg-amber-400 group-hover:w-1.5 transition-all shadow-sm" />
-      </div>
-
-      {/* 3. Góc kéo dưới phải: Kéo cả 2 chiều, con trỏ ↘ cursor-se-resize */}
-      <div
-        onMouseDown={handleResizeMouseDown('both')}
-        onTouchStart={handleResizeTouchStart('both')}
-        className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize z-50 flex items-center justify-center text-amber-400/70 hover:text-amber-300 hover:scale-125 transition-all p-0.5 hover:bg-amber-400/30 rounded-br-2xl"
-        title="Kéo góc này để kéo dãn cả chiều ngang và chiều cao"
-      >
-        <svg width="12" height="12" viewBox="0 0 10 10" fill="currentColor">
-          <path d="M10 0L10 10L0 10Z" opacity="0.8" />
-          <circle cx="8.5" cy="8.5" r="1.2" />
-          <circle cx="5" cy="8.5" r="1.0" />
-          <circle cx="8.5" cy="5" r="1.0" />
-        </svg>
-      </div>
     </div>
   );
 

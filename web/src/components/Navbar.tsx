@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from '../types';
-import { Radio, Shield, LogOut, Calendar, Eye, Key, X, Smartphone } from 'lucide-react';
+import { Radio, Shield, LogOut, Calendar, Eye, Key, X, Smartphone, Wifi } from 'lucide-react';
 import { IosInstallModal } from './IosInstallModal';
 
 interface NavbarProps {
@@ -8,9 +8,18 @@ interface NavbarProps {
   onLogout: () => void;
   activeTab: 'viewer' | 'admin';
   setActiveTab: (tab: 'viewer' | 'admin') => void;
+  appMode?: 'mode1' | 'mode2';
+  setAppMode?: (mode: 'mode1' | 'mode2') => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setActiveTab }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  user,
+  onLogout,
+  activeTab,
+  setActiveTab,
+  appMode = 'mode2',
+  setAppMode
+}) => {
   const [showChangePw, setShowChangePw] = useState(false);
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -18,6 +27,28 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
   const [pwMsg, setPwMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [pwLoading, setPwLoading] = useState(false);
   const [showIosModal, setShowIosModal] = useState(false);
+  const [serverLanIp, setServerLanIp] = useState<string>('');
+  const [copiedIp, setCopiedIp] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch('/api/server-info')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.primaryIp) setServerLanIp(d.primaryIp);
+      })
+      .catch(() => {
+        setServerLanIp(window.location.hostname);
+      });
+  }, []);
+
+  const handleCopyIp = () => {
+    const ip = serverLanIp || window.location.hostname;
+    const isDomain = window.location.hostname.includes('slomoview.stream');
+    navigator.clipboard.writeText(isDomain ? 'https://slomoview.stream' : `http://${ip}:4000`);
+    setCopiedIp(true);
+    setTimeout(() => setCopiedIp(false), 2000);
+  };
+
 
   const openChangePw = () => {
     setCurrentPw(''); setNewPw(''); setConfirmPw(''); setPwMsg(null);
@@ -60,9 +91,10 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
               </div>
               <div>
                 <h1 className="font-bold text-xs sm:text-base text-white tracking-tight flex items-center gap-1.5">
-                  SloMo Live <span className="text-indigo-400 font-mono text-[9px] sm:text-[10px] px-1 py-0.2 rounded bg-indigo-500/20">240FPS</span>
+                  SloMo Live <span className="text-indigo-400 font-mono text-[9px] sm:text-[10px] px-1 py-0.2 rounded bg-indigo-500/20">120FPS PRO</span>
                 </h1>
               </div>
+
 
               {/* Role Navigation Tabs - Desktop */}
               {user.role === 'ADMIN' && (
@@ -106,8 +138,6 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout, activeTab, setAc
                   Hạn: {new Date(user.expiresAt).toLocaleDateString('vi-VN')}
                 </span>
               </div>
-
-                            
 
               {/* Cài App iOS button */}
               <button

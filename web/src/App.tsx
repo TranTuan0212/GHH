@@ -4,7 +4,6 @@ import { User, StreamSession, GpsLog, CardEntry } from './types';
 import { Navbar } from './components/Navbar';
 import { LoginForm } from './components/LoginForm';
 import { LivePlayer } from './components/LivePlayer';
-import { DataGroupingUI } from './components/DataGroupingUI';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AlertTriangle, Clock, RefreshCw } from 'lucide-react';
 
@@ -15,8 +14,6 @@ export const App: React.FC = () => {
 
   const [activeStream, setActiveStream] = useState<StreamSession | null>(null);
   const [currentGps, setCurrentGps] = useState<GpsLog | null>(null);
-  const [cardEntries, setCardEntries] = useState<CardEntry[]>([]);
-  const [groupNames, setGroupNames] = useState<{ [groupIndex: number]: string }>({});
   const [allUsers, setAllUsers] = useState<User[]>([]);
 
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -26,13 +23,29 @@ export const App: React.FC = () => {
   const [finishRoundTrigger, setFinishRoundTrigger] = useState<number>(0);
   const [viewerBlocked, setViewerBlocked] = useState<boolean>(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState<boolean>(false);
+  const [appMode, setAppMode] = useState<'mode1' | 'mode2'>('mode1');
 
-  // Set initial currentRoomId when user logs in
+  const handleSetAppMode = (mode: 'mode1' | 'mode2') => {
+    setAppMode(mode);
+    localStorage.setItem('app_mode', mode);
+    if (socket) {
+      socket.emit('set_active_app_mode', { roomId: currentRoomId || user?.id, appMode: mode });
+    }
+  };
+
+  // Set initial currentRoomId & sync allowedMode when user logs in
   useEffect(() => {
     if (user) {
       setCurrentRoomId(user.id);
+      if (user.role !== 'ADMIN' && user.allowedMode) {
+        if (user.allowedMode === 'mode1' && appMode !== 'mode1') {
+          handleSetAppMode('mode1');
+        } else if (user.allowedMode === 'mode2' && appMode !== 'mode2') {
+          handleSetAppMode('mode2');
+        }
+      }
     }
-  }, [user]);
+  }, [user, user?.allowedMode]);
 
   // Initialize Socket.io and Room Joining
   useEffect(() => {
@@ -58,17 +71,6 @@ export const App: React.FC = () => {
     newSocket.on('initial_state', (data) => {
       setActiveStream(data.activeStream);
       setCurrentGps(data.latestGps);
-      setCardEntries(data.cardEntries || []);
-      if (data.groupNames) {
-        setGroupNames(data.groupNames);
-      }
-    });
-
-    newSocket.on('group_names_updated', (data) => {
-      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
-      if (data && data.groupNames) {
-        setGroupNames(data.groupNames);
-      }
     });
 
     newSocket.on('gps_updated', (gpsLog: any) => {
@@ -76,23 +78,8 @@ export const App: React.FC = () => {
       setCurrentGps(gpsLog);
     });
 
-    newSocket.on('card_added', (data) => {
-      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
-      if (data.allEntries) {
-        setCardEntries(data.allEntries);
-      } else if (data.entry) {
-        setCardEntries((prev) => [...prev, data.entry]);
-      }
-    });
-
-    newSocket.on('cards_cleared', (data: any) => {
-      if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
-      setCardEntries([]);
-    });
-
     newSocket.on('round_finished', (data) => {
       if (data?.roomId && currentRoomIdRef.current && data.roomId !== currentRoomIdRef.current) return;
-      setCardEntries([]);
       setFinishRoundTrigger((prev) => prev + 1);
       const targetRoom = data?.roomId || currentRoomIdRef.current;
       // Tự động kiểm tra luồng live hiện tại thay vì ép về null
@@ -131,6 +118,19 @@ export const App: React.FC = () => {
       if (token) fetchAdminUsers(token);
     });
 
+    newSocket.on('user_mode_changed', (data: any) => {
+      if (!data) return;
+      setUser((prev) => (prev && prev.id === data.userId ? { ...prev, allowedMode: data.allowedMode } : prev));
+      if (data.userId === currentRoomIdRef.current && (data.effectiveMode === 'mode1' || data.effectiveMode === 'mode2')) {
+        setAppMode(data.effectiveMode);
+        localStorage.setItem('app_mode', data.effectiveMode);
+      }
+    });
+
+    if (false) newSocket.on('_noop', () => {
+      if (token) fetchAdminUsers(token);
+    });
+
     // Tài khoản bị xóa/khóa/reset mật khẩu -> đăng xuất ngay
     newSocket.on('account_revoked', () => {
       handleLogout();
@@ -145,11 +145,43 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (socket && currentRoomId) {
       setViewerBlocked(false); // Reset khi đổi phòng
+      socket.emit('set_active_app_mode', { roomId: currentRoomId, appMode });
       socket.emit('join_room', {
         roomId: currentRoomId
       });
     }
   }, [socket, currentRoomId]);
+
+  // Tự động kiểm tra luồng Live mới mỗi 2.5s (tránh trường hợp socket bị rơi sự kiện hoặc phải reload trang)
+  useEffect(() => {
+    if (!token || !currentRoomId) return;
+    let isCancelled = false;
+
+    const checkActiveStream = () => {
+      fetch('/api/stream/active?roomId=' + encodeURIComponent(currentRoomId), {
+        headers: { Authorization: 'Bearer ' + token }
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (isCancelled) return;
+          if (data?.stream?.status === 'LIVE') {
+            setActiveStream((prev) => {
+              if (prev?.streamKey !== data.stream.streamKey || prev?.status !== 'LIVE') {
+                return data.stream;
+              }
+              return prev;
+            });
+          }
+        })
+        .catch(() => {});
+    };
+
+    const interval = setInterval(checkActiveStream, 2500);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [token, currentRoomId]);
 
   // Fetch Current Auth User on Token change
   useEffect(() => {
@@ -203,65 +235,12 @@ export const App: React.FC = () => {
     setUser(null);
   };
 
-  // Add card callback (supports round-robin or direct target group for Bọt)
-  const handleAddCard = (cardValue: string, groupCount: number, targetGroup?: number) => {
-    if (socket) {
-      socket.emit('add_card', {
-        cardValue,
-        groupCount,
-        targetGroup,
-        userId: user?.id || 'viewer',
-        roomId: currentRoomId
-      });
-    }
-  };
-
-  // Edit card callback (sửa giá trị bài khi nhập sai)
-  const handleEditCard = (cardId: string, newCardValue: string) => {
-    if (socket) {
-      socket.emit('edit_card', {
-        id: cardId,
-        newCardValue,
-        roomId: currentRoomId
-      });
-    }
-  };
-
-  // Delete card callback (xóa lá bài khi nhập sai)
-  const handleDeleteCard = (cardId: string) => {
-    if (socket) {
-      socket.emit('delete_card', {
-        id: cardId,
-        roomId: currentRoomId
-      });
-    }
-  };
-
-  // Set custom group names callback
-  const handleSetGroupNames = (names: { [groupIndex: number]: string }) => {
-    setGroupNames(names);
-    if (socket) {
-      socket.emit('set_group_names', {
-        roomId: currentRoomId,
-        groupNames: names
-      });
-    }
-  };
-
-  // Clear cards callback
-  const handleClearCards = () => {
-    if (socket) {
-      socket.emit('clear_cards', { roomId: currentRoomId });
-    }
-  };
-
   // Finish round callback (resets cards & DVR frame buffer for this room)
   const handleFinishRound = () => {
     const targetRoom = currentRoomIdRef.current || currentRoomId;
     if (socket) {
       socket.emit('finish_round', { roomId: targetRoom });
     }
-    setCardEntries([]);
     setFinishRoundTrigger((prev) => prev + 1);
     // Kiểm tra ngay luồng Live từ server
     fetch(`/api/stream/active?roomId=${encodeURIComponent(targetRoom)}`)
@@ -274,13 +253,6 @@ export const App: React.FC = () => {
         }
       })
       .catch(() => {});
-  };
-
-  // Undo last card callback
-  const handleUndoCard = () => {
-    if (socket) {
-      socket.emit('undo_card', { roomId: currentRoomId });
-    }
   };
 
   if (!token || !user) {
@@ -343,6 +315,8 @@ export const App: React.FC = () => {
         onLogout={handleLogout}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        appMode={appMode}
+        setAppMode={handleSetAppMode}
       />
 
       <main className="flex-1 max-w-[1700px] w-full mx-auto p-2 sm:p-3.5 space-y-2.5">
@@ -403,37 +377,17 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3.5 items-start">
-              {/* Left Column: Custom Live Slow-Mo 240fps Player */}
-              <div className={`${isVideoFullscreen ? 'col-span-12' : 'lg:col-span-7'} space-y-2.5`}>
-                <LivePlayer
-                  stream={activeStream}
-                  socket={socket}
-                  roomId={currentRoomId}
-                  roomName={activeRoomName}
-                  onFinishRound={handleFinishRound}
-                  finishRoundTrigger={finishRoundTrigger}
-                  onFullscreenChange={setIsVideoFullscreen}
-                />
-              </div>
-
-              {/* Right Column: Auto Round-Robin Data Grouping System (Ẩn hoàn toàn khi Fullscreen) */}
-              <div className={`lg:col-span-5 space-y-2.5 ${isVideoFullscreen ? 'hidden pointer-events-none' : ''}`}>
-                <DataGroupingUI
-                  entries={cardEntries}
-                  roomId={currentRoomId}
-                  roomName={activeRoomName}
-                  groupNames={groupNames}
-                  isVideoFullscreen={isVideoFullscreen}
-                  onAddCard={handleAddCard}
-                  onClearCards={handleClearCards}
-                  onUndoCard={handleUndoCard}
-                  onFinishRound={handleFinishRound}
-                  onEditCard={handleEditCard}
-                  onDeleteCard={handleDeleteCard}
-                  onSetGroupNames={handleSetGroupNames}
-                />
-              </div>
+            {/* Trình phát Video Full HD 120fps Chuyên nghiệp */}
+            <div className="w-full space-y-2.5">
+              <LivePlayer
+                stream={activeStream}
+                socket={socket}
+                roomId={currentRoomId}
+                roomName={activeRoomName}
+                onFinishRound={handleFinishRound}
+                finishRoundTrigger={finishRoundTrigger}
+                onFullscreenChange={setIsVideoFullscreen}
+              />
             </div>
           </div>
         )}

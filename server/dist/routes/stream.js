@@ -56,7 +56,7 @@ exports.streamRouter.post('/start', auth_1.authMiddleware, (req, res) => {
     res.json({
         message: 'Khởi tạo luồng Live Stream 240fps thành công.',
         stream: newStream,
-        rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+        rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live/`,
         streamKey
     });
 });

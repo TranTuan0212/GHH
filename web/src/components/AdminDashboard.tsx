@@ -57,14 +57,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [newDays, setNewDays] = useState(30);
   const [newRole, setNewRole] = useState<'USER' | 'ADMIN'>('USER');
+  const [newAllowedMode, setNewAllowedMode] = useState<'mode1' | 'mode2' | 'all'>('all');
 
   const [renewDays, setRenewDays] = useState<{ [userId: string]: number }>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [userSearchTerm, setUserSearchTerm] = useState('');
-  const [showManualVoiceForm, setShowManualVoiceForm] = useState(false);
-  const [voiceSearchTerm, setVoiceSearchTerm] = useState('');
-
+    
   // Quản lý file IPA & Chứng chỉ
   interface AppFile {
     name: string;
@@ -235,7 +234,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           username: newUsername,
           password: newPassword,
           daysValid: newDays,
-          role: newRole
+          role: newRole,
+          allowedMode: newAllowedMode
         })
       });
       const data = await res.json();
@@ -245,6 +245,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setShowCreateModal(false);
       setNewUsername('');
       setNewPassword('');
+      setNewAllowedMode('all');
       onRefreshUsers();
     } catch (err: any) {
       showMsg(err.message, 'error');
@@ -270,8 +271,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       showMsg(data.message, 'success');
       onRefreshUsers();
-      fetchVoiceLicenses();
-    } catch (err: any) {
+          } catch (err: any) {
       showMsg(err.message, 'error');
     }
   };
@@ -291,8 +291,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       showMsg(data.message, 'success');
       onRefreshUsers();
-      fetchVoiceLicenses();
-    } catch (err: any) {
+          } catch (err: any) {
       showMsg(err.message, 'error');
     }
   };
@@ -345,134 +344,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Voice Licenses State
-  interface VoiceLicItem {
-    id: string;
-    deviceFingerprint: string;
-    deviceModel: string;
-    licenseKey: string;
-    userId?: string;
-    ownerUsername?: string | null;
-    isOrphaned?: boolean;
-    registeredAt: string;
-    expiresAt: string;
-    isLifetime: boolean;
-    isUsed: boolean;
-    isExpired: boolean;
-    status: string;
-    activatedAt?: string;
-  }
-  const [voiceLicenses, setVoiceLicenses] = useState<VoiceLicItem[]>([]);
-  const [voiceFp, setVoiceFp] = useState('');
-  const [voiceDuration, setVoiceDuration] = useState('30');
-  const [voiceModel, setVoiceModel] = useState('');
-  const [voiceLoading, setVoiceLoading] = useState(false);
-  const [createdKeyResult, setCreatedKeyResult] = useState<any>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  const fetchVoiceLicenses = async () => {
-    try {
-      const res = await fetch('/api/license/admin/list', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok && data.licenses) {
-        setVoiceLicenses(data.licenses);
-      }
-    } catch {}
-  };
-
-  const handleCleanOrphanedLicenses = async () => {
-    if (!window.confirm('Bạn có chắc chắn muốn dọn dẹp các máy/bản quyền của những tài khoản đã bị xóa?')) {
-      return;
-    }
-    try {
-      const res = await fetch('/api/license/admin/clean-orphaned', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showMsg(data.message || 'Đã dọn dẹp thành công.', 'success');
-        fetchVoiceLicenses();
-      } else {
-        showMsg(data.error || 'Dọn dẹp thất bại.', 'error');
-      }
-    } catch (err: any) {
-      showMsg(err.message || 'Lỗi kết nối khi dọn dẹp.', 'error');
-    }
-  };
-
-  useEffect(() => {
-    fetchVoiceLicenses();
-  }, [token]);
-
-  useEffect(() => {
-    if (!socket) return;
-    const handleChanged = () => {
-      fetchVoiceLicenses();
-    };
-    socket.on('users_changed', handleChanged);
-    return () => {
-      socket.off('users_changed', handleChanged);
-    };
-  }, [socket]);
-
-  const handleCreateVoiceKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!voiceFp.trim()) return;
-    setVoiceLoading(true);
-    try {
-      const res = await fetch('/api/license/admin/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          deviceFingerprint: voiceFp.trim(),
-          daysValid: voiceDuration === 'LIFETIME' ? -1 : parseInt(voiceDuration),
-          deviceModel: voiceModel.trim() || undefined
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-
-      setCreatedKeyResult(data);
-      showMsg('Tạo Key kích hoạt giọng nói thành công!', 'success');
-      setVoiceFp('');
-      setVoiceModel('');
-      fetchVoiceLicenses();
-    } catch (err: any) {
-      showMsg(err.message, 'error');
-    } finally {
-      setVoiceLoading(false);
-    }
-  };
-
-  const handleDeleteVoiceLicense = async (id: string) => {
-    if (!window.confirm('Bạn có chắc chắn muốn xóa bản quyền này?')) return;
-    try {
-      const res = await fetch(`/api/license/admin/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      showMsg('Đã xóa bản quyền thành công.', 'success');
-      fetchVoiceLicenses();
-    } catch (err: any) {
-      showMsg(err.message, 'error');
-    }
-  };
-
-  const copyToClipboard = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(id);
-    setTimeout(() => setCopiedKey(null), 2500);
-  };
-
-
   // Delete User
   const handleDeleteUser = async (userId: string) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa vĩnh viễn tài khoản này không?')) return;
@@ -485,6 +356,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (!res.ok) throw new Error(data.error);
 
       showMsg(data.message, 'success');
+      onRefreshUsers();
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    }
+  };
+
+  const handleUpdateUserMode = async (userId: string, mode: 'mode1' | 'mode2' | 'all') => {
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/mode`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ allowedMode: mode })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Cập nhật chế độ thất bại');
+      showMsg('Đã cập nhật chế độ cho tài khoản!', 'success');
       onRefreshUsers();
     } catch (err: any) {
       showMsg(err.message, 'error');
@@ -904,7 +794,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/10 rounded-full blur-2xl -mr-6 -mt-6 pointer-events-none" />
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">Thiết Bị Live</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">Máy Live (Stream)</p>
               <h3 className="text-2xl sm:text-3xl font-black text-white mt-1">
                 {users.reduce((acc, u) => acc + (u.devices?.filter((d) => d.isLiveDevice || d.appType === 'APP_LIVE').length || 0), 0)}
               </h3>
@@ -1049,7 +939,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 return filtered.map((u) => {
                   const liveDevice = u.devices?.find((d) => d.isLiveDevice || d.appType === 'APP_LIVE');
-                                    const isExpired = new Date(u.expiresAt) <= new Date();
+                  const inputDevices = u.devices?.filter((d) => d.appType === 'APP_INPUT') || [];
+                  const isExpired = new Date(u.expiresAt) <= new Date();
 
                   return (
                     <tr key={u.id} className="hover:bg-slate-800/40 transition-all align-top">
@@ -1069,6 +960,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </span>
                           )}
                         </div>
+
+                        {/* Allowed Mode selector */}
+                        {u.role !== 'ADMIN' && (
+                          <div className="flex items-center space-x-1.5 pt-0.5">
+                            <span className="text-[10px] text-slate-400 font-mono">Chế độ:</span>
+                            <select
+                              value={u.allowedMode || 'all'}
+                              onChange={(e) => handleUpdateUserMode(u.id, e.target.value as 'mode1' | 'mode2' | 'all')}
+                              className="bg-slate-900/90 border border-slate-700 text-[11px] rounded px-1.5 py-0.5 text-indigo-300 font-bold outline-none cursor-pointer hover:border-indigo-400"
+                            >
+                              <option value="all">Tất cả (1 + 2)</option>
+                              <option value="mode1">Chỉ Chế độ 1</option>
+                              <option value="mode2">Chỉ Chế độ 2</option>
+                            </select>
+                          </div>
+                        )}
 
                         {/* Status Badge */}
                         <div>
@@ -1324,6 +1231,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) => setNewDays(parseInt(e.target.value))}
                   className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-indigo-500 outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-300 mb-1">
+                  Chế Độ Được Phép Truy Cập
+                </label>
+                <select
+                  value={newAllowedMode}
+                  onChange={(e) => setNewAllowedMode(e.target.value as 'mode1' | 'mode2' | 'all')}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white font-mono text-xs sm:text-sm focus:border-indigo-500 outline-none"
+                >
+                  <option value="all">Tất cả (Chế độ 1 + Chế độ 2)</option>
+                  <option value="mode1">Chỉ Chế độ 1 (DVR Tua chậm)</option>
+                  <option value="mode2">Chỉ Chế độ 2 (Bàn cược AI)</option>
+                </select>
               </div>
 
               <div className="flex items-center justify-end space-x-2.5 pt-1">

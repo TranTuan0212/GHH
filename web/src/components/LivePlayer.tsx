@@ -27,13 +27,13 @@ import {
   ArrowLeftRight,
   Move,
   ZoomIn,
+  Sun,
   Sparkles,
   Settings,
   RefreshCw,
   Calculator
 } from 'lucide-react';
 import { StreamSession } from '../types';
-import { LiveFloatingKeypad } from './LiveFloatingKeypad';
 
 export interface TextOverlay {
   id: string;
@@ -85,6 +85,11 @@ function resolveServerUrl(serverUrlFromServer?: string): string {
   return 'http://localhost:4000';
 }
 
+const isMobileDevice = typeof navigator !== 'undefined' && (
+  /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+  (typeof (navigator as any).maxTouchPoints === 'number' && (navigator as any).maxTouchPoints > 2)
+);
+
 interface LivePlayerProps {
   stream: StreamSession | null;
   socket?: Socket | null;
@@ -121,19 +126,57 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const pendingScrubTimeRef = useRef<number | null>(null);
   const scrubRafRef = useRef<number | null>(null);
   const seekingTimeoutRef = useRef<number | null>(null);
+  const targetSeekTimeRef = useRef<number | null>(null);
+  const pendingPlayAfterSeekRef = useRef<boolean>(false);
   const wasPlayingBeforeDragRef = useRef<boolean>(false);
   const isLiveRef = useRef<boolean>(true);
+  const prefetchedSegmentsRef = useRef<Set<string>>(new Set());
+  const lastLoadedFragSnRef = useRef<number>(-1);
 
   const [hasFrame, setHasFrame] = useState(false);
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
+  const [bufferedRanges, setBufferedRanges] = useState<Array<{ start: number; end: number }>>([]);
+  // Tính năng: Hẹn giờ Slow-mo tự động khi HLS nạp tới mốc Live
+  interface ScheduledSlow {
+    targetTime: number;
+    speed: number;
+    scheduledAt: number;
+    triggered?: boolean;
+  }
+  const [scheduledSlow, setScheduledSlow] = useState<ScheduledSlow | null>(null);
+  const scheduledSlowRef = useRef<ScheduledSlow | null>(null);
+  const [autoSlowSpeed, setAutoSlowSpeed] = useState<number>(0.25);
+
+  // Tự động kích hoạt Slow-Mo tại mốc hẹn (Auto-trigger hoàn toàn tự động sau 2.5s - 3.5s)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (scheduledSlowRef.current && isLiveRef.current) {
+        const sched = scheduledSlowRef.current;
+        if (!sched.triggered) {
+          const elapsedSec = (Date.now() - sched.scheduledAt) / 1000;
+          const b = replayVideoRef.current?.buffered;
+          const lastHlsEnd = (b && b.length > 0) ? b.end(b.length - 1) : 0;
+          if ((elapsedSec >= 2.5 && lastHlsEnd >= sched.targetTime) || elapsedSec >= 4.0) {
+            console.log('[LivePlayer] 🎯 Tự động kích hoạt Slow tại mốc hẹn:', sched);
+            sched.triggered = true;
+            setScheduledSlow({ ...sched, triggered: true });
+            const jumpTime = Math.max(0, sched.targetTime - 0.1);
+            switchToSlowAtTime(jumpTime, sched.speed);
+          }
+        }
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, []);
   const hasLiveFrameRef = useRef<boolean>(false);
+  const updateBufferRangesRef = useRef<() => void>(() => {});
   hasLiveFrameRef.current = hasLiveFrame;
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
   const [isLive, setIsLive] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const [rotation, setRotation] = useState<number>(0);
   const [isFlipped, setIsFlipped] = useState<boolean>(() => {
     try {
@@ -142,6 +185,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       return false;
     }
   });
+
+  // Độ phân giải thực tế của video stream nhận được (WebRTC Live hoặc HLS Replay)
+  const [streamDimensions, setStreamDimensions] = useState<{ width: number; height: number } | null>(null);
+
+  // Đo tốc độ mạng & Ping (iPhone -> Server & Web <- Server)
+  const [phoneStats, setPhoneStats] = useState<{ fps: number; bitrate: string; ping: number; isStreaming: boolean } | null>(null);
+  const [webPing, setWebPing] = useState<number | null>(null);
+  const [webBitrate, setWebBitrate] = useState<number | null>(null);
 
   const toggleFlip = () => {
     setIsFlipped((prev) => {
@@ -174,7 +225,138 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   };
 
   // Bước nhảy frame: 60 FPS (~16.6ms) hoặc 120 FPS (~8.3ms)
-  const [stepFps, setStepFps] = useState<60 | 120>(60);
+  const [stepFps, setStepFps] = useState<60 | 120>(120);
+
+  // Remote Camera Control (Tap-to-Focus, Exposure Bias)
+  const [remoteExposure, setRemoteExposure] = useState<number>(0.0);
+  const [remoteFocusPoint, setRemoteFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const focusTimeoutRef = useRef<number | null>(null);
+  const isFlippedRef = useRef(isFlipped);
+  useEffect(() => {
+    isFlippedRef.current = isFlipped;
+  }, [isFlipped]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onCameraState = (data: any) => {
+      if (data.action === 'exposure' && typeof data.bias === 'number') {
+        setRemoteExposure(data.bias);
+      }
+      if (data.action === 'focus' && typeof data.x === 'number' && typeof data.y === 'number') {
+        const container = videoContainerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const activeVid = (isLiveRef.current && hasLiveFrame) ? liveVideoRef.current : replayVideoRef.current;
+          const videoW = activeVid?.videoWidth || 1280;
+          const videoH = activeVid?.videoHeight || 720;
+          const containerRatio = rect.width / rect.height;
+          const videoRatio = videoW / videoH;
+          let actualRenderW = rect.width;
+          let actualRenderH = rect.height;
+          let offsetX = 0;
+          let offsetY = 0;
+          if (videoRatio > containerRatio) {
+            actualRenderW = rect.width;
+            actualRenderH = rect.width / videoRatio;
+            offsetY = (rect.height - actualRenderH) / 2;
+          } else {
+            actualRenderH = rect.height;
+            actualRenderW = rect.height * videoRatio;
+            offsetX = (rect.width - actualRenderW) / 2;
+          }
+          const effectiveX = isFlippedRef.current ? (1.0 - data.x) : data.x;
+          setRemoteFocusPoint({ x: offsetX + effectiveX * actualRenderW, y: offsetY + data.y * actualRenderH });
+          if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
+          focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 1500);
+        }
+      }
+    };
+    socket.on('camera_control_state', onCameraState);
+    return () => {
+      socket.off('camera_control_state', onCameraState);
+    };
+  }, [socket]);
+
+  const handleLiveVideoClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('[data-text-overlay="true"]') || target.closest('[data-ptz-toolbar="true"]') || target.closest('[data-pip-window="true"]') ) {
+      return;
+    }
+    if (!isLiveRef.current) return;
+    const container = videoContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    // Lấy kích thước thực tế của luồng video (loại bỏ dải đen letterbox/pillarbox)
+    const activeVid = (isLiveRef.current && hasLiveFrame) ? liveVideoRef.current : replayVideoRef.current;
+    const videoW = activeVid?.videoWidth || 1280;
+    const videoH = activeVid?.videoHeight || 720;
+
+    const containerRatio = rect.width / rect.height;
+    const videoRatio = videoW / videoH;
+
+    let actualRenderW = rect.width;
+    let actualRenderH = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (videoRatio > containerRatio) {
+      actualRenderW = rect.width;
+      actualRenderH = rect.width / videoRatio;
+      offsetY = (rect.height - actualRenderH) / 2;
+    } else {
+      actualRenderH = rect.height;
+      actualRenderW = rect.height * videoRatio;
+      offsetX = (rect.width - actualRenderW) / 2;
+    }
+
+    const relativeX = clickX - offsetX;
+    const relativeY = clickY - offsetY;
+
+    // Nếu click ra ngoài diện tích thực của video (bấm trúng dải đen 2 bên), không kích hoạt lấy nét sai
+    if (relativeX < 0 || relativeX > actualRenderW || relativeY < 0 || relativeY > actualRenderH) {
+      return;
+    }
+
+    // Chuẩn hóa tọa độ chính xác trong khung hình video (0.01 đến 0.99)
+    let normX = Math.max(0.01, Math.min(0.99, relativeX / actualRenderW));
+    const normY = Math.max(0.01, Math.min(0.99, relativeY / actualRenderH));
+
+    // NẾU ĐANG BẬT "LẬT ẢNH" (isFlipped = true / CSS transform scaleX(-1)):
+    // Khi người dùng click bên Trái màn hình Web, vị trí trong luồng video gốc thực tế là bên Phải.
+    // Bù trừ trục X để gửi tọa độ chuẩn xác về iPhone:
+    if (isFlipped) {
+      normX = 1.0 - normX;
+    }
+
+    setRemoteFocusPoint({ x: clickX, y: clickY });
+    if (focusTimeoutRef.current) window.clearTimeout(focusTimeoutRef.current);
+    focusTimeoutRef.current = window.setTimeout(() => setRemoteFocusPoint(null), 2000);
+
+    const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+    if (socket) {
+      socket.emit('camera_control', {
+        roomId: targetRoom,
+        action: 'focus',
+        x: normX,
+        y: normY
+      });
+    }
+  };
+
+
+
+  const handleSetRemoteExposure = (bias: number) => {
+    setRemoteExposure(bias);
+    const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+    if (socket) {
+      socket.emit('camera_control', { roomId: targetRoom, action: 'exposure', bias });
+    }
+    const label = bias > 0 ? `+${bias} EV` : `${bias} EV`;
+    showModeNotice('live', `ĐỘ SÁNG ${label}`, `Đã chỉnh bù sáng camera iPhone ${label}`, '');
+  };
 
   // Vị trí & kích thước tuỳ chỉnh của màn hình nhỏ PiP Live (tính theo % x, y từ góc trên-trái và width theo pixel)
   const [pipPos, setPipPos] = useState<{ xPercent: number; yPercent: number } | null>(null);
@@ -389,118 +571,12 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     });
   };
 
-  // Zoom & Pan cho màn hình video chính (hỗ trợ phóng to cận cảnh 1x - 4x bằng 2 ngón tay khi xem Fullscreen hoặc xem thường)
-  const [mainZoom, setMainZoom] = useState<number>(1.0);
-  const [mainPan, setMainPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const mainPinchStartRef = useRef<{ initialDistance: number; initialZoom: number } | null>(null);
-  const mainPanStartRef = useRef<{ startX: number; startY: number; origPan: { x: number; y: number } } | null>(null);
-  const lastTapTimeRef = useRef<number>(0);
 
-  const handleContainerTouchStart = (e: React.TouchEvent) => {
-    const target = e.target as HTMLElement;
-    // Bỏ qua nếu chạm trúng Bảng Nhập Nổi, màn nhỏ PiP ở góc hoặc text overlay/button
-    if (target.closest('[data-live-keypad="true"]')) {
-      return;
-    }
-    if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
-      return;
-    }
-    if (target.closest('[data-text-overlay="true"]') || target.closest('button')) {
-      return;
-    }
-
-    if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      mainPinchStartRef.current = {
-        initialDistance: dist,
-        initialZoom: mainZoom,
-      };
-      mainPanStartRef.current = null;
-      return;
-    }
-
-    if (e.touches.length === 1) {
-      // Nhấp đúp để reset zoom 1x (hoặc phóng to 2x nếu đang 1x)
-      const now = Date.now();
-      if (now - lastTapTimeRef.current < 300) {
-        if (mainZoom > 1.05) {
-          setMainZoom(1.0);
-          setMainPan({ x: 0, y: 0 });
-        } else {
-          setMainZoom(2.0);
-        }
-        lastTapTimeRef.current = 0;
-        return;
-      }
-      lastTapTimeRef.current = now;
-
-      if (mainZoom > 1.05) {
-        mainPanStartRef.current = {
-          startX: e.touches[0].clientX,
-          startY: e.touches[0].clientY,
-          origPan: { ...mainPan },
-        };
-      }
-    }
-  };
-
-  const handleContainerTouchMove = (e: React.TouchEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-live-keypad="true"]')) {
-      return;
-    }
-    if (!isLiveRef.current && hasLiveFrameRef.current && target.closest('[data-pip-window="true"]')) {
-      return;
-    }
-    if (target.closest('[data-text-overlay="true"]') || target.closest('button')) {
-      return;
-    }
-
-    if (e.touches.length === 2 && mainPinchStartRef.current) {
-      if (e.cancelable) e.preventDefault();
-      const currentDist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const scale = currentDist / mainPinchStartRef.current.initialDistance;
-      const newZoom = Math.max(1.0, Math.min(4.0, Number((mainPinchStartRef.current.initialZoom * scale).toFixed(2))));
-      setMainZoom(newZoom);
-      if (newZoom <= 1.02) {
-        setMainPan({ x: 0, y: 0 });
-      }
-      return;
-    }
-
-    if (e.touches.length === 1 && mainPanStartRef.current && mainZoom > 1.05) {
-      if (e.cancelable) e.preventDefault();
-      const dx = e.touches[0].clientX - mainPanStartRef.current.startX;
-      const dy = e.touches[0].clientY - mainPanStartRef.current.startY;
-      const maxPanX = (mainZoom - 1) * 220;
-      const maxPanY = (mainZoom - 1) * 160;
-      setMainPan({
-        x: Math.max(-maxPanX, Math.min(maxPanX, mainPanStartRef.current.origPan.x + dx)),
-        y: Math.max(-maxPanY, Math.min(maxPanY, mainPanStartRef.current.origPan.y + dy)),
-      });
-    }
-  };
-
-  const handleContainerTouchEnd = (e: React.TouchEvent) => {
-    if (e.touches.length < 2) {
-      mainPinchStartRef.current = null;
-    }
-    if (e.touches.length === 0) {
-      mainPanStartRef.current = null;
-    }
-  };
 
   // Fullscreen state & ref giống YouTube
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isLiveKeypadOpen, setIsLiveKeypadOpen] = useState(false);
-
+  
   const setFullscreenState = (fs: boolean) => {
     setIsFullscreen(fs);
     onFullscreenChange?.(fs);
@@ -566,10 +642,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   useEffect(() => {
     if (isFullscreen) {
       document.body.style.overflow = 'hidden';
-      setIsLiveKeypadOpen(true);
     } else {
       document.body.style.overflow = '';
-      setIsLiveKeypadOpen(false);
     }
     return () => {
       document.body.style.overflow = '';
@@ -579,22 +653,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [hlsWindowStart, setHlsWindowStart] = useState<number>(0);
   const [hlsLiveEdge, setHlsLiveEdge] = useState<number>(0);
+  const hlsLiveEdgeRef = useRef<number>(0);
+  hlsLiveEdgeRef.current = hlsLiveEdge;
+  const playbackRateRef = useRef<number>(1.0);
+  playbackRateRef.current = playbackRate;
   // Khi xem lại, cạnh phải của timeline là thời điểm người dùng rời Live. Không dùng
   // live edge đang tiếp tục tăng, nếu không nút tua sẽ "trôi" khỏi các frame cũ.
   const [frozenTimeline, setFrozenTimeline] = useState<FrozenTimeline | null>(null);
   const frozenTimelineRef = useRef<FrozenTimeline | null>(null);
 
   const updateFrozenTimeline = (ft: FrozenTimeline | null | ((prev: FrozenTimeline | null) => FrozenTimeline | null)) => {
-    setFrozenTimeline((prev) => {
-      const next = typeof ft === 'function' ? ft(prev) : ft;
-      frozenTimelineRef.current = next;
-      return next;
-    });
+    const next = typeof ft === 'function' ? ft(frozenTimelineRef.current) : ft;
+    frozenTimelineRef.current = next;
+    setFrozenTimeline(next);
   };
   const [sourceIsPortrait, setSourceIsPortrait] = useState(true);
   const [liveElapsedSeconds, setLiveElapsedSeconds] = useState<number>(0);
 
   // Bộ đếm thời gian thực khi đang phát Live (YouTube-style timeline)
+  // Khi đang ở chế độ Replay (!isLiveRef.current), tạm ngưng re-render mỗi 500ms để dành 100% main thread vẽ mượt 120fps.
   useEffect(() => {
     if (!stream?.startedAt) {
       setLiveElapsedSeconds(0);
@@ -602,6 +679,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
     const startedMs = new Date(stream.startedAt).getTime();
     const updateElapsed = () => {
+      if (!isLiveRef.current) return;
       const now = Date.now();
       const elapsed = Math.max(0, (now - startedMs) / 1000);
       setLiveElapsedSeconds(elapsed);
@@ -832,16 +910,21 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         try {
           const endpoint = new URL(detectedServerUrl);
           const pathKey = stream.streamKey;
+          const rawKey = pathKey.replace(/^live\//, '');
+          if (typeof window !== 'undefined' && window.location.origin) {
+            return `${window.location.origin}/api/whep/${encodeURIComponent(rawKey)}`;
+          }
+          const normalizedPath = pathKey.startsWith('live/') ? pathKey : `live/${pathKey}`;
           if (endpoint.protocol === 'https:' || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
             endpoint.protocol = 'https:';
             if (typeof window !== 'undefined' && window.location.hostname) {
               endpoint.hostname = window.location.hostname; // chỉ lấy hostname, không lấy port
             }
             endpoint.port = '8889'; // Nginx SSL :8889 → MediaMTX :8888
-            endpoint.pathname = `/${pathKey}/whep`;
+            endpoint.pathname = `/${normalizedPath}/whep`;
           } else {
             endpoint.port = '8889';
-            endpoint.pathname = `/${pathKey}/whep`;
+            endpoint.pathname = `/${normalizedPath}/whep`;
           }
           endpoint.search = '';
           return endpoint.toString();
@@ -898,14 +981,71 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       handleRoundFinishedRef.current();
     };
 
+    const onDeviceTelemetry = (data: any) => {
+      if (data) {
+        setPhoneStats(data);
+      }
+    };
+
     socket.on('initial_state', handleInitialState);
     socket.on('round_finished', onRoundFinished);
+    socket.on('device_telemetry', onDeviceTelemetry);
 
     return () => {
       socket.off('initial_state', handleInitialState);
       socket.off('round_finished', onRoundFinished);
+      socket.off('device_telemetry', onDeviceTelemetry);
     };
   }, [socket, roomId, stream?.streamKey, stream?.status]);
+
+  // Định kỳ đo Ping và Bitrate từ Web tới Server
+  useEffect(() => {
+    let timer: number | null = null;
+    let lastBytes = 0;
+    let lastTime = performance.now();
+
+    const measureStats = async () => {
+      const pc = peerConnectionRef.current;
+      if (pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected')) {
+        try {
+          const stats = await pc.getStats();
+          stats.forEach((report) => {
+            if (report.type === 'candidate-pair' && (report.state === 'succeeded' || (report as any).nominated)) {
+              if (typeof report.currentRoundTripTime === 'number') {
+                setWebPing(Math.max(1, Math.round(report.currentRoundTripTime * 1000)));
+              }
+            }
+            if (report.type === 'inbound-rtp' && report.kind === 'video') {
+              const now = performance.now();
+              const bytes = (report as any).bytesReceived || 0;
+              if (lastBytes > 0 && now > lastTime) {
+                const bitRate = ((bytes - lastBytes) * 8) / ((now - lastTime) / 1000) / (1024 * 1024);
+                if (bitRate >= 0 && bitRate < 200) {
+                  setWebBitrate(bitRate);
+                }
+              }
+              lastBytes = bytes;
+              lastTime = now;
+            }
+          });
+        } catch {}
+      } else {
+        if (socket && socket.connected) {
+          const t0 = performance.now();
+          socket.emit('ping_check', () => {
+            const rtt = Math.round(performance.now() - t0);
+            setWebPing(Math.max(1, rtt));
+          });
+        }
+      }
+    };
+
+    timer = window.setInterval(measureStats, 1500);
+    measureStats();
+    return () => {
+      if (timer) window.clearInterval(timer);
+    };
+  }, [socket]);
 
   // Khi phiên stream kết thúc hoặc được mở ở trạng thái ENDED:
   // Tự động chuyển sang chế độ Replay để người dùng có thể xem lại toàn bộ video/DVR
@@ -1018,22 +1158,74 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peerConnectionRef.current = peer;
           let receivedVideoTrack = false;
           peer.addTransceiver('video', { direction: 'recvonly' });
-          peer.addTransceiver('audio', { direction: 'recvonly' });
-          peer.ontrack = ({ streams }) => {
+          peer.ontrack = (event) => {
+            const { streams, receiver } = event;
+            // Đồng bộ nhịp hiển thị WebRTC Live (0.55s) khớp 1:1 với nhịp đóng gói segment HLS 0.5s:
+            // 1. Khi bấm Slow từ Live, khung hình đang thấy trên Live vừa kịp nạp xong vào RAM của HLS -> Dính khớp chuẩn từng frame!
+            // 2. Tạo đệm Jitter Buffer 550ms giúp luồng Live WebRTC mượt tuyệt đối, triệt tiêu hoàn toàn hiện tượng giật/khựng gói UDP.
+            try {
+              const anyReceiver = receiver as any;
+              if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
+                // Tang dem thich ung mang ping cao 200-500ms triet tieu lag khung (xem DEBUG_LOG.md)
+                anyReceiver.playoutDelayHint = 0.40;
+              }
+              if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
+                anyReceiver.jitterBufferTarget = 400;
+              }
+            } catch {}
             if (cancelled || !streams[0]) return;
-            receivedVideoTrack = true;
-            video.srcObject = streams[0];
+            const stream = streams[0];
+            const audioTracks = stream.getAudioTracks();
+            if (audioTracks.length > 0) {
+              audioTracks.forEach((t) => { t.enabled = true; });
+            }
+            if (event.track.kind === 'video') {
+              receivedVideoTrack = true;
+            }
+            console.log(`[LivePlayer] WebRTC ontrack: kind=${event.track.kind}, id=${event.track.id}, audioTracks=${audioTracks.length}`);
+            if (video.srcObject !== stream) {
+              video.srcObject = stream;
+            }
             video.muted = isMuted;
             setHasLiveFrame(true);
             setHasFrame(true);
             video.play().catch((err) => {
-              console.warn('[LivePlayer] Autoplay WebRTC ban đầu:', err);
+              if (err.name === 'AbortError') {
+                console.log('[LivePlayer] WebRTC play() AbortError (bỏ qua vì đang tiếp tục nạp stream)');
+                return;
+              }
+              console.warn('[LivePlayer] Autoplay WebRTC ban đầu bị chặn (cần tương tác người dùng):', err);
+              video.muted = true;
+              video.play().catch(() => {});
+              const unlockOnGesture = () => {
+                if (liveVideoRef.current) {
+                  liveVideoRef.current.muted = false;
+                  liveVideoRef.current.play().catch(() => {});
+                }
+                setIsMuted(false);
+                window.removeEventListener('pointerdown', unlockOnGesture, true);
+                window.removeEventListener('keydown', unlockOnGesture, true);
+              };
+              window.addEventListener('pointerdown', unlockOnGesture, true);
+              window.addEventListener('keydown', unlockOnGesture, true);
             });
             const track = streams[0].getVideoTracks()[0];
             if (track) {
               track.onended = () => {
                 console.log('[LivePlayer] WebRTC video track ended');
                 setHasLiveFrame(false);
+                if (isLiveRef.current && replayVideoRef.current) {
+                  const rv = replayVideoRef.current;
+                  rv.muted = isMuted;
+                  rv.playbackRate = 1.0;
+                  if (rv.buffered.length > 0) {
+                    const bEnd = rv.buffered.end(rv.buffered.length - 1);
+                    if (bEnd - rv.currentTime > 2.5 || rv.currentTime === 0) {
+                      rv.currentTime = Math.max(0, bEnd - 1.0);
+                    }
+                  }
+                  rv.play().catch(() => {});
+                }
                 if (!cancelled) {
                   setTimeout(() => {
                     if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
@@ -1057,10 +1249,26 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           await waitForVideoTrack(peer, () => receivedVideoTrack);
           console.log('[LivePlayer] WebRTC live connected:', whepUrl);
 
+          const resumeHlsFallbackIfLive = () => {
+            setHasLiveFrame(false);
+            if (isLiveRef.current && replayVideoRef.current) {
+              const rv = replayVideoRef.current;
+              rv.muted = isMuted;
+              rv.playbackRate = 1.0;
+              if (rv.buffered.length > 0) {
+                const bEnd = rv.buffered.end(rv.buffered.length - 1);
+                if (bEnd - rv.currentTime > 2.5 || rv.currentTime === 0) {
+                  rv.currentTime = Math.max(0, bEnd - 1.0);
+                }
+              }
+              rv.play().catch(() => {});
+            }
+          };
+
           peer.onconnectionstatechange = () => {
             console.log('[LivePlayer] WebRTC connectionState:', peer?.connectionState);
             if (peer?.connectionState === 'failed' || peer?.connectionState === 'disconnected') {
-              setHasLiveFrame(false);
+              resumeHlsFallbackIfLive();
               if (!cancelled) {
                 setTimeout(() => {
                   if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
@@ -1071,7 +1279,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peer.oniceconnectionstatechange = () => {
             console.log('[LivePlayer] WebRTC iceConnectionState:', peer?.iceConnectionState);
             if (peer?.iceConnectionState === 'failed' || peer?.iceConnectionState === 'disconnected') {
-              setHasLiveFrame(false);
+              resumeHlsFallbackIfLive();
               if (!cancelled) {
                 setTimeout(() => {
                   if (!cancelled) setWebrtcReconnectCount((c) => c + 1);
@@ -1087,7 +1295,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           peer = null;
           peerConnectionRef.current = null;
           console.log(`[LivePlayer] WHEP chưa sẵn sàng (lần ${attempt}, sẽ thử lại):`, error);
-          await new Promise((resolve) => window.setTimeout(resolve, 350));
+          await new Promise((resolve) => window.setTimeout(resolve, 150));
         }
       }
     };
@@ -1095,11 +1303,22 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const onLiveReady = () => {
       setHasLiveFrame(true);
       setHasFrame(true);
+      if (isLiveRef.current && replayVideoRef.current) {
+        // Tối ưu Mobile/Tablet: Dừng decoder replay video khi Live sẵn sàng để dồn 100% phần cứng cho WebRTC Live
+        replayVideoRef.current.pause();
+      }
+      if (isLiveRef.current && isMobileDevice && hlsRef.current) {
+        // Trên điện thoại: Tạm ngắt tải HLS ngầm khi Live đang phát, dồn 100% băng thông 4G/Wi-Fi cho WebRTC Live
+        try {
+          (hlsRef.current as any).stopLoad();
+        } catch {}
+      }
     };
     const onLiveVideoResize = () => {
       if (video.videoWidth > 0 && video.videoHeight > 0) {
         const isPortrait = video.videoHeight > video.videoWidth;
         setSourceIsPortrait(isPortrait);
+        setStreamDimensions({ width: video.videoWidth, height: video.videoHeight });
         console.log(`[LivePlayer] WebRTC video dimensions: ${video.videoWidth}x${video.videoHeight} (isPortrait: ${isPortrait})`);
       }
     };
@@ -1124,31 +1343,31 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [whepUrl, webrtcReconnectCount]);
 
-  // Điều khiển play/pause của liveVideo khi chuyển chế độ Live <-> Replay
+  // Điều khiển play/pause và âm thanh khi chuyển chế độ Live <-> Replay
   useEffect(() => {
     if (isLive) {
       if (hasLiveFrame && liveVideoRef.current) {
         liveVideoRef.current.muted = isMuted;
         liveVideoRef.current.play().catch(() => {});
         if (replayVideoRef.current) {
+          // Tối ưu Mobile/Tablet: Dừng hẳn decoder HLS khi đang xem Live để tránh nghẽn GPU/decoder
           replayVideoRef.current.pause();
-          replayVideoRef.current.muted = true;
         }
       } else if (replayVideoRef.current) {
-        // Fallback: nếu không có WebRTC (chạy trên VPS thuần HLS), HLS PHẢI phát trực tiếp tại live edge!
+        // Fallback: nếu không có WebRTC, HLS phát trực tiếp tại live edge
         const video = replayVideoRef.current;
         video.muted = isMuted;
         video.playbackRate = 1.0;
         if (video.seekable.length > 0) {
           const end = video.seekable.end(video.seekable.length - 1);
-          if (video.currentTime < end - 3 || video.currentTime === 0) {
-            video.currentTime = Math.max(0, end - 1.5);
+          if (video.currentTime < end - 2 || video.currentTime === 0) {
+            video.currentTime = Math.max(0, end - 0.8);
           }
         }
         video.play().catch(() => {});
       }
     } else {
-      // Khi tua: Replay video LUÔN LUÔN tắt tiếng (tua không cần âm thanh)
+      // Khi tua: Replay video tắt tiếng để tránh méo tiếng khi chạy chậm
       if (replayVideoRef.current) {
         replayVideoRef.current.muted = true;
         replayVideoRef.current.play().catch(() => {});
@@ -1210,8 +1429,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       } else if (pendingReplayTimeRef.current !== null && pendingReplayTimeRef.current >= start && pendingReplayTimeRef.current <= end) {
         targetTime = pendingReplayTimeRef.current;
       } else {
-        // Bấm Slow từ Live: lùi 4 giây để xem lại ngay pha vừa qua
-        targetTime = Math.max(start, end - 4);
+        // Bấm Slow từ Live: dính ngay mốc mép live mới nhất (không dùng currentTime cũ đang chạy trễ)
+        targetTime = end;
       }
 
       const safeTime = Math.max(start, Math.min(end, targetTime));
@@ -1269,23 +1488,35 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
 
       const hls = new Hls({
-        // Cấu hình tối ưu cho DVR Replay (video 120/240fps gốc, không có audio):
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        maxBufferSize: 256 * 1024 * 1024, // 256MB RAM buffer cho 120fps source
-        backBufferLength: 180, // Giữ 3 phút buffer lùi để tua qua lại tức thì
-        maxBufferHole: 0.4, // Ngưỡng nhỏ để không nhảy cóc frame
-        nudgeOffset: 0.05, // Nhích nhẹ (~6 frame) nếu kẹt buffer thay vì nhảy nửa giây
+        // Cấu hình tối ưu cho Live-Edge DVR Buffer:
+        // Đệm 6s phía trước và giữ 20s phía sau con trỏ phát trong RAM để tua ngược 5-10s tức thì
+        // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
+        // Mở rộng bộ đệm 90s - 180s nạp liên tục một mạch, loại bỏ triệt để hiện tượng đứt đoạn / lủng lỗ:
+        // Cấu hình đệm tinh gọn, bám sát Live 0.8s, giải phóng triệt để CPU và băng thông server:
+        maxBufferLength: isMobileDevice ? 12 : 60,
+        maxMaxBufferLength: isMobileDevice ? 24 : 120,
+        maxBufferSize: isMobileDevice ? (24 * 1024 * 1024) : (128 * 1024 * 1024),
+        backBufferLength: isMobileDevice ? 10 : 60,
+        maxBufferHole: 0.3,
+        nudgeOffset: 0.1,
         nudgeMaxRetry: 5,
-        // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo 0.25x/0.125x
+        // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo
         highBufferWatchdogPeriod: 0,
-        liveSyncDuration: 3,
-        // Vô hiệu hoá auto-seek của HLS.js về live edge trong chế độ replay
-        liveMaxLatencyDuration: 86400,
-        // Không cho HLS.js tự tăng video.playbackRate để catch-up live edge
-        maxLiveSyncPlaybackRate: 1,
+        // Đệm an toàn 2.5s để triệt tiêu bufferNudgeOnStall và nạp thanh HLS mượt mà:
+        liveSyncDuration: 2.5,
+        liveMaxLatencyDuration: 5.0,
+        maxLiveSyncPlaybackRate: 1.0,
         enableWorker: true,
+        // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
+        xhrSetup: (xhr, url) => {
+          // Chỉ yêu cầu no-cache cho file playlist .m3u8 để cập nhật liên tục, cho phép trình duyệt cache các file .ts để tua tức thì 0ms
+          if (url && (url.endsWith('.m3u8') || url.includes('.m3u8?'))) {
+            try {
+              xhr.setRequestHeader('Cache-Control', 'no-cache');
+            } catch {}
+          }
+        },
         debug: false
       });
       hlsInstance = hls;
@@ -1299,6 +1530,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => {
         const fragments = data.details?.fragments || [];
         console.log('[LivePlayer][hls.js] LEVEL_LOADED — số segment trong playlist:', fragments.length, '| live:', data.details?.live);
+        if ((data as any)?.stats) {
+          const st = (data as any).stats;
+          const dur = (st.loaded - st.loading) / 1000;
+          if (dur > 0 && st.total > 0) {
+            const mbps = (st.total * 8) / dur / (1024 * 1024);
+            if (mbps > 0 && mbps < 500) setWebBitrate(mbps);
+          }
+        }
         // MSE video.seekable is empty on some Chromium/HLS combinations. The HLS playlist
         // itself is authoritative: each fragment carries its ordered start PTS + duration.
         if (fragments.length > 0) {
@@ -1306,32 +1545,39 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const last = fragments[fragments.length - 1];
           const start = first.start;
           const end = last.start + last.duration;
-          setHlsWindowStart(start);
-          setHlsLiveEdge(end);
+          hlsLiveEdgeRef.current = end;
+          if (isLiveRef.current) {
+            setHlsWindowStart(start);
+            setHlsLiveEdge(end);
 
-          // Cứu nguy nếu đang ở Live mode nhưng chưa có WebRTC live frame:
-          // Nếu video đang bị đứng ở currentTime=0 hoặc trước start PTS, nhảy ngay tới live edge!
-          if (isLiveRef.current && !hasLiveFrameRef.current) {
-            if (video.currentTime < start || (video.currentTime === 0 && end > 2)) {
-              console.log(`[LivePlayer] Nhảy HLS về live edge: ${end - 1.5}s (start=${start}, current=${video.currentTime})`);
-              video.currentTime = Math.max(start, end - 1.5);
-              video.play().catch(() => {});
+            // Chế độ On-Demand: khi đang xem Live bình thường (không có hẹn slow),
+            // giữ video ngầm ở trạng thái pause để không ngốn CPU/băng thông
+            if (!scheduledSlowRef.current && !video.paused) {
+              video.pause();
             }
           }
         }
       });
       hls.on(Hls.Events.FRAG_LOADING, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADING:', data.frag?.url));
-      hls.on(Hls.Events.FRAG_LOADED, (_e, data) => console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url));
-      // Lỗi tải segment .ts (fragLoadError) không có event riêng — nó báo qua Hls.Events.ERROR chung
-      // bên dưới với data.details === 'fragLoadError', đã được log đầy đủ ở đó.
+      hls.on(Hls.Events.FRAG_LOADED, (_e, data) => {
+        if (typeof data.frag?.sn === 'number') {
+          lastLoadedFragSnRef.current = data.frag.sn;
+        }
+        if (data.frag?.url) {
+          prefetchedSegmentsRef.current.add(data.frag.url);
+        }
+        console.log('[LivePlayer][hls.js] FRAG_LOADED OK:', data.frag?.url);
+      });
+      hls.on(Hls.Events.BUFFER_APPENDED, () => {
+        // Cập nhật ngay dải buffer khi có segment mới nạp vào RAM
+        updateBufferRangesRef.current();
+      });
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
         console.log('[LivePlayer][hls.js] MANIFEST_PARSED — sẵn sàng phát. Số level:', data.levels?.length);
-        video.playbackRate = playbackRate;
+        video.playbackRate = playbackRateRef.current;
         setHasFrame(true);
         if (!isLiveRef.current) {
-          // Master has its own timeline. Start a few seconds behind its latest keyframe so
-          // playback at 0.5x/0.25x has buffered original high-FPS frames immediately.
           window.setTimeout(() => {
             if (video.seekable.length > 0) {
               const end = video.seekable.end(video.seekable.length - 1);
@@ -1339,30 +1585,27 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               applyInitialReplaySeek(start, end);
             }
           }, 0);
-          video.play().catch(() => {});
+          if (video.readyState >= 2 && !video.seeking) {
+            video.play().catch(() => {});
+          } else {
+            pendingPlayAfterSeekRef.current = true;
+          }
         } else {
-          // Khi đang ở chế độ Live:
-          // Nếu không có WebRTC (hasLiveFrame = false), HLS phát trực tiếp cho người xem
-          video.muted = isMuted;
-          window.setTimeout(() => {
-            if (video.seekable.length > 0) {
-              const end = video.seekable.end(video.seekable.length - 1);
-              video.currentTime = Math.max(0, end - 1.5);
-            }
-            video.play().catch((err) => {
-              console.warn('[LivePlayer] Autoplay HLS live:', err);
-            });
-          }, 100);
+          // Chế độ On-Demand: Khi đang ở Live, tắt nạp HLS và tạm dừng video ngầm
+          // Dồn 100% băng thông và tài nguyên cho WebRTC Live mượt mà nhất
+          video.muted = true;
+          video.pause();
         }
       });
 
       hls.on(Hls.Events.ERROR, (_e, data) => {
         // bufferStalledError là không fatal và rất hay gặp khi tua sang vùng chưa có buffer.
         // KHÔNG log spam vì nó lặp lại hàng chục lần mỗi giây.
-        if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-          // Không làm gì — stall timer trong onVideoEvent (waiting/stalled) sẽ xử lý sau 3500ms
-          // nếu HLS.js không tự tải xong segment trong thời gian đó.
-          // Nhảy currentTime ngay lập tức ở đây sẽ trigger thêm stall mới (vòng lặp).
+        if (
+          data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
+          data.details === 'bufferNudgeOnStall' ||
+          data.details === 'aborted'
+        ) {
           return;
         }
 
@@ -1401,17 +1644,39 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const onVideoEvent = (ev: Event) => {
         if (ev.type === 'loadedmetadata' && video.videoWidth > 0 && video.videoHeight > 0) {
           setSourceIsPortrait(video.videoHeight > video.videoWidth);
+          setStreamDimensions({ width: video.videoWidth, height: video.videoHeight });
         }
 
-        // Xử lý tự động cứu khi video bị khựng (stalled / waiting)
+        // Xử lý tự động cứu khi video bị khựng do lỗ hổng buffer (buffer hole)
         if (ev.type === 'waiting' || ev.type === 'stalled') {
           if (!video.paused) {
             if (stallTimer) window.clearTimeout(stallTimer);
             stallTimer = window.setTimeout(() => {
               if (!video.paused && video.readyState < 3) {
                 if (!isLiveRef.current) {
-                  console.log('[LivePlayer] Video replay bị khựng (stall/waiting) quá 3500ms -> Nhích nhẹ để tiếp tục phát...');
-                  video.currentTime = Math.min(video.duration || 999999, video.currentTime + 0.1);
+                  // Khi xem lại hoặc slow-motion (0.25x, 0.5x), TUYỆT ĐỐI KHÔNG nhảy cóc để không bị rớt frame
+                  if (video.playbackRate < 1.0) {
+                    return;
+                  }
+                  // Kiểm tra xem currentTime có đang nằm trong vùng đã nạp buffer hay không;
+                  // Nếu đang nằm trong vùng buffer (hoặc đang đợi tải segment kế tiếp ở mép cuối), TUYỆT ĐỐI KHÔNG nhảy cóc làm mất frame!
+                  let insideBuffered = false;
+                  for (let i = 0; i < video.buffered.length; i++) {
+                    if (video.currentTime >= video.buffered.start(i) - 0.05 && video.currentTime <= video.buffered.end(i) + 0.05) {
+                      insideBuffered = true;
+                      break;
+                    }
+                  }
+                  if (!insideBuffered) {
+                    for (let i = 0; i < video.buffered.length; i++) {
+                      const bStart = video.buffered.start(i);
+                      if (bStart > video.currentTime && bStart - video.currentTime < 1.0) {
+                        console.log('[LivePlayer] Nhảy qua lỗ hổng buffer tới:', bStart + 0.008);
+                        video.currentTime = bStart + 0.008;
+                        break;
+                      }
+                    }
+                  }
                 } else if (!hasLiveFrameRef.current) {
                   console.log('[LivePlayer] Video live HLS bị khựng -> Nhảy về live edge...');
                   const end = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0;
@@ -1421,7 +1686,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   }
                 }
               }
-            }, 2500);
+            }, 1000);
           }
         } else if (ev.type === 'playing' || ev.type === 'canplay') {
           if (stallTimer) {
@@ -1462,12 +1727,37 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   useEffect(() => {
     const replayVid = replayVideoRef.current;
     const liveVid = liveVideoRef.current;
+    let lastTimeUiUpdateMs = 0;
+
+    const updateBufferRanges = () => {
+      if (!replayVid) return;
+      const b = replayVid.buffered;
+      if (b && b.length > 0) {
+        const list: Array<{ start: number; end: number }> = [];
+        for (let i = 0; i < b.length; i++) {
+          list.push({ start: b.start(i), end: b.end(i) });
+        }
+        setBufferedRanges(list);
+
+
+      }
+    };
+
+    updateBufferRangesRef.current = updateBufferRanges;
 
     const onTime = () => {
+      // Đang kéo tua hoặc đang chờ trình duyệt hoàn tất seek: không ghi đè currentTime để tránh mốc tua bị giật lùi
+      if (isDraggingSeekRef.current || isSeekingRef.current || targetSeekTimeRef.current !== null) return;
       if (replayVid) {
+        const now = performance.now();
+        // Throttle cập nhật React state ở ~16fps khi video đang tự phát để không ép React re-render
+        // toàn bộ cây DOM 3400 dòng mỗi vài mili-giây gây rớt frame hiển thị 120fps trên GPU.
+        if (!replayVid.paused && now - lastTimeUiUpdateMs < 60) return;
+        lastTimeUiUpdateMs = now;
         setCurrentTime(replayVid.currentTime);
-        if (Number.isFinite(replayVid.duration)) {
-          setDuration(replayVid.duration);
+        updateBufferRanges();
+        if (isLiveRef.current && Number.isFinite(replayVid.duration)) {
+          setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
         }
       }
     };
@@ -1475,7 +1765,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (!isLiveRef.current) setIsPlaying(true);
     };
     const onReplayPause = () => {
-      if (!isLiveRef.current) setIsPlaying(false);
+      if (!isLiveRef.current) {
+        setIsPlaying(false);
+        if (replayVid) setCurrentTime(replayVid.currentTime);
+      }
     };
     const onLivePlay = () => {
       if (isLiveRef.current) setIsPlaying(true);
@@ -1483,15 +1776,30 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const onLivePause = () => {
       if (isLiveRef.current) setIsPlaying(false);
     };
+    const onDurationChange = () => {
+      // Khi đang ở chế độ Replay, timeline đã đóng băng theo frozenTimeline nên không cần re-render mỗi 0.5s khi segment mới nối thêm
+      if (isLiveRef.current && replayVid && Number.isFinite(replayVid.duration)) {
+        setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
+      }
+    };
     const onLoaded = () => {
-      if (replayVid && Number.isFinite(replayVid.duration)) setDuration(replayVid.duration);
-      setHasFrame(true);
-      setIsTransitioning(false); // HLS đã có frame, ẩn spinner chuyển đổi
+      if (replayVid && Number.isFinite(replayVid.duration)) {
+        setDuration((prev) => (Math.abs(prev - replayVid.duration) >= 0.5 ? replayVid.duration : prev));
+      }
+      setHasFrame((prev) => (prev ? prev : true));
+      setIsTransitioning((prev) => (prev ? false : prev)); // HLS đã có frame, ẩn spinner chuyển đổi
+      if (!isLiveRef.current && pendingPlayAfterSeekRef.current && replayVid && replayVid.readyState >= 2 && !replayVid.seeking) {
+        pendingPlayAfterSeekRef.current = false;
+        replayVid.playbackRate = playbackRateRef.current;
+        replayVid.play().catch(() => {});
+        setIsPlaying(true);
+      }
     };
 
     if (replayVid) {
       replayVid.addEventListener('timeupdate', onTime);
-      replayVid.addEventListener('durationchange', onLoaded);
+      replayVid.addEventListener('progress', updateBufferRanges);
+      replayVid.addEventListener('durationchange', onDurationChange);
       replayVid.addEventListener('loadeddata', onLoaded);
       replayVid.addEventListener('canplay', onLoaded);
       replayVid.addEventListener('play', onReplayPlay);
@@ -1505,7 +1813,8 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     return () => {
       if (replayVid) {
         replayVid.removeEventListener('timeupdate', onTime);
-        replayVid.removeEventListener('durationchange', onLoaded);
+        replayVid.removeEventListener('progress', updateBufferRanges);
+        replayVid.removeEventListener('durationchange', onDurationChange);
         replayVid.removeEventListener('loadeddata', onLoaded);
         replayVid.removeEventListener('canplay', onLoaded);
         replayVid.removeEventListener('play', onReplayPlay);
@@ -1528,7 +1837,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       if (ranges.length === 0) return;
       const end = ranges.end(ranges.length - 1);
       if (Number.isFinite(end)) {
-        setHlsLiveEdge((prev) => Math.max(prev, end));
+        hlsLiveEdgeRef.current = Math.max(hlsLiveEdgeRef.current, end);
+        if (isLiveRef.current) {
+          setHlsLiveEdge((prev) => (end > prev + 0.2 ? end : prev));
+        }
       }
     };
     video.addEventListener('progress', updateSeekableWindow);
@@ -1554,23 +1866,39 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         seekingTimeoutRef.current = null;
       }
       isSeekingRef.current = false;
+      targetSeekTimeRef.current = null;
 
       // Nếu trong lúc vừa decode frame trước, tay người dùng đã kéo tới vị trí mới -> seek tiếp ngay!
       if (pendingScrubTimeRef.current !== null) {
         const nextTime = pendingScrubTimeRef.current;
         pendingScrubTimeRef.current = null;
         isSeekingRef.current = true;
+        targetSeekTimeRef.current = nextTime;
         // Dùng currentTime chính xác để giải mã đầy đủ 100% chi tiết, không dùng fastSeek làm nhòe/vỡ khối
         video.currentTime = nextTime;
         setCurrentTime(nextTime);
         return;
       }
 
-      if (isLiveRef.current) {
-        const lag = hlsLiveEdge - video.currentTime;
-        // Nếu còn < 2s lệch live -> tự nhảy về edge để tránh bị stuck ở đầu playlist.
-        if (lag >= 0 && lag < 2) {
-          video.currentTime = hlsLiveEdge;
+      // Khi không xem live, luôn khóa chắc chắn currentTime tại vị trí decoder vừa hạ cánh
+      if (!isLiveRef.current) {
+        setCurrentTime(video.currentTime);
+      }
+
+      // Nếu có yêu cầu phát tiếp sau khi seek xong
+      if (pendingPlayAfterSeekRef.current) {
+        pendingPlayAfterSeekRef.current = false;
+        video.playbackRate = playbackRateRef.current;
+        video.play().catch(() => {});
+        setIsPlaying(true);
+      }
+
+      if (isLiveRef.current && !hasLiveFrameRef.current) {
+        const edge = hlsLiveEdgeRef.current;
+        const lag = edge - video.currentTime;
+        // Giữ video HLS đệm mượt mà ở khoảng cách 1.5s sau mép live khi chạy fallback HLS Live
+        if (lag > 4 || (lag >= 0 && lag < 0.5)) {
+          video.currentTime = Math.max(0, edge - 1.5);
         }
       }
     };
@@ -1583,7 +1911,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         seekingTimeoutRef.current = null;
       }
     };
-  }, [hlsLiveEdge]);
+  }, []);
 
   const [modeNotice, setModeNotice] = useState<'slow' | 'live' | null>(null);
   const [modeNoticeTitle, setModeNoticeTitle] = useState<string>('');
@@ -1621,44 +1949,33 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsLive(true);
     setIsPlaying(true);
     setPlaybackRate(1.0);
+    if (hlsLiveEdgeRef.current > 0) {
+      setHlsLiveEdge(hlsLiveEdgeRef.current);
+    }
     updateFrozenTimeline(null);
     pendingReplayTimeRef.current = null;
     pendingReplayRatioRef.current = null;
 
-    // 1. Tạm dừng video xem lại (Replay)
-    replayVideoRef.current?.pause();
-
-    // 2. Kích hoạt và bật tiếng (nếu không mute) cho luồng trực tiếp Live WebRTC
+    // 1. Kích hoạt luồng trực tiếp Live WebRTC
     const liveVid = liveVideoRef.current;
     if (liveVid) {
       liveVid.muted = isMuted;
       liveVid.play().catch(() => {});
 
-      // Sức khỏe WebRTC: nếu video live bị khựng hoặc readyState thấp hoặc mất kết nối
-      if (liveVid.readyState < 2 || liveVid.paused || !peerConnectionRef.current || peerConnectionRef.current.connectionState !== 'connected') {
-        if (liveVid.srcObject) {
-          console.log('[LivePlayer] Đánh thức WebRTC live stream...');
-          const stream = liveVid.srcObject as MediaStream;
-          liveVid.srcObject = stream;
-          liveVid.play().catch(() => {});
-        }
-        if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'failed' || peerConnectionRef.current.connectionState === 'disconnected') {
-          setWebrtcReconnectCount((c) => c + 1);
-        }
+      // Sức khỏe WebRTC: nếu video live bị ngắt kết nối thực sự
+      if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'failed' || peerConnectionRef.current.connectionState === 'disconnected') {
+        setWebrtcReconnectCount((c) => c + 1);
       }
     }
 
-    // 3. Nếu chưa có WebRTC live frame, HLS chính là luồng xem Live đồng bộ mép trực tiếp!
-    if (!hasLiveFrameRef.current && replayVideoRef.current) {
-      const video = replayVideoRef.current;
-      video.playbackRate = 1.0;
-      video.muted = isMuted;
-      if (video.seekable.length > 0) {
-        video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 1.5);
-      } else if (hlsLiveEdge > 0) {
-        video.currentTime = Math.max(0, hlsLiveEdge - 1.5);
-      }
-      video.play().catch(() => {});
+    // 2. Dừng giải mã và dừng nạp HLS khi đang xem Live trực tiếp để giải phóng 100% GPU/CPU
+    if (replayVideoRef.current) {
+      replayVideoRef.current.pause();
+    }
+    if (hlsRef.current) {
+      try {
+        (hlsRef.current as any).stopLoad();
+      } catch {}
     }
 
     showModeNotice(
@@ -1669,7 +1986,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     );
   };
 
+  const lastRoundFinishedAtRef = useRef<number>(0);
+  const roundResetTimerRef = useRef<number | null>(null);
+
   const handleRoundFinished = () => {
+    const now = Date.now();
+    // Chống gọi lặp 3-4 lần liên tiếp (từ cả socket round_finished lẫn prop finishRoundTrigger)
+    if (now - lastRoundFinishedAtRef.current < 2000) {
+      return;
+    }
+    lastRoundFinishedAtRef.current = now;
+
     console.log('[LivePlayer] handleRoundFinished -> Purging all browser video buffers, overlays and jumping to live...');
     // 1. Phá hủy hoàn toàn HLS cũ và xóa sạch toàn bộ buffer video trong RAM của trình duyệt
     if (hlsRef.current) {
@@ -1686,6 +2013,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setHasFrame(false);
     setHlsWindowStart(0);
     setHlsLiveEdge(0);
+    hlsLiveEdgeRef.current = 0;
+    prefetchedSegmentsRef.current.clear();
+    lastLoadedFragSnRef.current = -1;
     setCurrentTime(0);
     setDuration(0);
     updateFrozenTimeline(null);
@@ -1712,12 +2042,35 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       setWebrtcReconnectCount((c) => c + 1);
     }
 
-    // 4. Tự động chuyển ngay về luồng Live trực tiếp!
+    // 4. Xóa sạch 100% RAM buffer và URL cache của Hls.js để không bị phát lẫn lộn file của phiên trước
+    const hlsInst: any = hlsRef.current;
+    if (hlsInst) {
+      try {
+        hlsInst.stopLoad();
+        if (typeof (hlsRef.current as any).trigger === 'function') {
+          (hlsRef.current as any).trigger(Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: Number.POSITIVE_INFINITY, type: undefined });
+        }
+      } catch {}
+    }
+    prefetchedSegmentsRef.current.clear();
+    lastLoadedFragSnRef.current = -1;
+    setBufferedRanges([]);
+    scheduledSlowRef.current = null;
+    setScheduledSlow(null);
+    hlsLiveEdgeRef.current = 0;
+    setHlsLiveEdge(0);
+    setHlsWindowStart(0);
+
+    // 5. Tự động chuyển ngay về luồng Live trực tiếp!
     jumpToLive();
 
-    // 5. Sau 1.5 giây (để server kịp xoá sạch file .ts cũ và tạo playlist mới bắt đầu từ 0s),
-    // cấp replaySessionId mới để nạp HLS mới toanh từ 0s!
-    setTimeout(() => {
+    // 6. Sau 1.5 giây (để server kịp xoá sạch file .ts cũ và tạo playlist mới),
+    // cấp replaySessionId mới để nạp HLS mới toanh của phiên tiếp theo!
+    if (roundResetTimerRef.current !== null) {
+      window.clearTimeout(roundResetTimerRef.current);
+    }
+    roundResetTimerRef.current = window.setTimeout(() => {
+      roundResetTimerRef.current = null;
       setReplaySessionId(Date.now());
     }, 1500);
   };
@@ -1730,11 +2083,94 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     }
   }, [finishRoundTrigger]);
 
+  // Hàm chuyển Slow tại đúng mốc thời gian chỉ định (phục vụ tự động kích hoạt mốc hẹn)
+  const switchToSlowAtTime = (targetTime: number, speed: number) => {
+    isLiveRef.current = false;
+    setIsLive(false);
+    setPlaybackRate(speed);
+    playbackRateRef.current = speed;
+    setIsPlaying(!isDraggingSeekRef.current);
+
+    if (liveVideoRef.current) {
+      liveVideoRef.current.muted = isMuted;
+      liveVideoRef.current.play().catch(() => {});
+    }
+
+    const video = replayVideoRef.current;
+    if (video) {
+      if (hlsRef.current) {
+        hlsRef.current.config.liveMaxLatencyDuration = 86400;
+      }
+      video.playbackRate = speed;
+      video.muted = true;
+      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+      const start = Math.max(0, latestEdge - 180);
+      const end = Math.max(start + 0.1, latestEdge);
+      updateFrozenTimeline({ start, end });
+
+      const safeTime = Math.max(start, Math.min(end, targetTime));
+      isSeekingRef.current = false;
+      targetSeekTimeRef.current = null;
+      video.currentTime = safeTime;
+      setCurrentTime(safeTime);
+      if (hlsRef.current) {
+        hlsRef.current.startLoad(safeTime);
+      }
+      if (!isDraggingSeekRef.current) {
+        video.play().catch(() => {});
+      }
+    }
+
+    showModeNotice(
+      'slow',
+      `⚡ ĐANG TỰ ĐỘNG PHÁT CHẬM TẠI MỐC HẸN ${speed}x!`,
+      `Đã tua về mốc hẹn, phát quay chậm mượt mà 120 FPS`,
+      'Bấm [🔴 VỀ LIVE] hoặc phím [Enter] để quay lại trực tiếp'
+    );
+  };
+
+  // Nhảy tới mốc hẹn và phát Slow-mo
+  const jumpToScheduledSlow = () => {
+    if (!scheduledSlowRef.current) return;
+    const sched = scheduledSlowRef.current;
+    // Lùi nhẹ 1.0s trước mốc hẹn để xem trọn vẹn tình huống
+    const jumpTime = Math.max(0, sched.targetTime - 0.1);
+    switchToSlowAtTime(jumpTime, sched.speed);
+  };
+
+  // Cắm cờ mốc hẹn Slow tự động
+  const toggleScheduledSlow = (customSpeed?: number) => {
+    const speed = customSpeed ?? autoSlowSpeed;
+    const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+    const targetTime = latestEdge > 0 ? latestEdge : currentTime;
+    const item = { targetTime, speed, scheduledAt: Date.now(), triggered: false };
+    scheduledSlowRef.current = item;
+    setScheduledSlow(item);
+
+    // Đảm bảo Hls tiếp tục nạp
+    if (hlsRef.current) {
+      try {
+        (hlsRef.current as any).startLoad();
+        console.log(`[LivePlayer] 🎯 Đã cắm cờ mốc hẹn tự động tại ${targetTime.toFixed(2)}s`);
+      } catch (err) {
+        console.warn('[LivePlayer] Lỗi hls.startLoad:', err);
+      }
+    }
+
+    showModeNotice(
+      'slow',
+      `🎯 ĐÃ HẸN SLOW ${speed}x!`,
+      `Đang đón khoảnh khắc lật bài, hệ thống sẽ TỰ ĐỘNG phát quay chậm sau ~3 giây...`,
+      'Bạn cứ xem Live bình thường, video sẽ tự động phát lại slow-mo!'
+    );
+  };
+
   const switchToSlow = (speed: number, keepCurrentPosition = false) => {
     isLiveRef.current = false;
     setIsLive(false);
     setPlaybackRate(speed);
-    setIsPlaying(true);
+    playbackRateRef.current = speed;
+    setIsPlaying(!isDraggingSeekRef.current);
 
     // Màn nhỏ Live giữ nguyên âm thanh (theo cài đặt isMuted) và tiếp tục phát mượt mà không bao giờ pause
     if (liveVideoRef.current) {
@@ -1744,31 +2180,42 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
     const video = replayVideoRef.current;
     if (video) {
+      if (hlsRef.current) {
+        // Tắt tính năng tự bắt kịp Live khi người dùng đang xem Slow hoặc tua lại
+        hlsRef.current.config.liveMaxLatencyDuration = 86400;
+      }
       video.playbackRate = speed;
       video.muted = true;
-      const start = hlsWindowStart;
-      const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0);
-      const end = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
+      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+      // Mở rộng timeline trọn vẹn 3 phút (180 giây) đã lưu trong RAM
+      const start = Math.max(0, latestEdge - 180);
+      const end = Math.max(start + 0.1, latestEdge);
       
-      updateFrozenTimeline((prev) => prev ?? { start, end });
+      updateFrozenTimeline({ start, end });
 
       if (keepCurrentPosition) {
-        // Người dùng đã kéo tua đến mốc mong muốn: GIỮ NGUYÊN mốc đó, chỉ phát tiếp với tốc độ mới
+        // Đang tua ở vị trí đã chọn: giữ nguyên vị trí, tiếp tục phát ở tốc độ mới
         video.playbackRate = speed;
       } else {
-        // Chuyển từ Live sang Slow: lùi 4 giây để xem lại pha quay chậm vừa qua
-        const targetTime = Math.max(start, end - 4);
-        if (video.readyState >= 1) {
-          video.currentTime = targetTime;
-          setCurrentTime(targetTime);
-        } else {
-          pendingReplayTimeRef.current = targetTime;
-        }
+        // Khi chuyển từ Live sang Slow:
+        // Lùi lại 1.8s vào vùng an toàn đã nạp sẵn 100% trong RAM buffer:
+        // 1. Video phát chậm 0.25x/0.5x ngay lập tức trong 0ms (không bị khựng hay chờ nạp mạng).
+        // 2. Có sẵn 1.8s đệm (~4 segment HLS 0.5s) phía trước, tuyệt đối không chạm mép rỗng,
+        //    triệt tiêu 100% hiện tượng Hls.js nudge làm rớt/mất khung hình 120fps!
+        const safeRewind = Math.max(start, end - 1.8);
+        isSeekingRef.current = false;
+        targetSeekTimeRef.current = null;
+        video.currentTime = safeRewind;
+        setCurrentTime(safeRewind);
+        video.playbackRate = speed;
       }
 
-      video.play().catch((err) => {
-        console.warn('[LivePlayer] Lỗi play replay:', err);
-      });
+      if (hlsRef.current) {
+        hlsRef.current.startLoad(video.currentTime);
+      }
+      if (!isDraggingSeekRef.current) {
+        video.play().catch(() => {});
+      }
     }
 
     const isNormalSpeed = speed === 1.0;
@@ -1792,12 +2239,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    if (hlsRef.current) {
+      try {
+        (hlsRef.current as any).startLoad();
+      } catch {}
+    }
+
     const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
-    const start = currentFrozen?.start ?? hlsWindowStart;
-    const curLiveDuration = Math.max(liveElapsedSeconds, hlsLiveEdge > hlsWindowStart ? hlsLiveEdge - hlsWindowStart : 0, duration);
-    const liveEdge = hlsLiveEdge > hlsWindowStart ? hlsLiveEdge : (start + curLiveDuration);
-    // Khi đang xem lại (replay): end luôn bị đóng băng theo frozenTimeline để mốc tua không bị gián đoạn hay nhảy tiến
-    const end = isLiveRef.current ? liveEdge : (currentFrozen?.end ?? liveEdge);
+    const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+    const start = currentFrozen?.start ?? Math.max(0, latestEdge - 180);
+    const end = currentFrozen?.end ?? Math.max(start + 0.1, latestEdge);
     const safeTime = Math.max(start, Math.min(end, targetTime));
 
     // Cập nhật React state ngay lập tức để seekbar & tooltip phản hồi siêu nhạy
@@ -1811,7 +2262,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
       pendingScrubTimeRef.current = null;
       isSeekingRef.current = true;
+      targetSeekTimeRef.current = safeTime;
+      if (seekingTimeoutRef.current !== null) {
+        window.clearTimeout(seekingTimeoutRef.current);
+      }
+      seekingTimeoutRef.current = window.setTimeout(() => {
+        isSeekingRef.current = false;
+        targetSeekTimeRef.current = null;
+        seekingTimeoutRef.current = null;
+      }, 800);
       video.currentTime = safeTime;
+      if (hlsRef.current) {
+        hlsRef.current.startLoad(safeTime);
+      }
       return;
     }
 
@@ -1838,9 +2301,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       isLiveRef.current = false;
       setIsLive(false);
       setIsPlaying(false);
-      const start = hlsWindowStart;
-      const end = hlsLiveEdge;
-      const target = Math.max(start, end - 4);
+      const v = replayVideoRef.current;
+      const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+      const start = Math.max(0, latestEdge - 180);
+      const end = Math.max(start + 0.1, latestEdge);
+      const target = v && v.currentTime >= start ? v.currentTime : Math.max(start, end - 0.25);
       updateFrozenTimeline({ start, end });
       performScrub(target, true);
       return;
@@ -1851,8 +2316,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     setIsPlaying(false);
     v.pause();
     const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
-    const start = currentFrozen?.start ?? hlsWindowStart;
-    const end = currentFrozen?.end ?? hlsLiveEdge;
+    const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+    const start = currentFrozen?.start ?? Math.max(0, latestEdge - 180);
+    const end = currentFrozen?.end ?? Math.max(start + 0.1, latestEdge);
     // Mỗi step đúng 1 frame theo stepFps (60 FPS ~0.0167s hoặc 120 FPS ~0.0083s)
     const frameDuration = 1 / stepFps;
     const currentBase = pendingScrubTimeRef.current !== null ? pendingScrubTimeRef.current : v.currentTime;
@@ -1867,8 +2333,9 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (!video) return;
 
     const currentFrozen = frozenTimelineRef.current ?? frozenTimeline;
-    const start = currentFrozen?.start ?? hlsWindowStart;
-    const end = currentFrozen?.end ?? hlsLiveEdge;
+    const latestEdge = Math.max(hlsLiveEdge, hlsLiveEdgeRef.current);
+    const start = currentFrozen?.start ?? Math.max(0, latestEdge - 180);
+    const end = currentFrozen?.end ?? Math.max(start + 0.1, latestEdge);
     const span = Math.max(0.1, end - start);
 
     if (isLiveRef.current) {
@@ -1944,6 +2411,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     if (e.key === 'm' || e.key === 'M') {
       e.preventDefault();
       toggleFlip();
+      return;
+    }
+
+    if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      if (!isLiveRef.current && scheduledSlowRef.current) {
+        jumpToScheduledSlow();
+      } else {
+        toggleScheduledSlow();
+      }
       return;
     }
 
@@ -2143,11 +2620,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả chuột: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
-      // Tự động phát tiếp ngay lập tức tại mốc vừa kéo với đúng tốc độ slow đang chọn
-      if (replayVideoRef.current) {
-        replayVideoRef.current.playbackRate = playbackRate;
-        replayVideoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+      // Chỉ phát tiếp nếu trước đó người dùng đang xem live hoặc đang phát;
+      // Nếu đang tạm dừng (pause), giữ nguyên trạng thái tạm dừng tại đúng frame vừa chọn!
+      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+        if (!replayVideoRef.current.seeking) {
+          replayVideoRef.current.playbackRate = playbackRate;
+          replayVideoRef.current.play().catch(() => {});
+          setIsPlaying(true);
+        } else {
+          // Trình duyệt đang nạp frame mục tiêu: chờ onSeeked hoàn tất rồi mới phát để không bị giật lùi
+          pendingPlayAfterSeekRef.current = true;
+        }
       }
     };
 
@@ -2211,11 +2694,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       const finalTime = curTimeline.start + finalRatio * curSpan;
       // Nhả tay: seek chính xác tuyệt đối vào frame mục tiêu
       performScrub(finalTime, true);
-      // Tự động phát tiếp ngay lập tức tại mốc vừa kéo với đúng tốc độ slow đang chọn
-      if (replayVideoRef.current) {
-        replayVideoRef.current.playbackRate = playbackRate;
-        replayVideoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+      // Chỉ phát tiếp nếu trước đó người dùng đang xem live hoặc đang phát;
+      // Nếu đang tạm dừng (pause), giữ nguyên trạng thái tạm dừng tại đúng frame vừa chọn!
+      if (wasPlayingBeforeDragRef.current && replayVideoRef.current) {
+        if (!replayVideoRef.current.seeking) {
+          replayVideoRef.current.playbackRate = playbackRate;
+          replayVideoRef.current.play().catch(() => {});
+          setIsPlaying(true);
+        } else {
+          // Trình duyệt đang nạp frame mục tiêu: chờ onSeeked hoàn tất rồi mới phát để không bị giật lùi
+          pendingPlayAfterSeekRef.current = true;
+        }
       }
     };
 
@@ -2233,6 +2722,11 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ? Math.max(0, Math.min(1, (currentTime - timelineStart) / totalSpan))
             : 0));
   const seekFillRatio = dragRatio !== null ? dragRatio : currentVideoRatio;
+
+  // Tính toán vị trí Chấm Vàng HLS và Cờ Hẹn trên thanh timeline
+  const lastHlsEnd = bufferedRanges.length > 0 ? bufferedRanges[bufferedRanges.length - 1].end : 0;
+  const hlsBufferRatio = totalSpan > 0 ? Math.max(0, Math.min(1, (lastHlsEnd - timelineStart) / totalSpan)) : 0;
+  const flagMarkerRatio = (scheduledSlow && totalSpan > 0) ? Math.max(0, Math.min(1, (scheduledSlow.targetTime - timelineStart) / totalSpan)) : null;
 
   // Thời gian hiển thị ở đầu bên trái: đi theo tay kéo mượt mà, khi Live luôn hiện mốc mới nhất
   const displayCurrentTime = (!hasStreamData || activeDuration === 0)
@@ -2255,11 +2749,13 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         <div className="flex items-center space-x-2 sm:space-x-3 w-full sm:w-auto justify-between sm:justify-start">
           <div className={`flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-semibold flex-shrink-0 border ${
             isLive
-              ? 'bg-red-500/10 border-red-500/30 text-red-400 animate-pulse'
+              ? hasLiveFrame
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                : 'bg-red-500/15 border-red-500/30 text-red-400 animate-pulse'
               : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
           }`}>
             {isLive ? <Radio className="w-3 h-3 animate-spin" /> : <Gauge className="w-3 h-3" />}
-            <span>{isLive ? 'LIVE - WEBRTC' : `SLOW - ${playbackRate}x`}</span>
+            <span>{isLive ? (hasLiveFrame ? '🔴 WebRTC LIVE (0.2s)' : '🟡 LIVE (HLS Đang Nối...)') : `SLOW - ${playbackRate}x`}</span>
           </div>
           <span className="text-xs font-medium text-slate-300 truncate max-w-[180px] sm:max-w-none">
             {roomName ? `Room: ${roomName}` : (stream ? `Streamer: ${stream.username}` : 'Đang chờ luồng Live...')}
@@ -2279,31 +2775,89 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       {/* Video Container */}
       <div
         ref={videoContainerRef}
+        onClick={handleLiveVideoClick}
         onDoubleClick={toggleFullscreen}
-        onTouchStart={handleContainerTouchStart}
-        onTouchMove={handleContainerTouchMove}
-        onTouchEnd={handleContainerTouchEnd}
         style={{ touchAction: 'none' }}
         className={`relative w-full bg-black flex items-center justify-center group overflow-hidden select-none cursor-pointer ${
           isFullscreen ? 'flex-1 h-full max-h-none aspect-auto' : 'aspect-video max-h-[58vh]'
         }`}
-        title="Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F). Dùng 2 ngón tay để zoom cận cảnh."
+        title="Chạm bất kỳ đâu để lấy nét. Nhấp đúp chuột để Phóng to / Thu nhỏ toàn màn hình (F)."
       >
-        {/* Nút đặt lại zoom khi đang phóng to cận cảnh */}
-        {mainZoom > 1.05 && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setMainZoom(1.0);
-              setMainPan({ x: 0, y: 0 });
-            }}
-            className="absolute top-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white text-xs font-mono font-bold shadow-xl backdrop-blur flex items-center space-x-1.5 border border-indigo-400 active:scale-95 cursor-pointer animate-fadeIn"
-            title="Bấm để đưa về kích thước chuẩn 1x"
+        {/* 🎯 Khung ngắm Lấy Nét Tap-to-Focus màu vàng chớp sáng trên video */}
+        {remoteFocusPoint && (
+          <div
+            className="absolute pointer-events-none z-50 -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
+            style={{ left: `${remoteFocusPoint.x}px`, top: `${remoteFocusPoint.y}px` }}
           >
-            <ZoomIn className="w-3.5 h-3.5 text-amber-300" />
-            <span>Zoom: {mainZoom}x (Chạm để về 1x)</span>
-          </button>
+            <div className="relative w-14 h-14 border-2 border-amber-400 rounded-lg shadow-xl shadow-amber-400/50 animate-pulse flex items-center justify-center bg-amber-400/15">
+              <span className="absolute -top-1 w-2 h-0.5 bg-amber-300" />
+              <span className="absolute -bottom-1 w-2 h-0.5 bg-amber-300" />
+              <span className="absolute -left-1 h-2 w-0.5 bg-amber-300" />
+              <span className="absolute -right-1 h-2 w-0.5 bg-amber-300" />
+              <span className="w-2 h-2 rounded-full bg-amber-400 shadow animate-ping" />
+            </div>
+            <div className="text-[10px] text-amber-300 font-mono font-black bg-black/85 px-2 py-0.5 rounded-full shadow-lg mt-1 border border-amber-400/40 whitespace-nowrap text-center">
+              LẤY NÉT
+            </div>
+          </div>
+        )}
+
+        {/* Cụm Điều Khiển Camera iPhone Từ Xa (PTZ Toolbar) - Chỉ hiện khi đang xem Live */}
+        {isLive && (
+          <div
+            data-ptz-toolbar="true"
+            className="absolute top-3 right-3 z-40 flex flex-col items-end space-y-1 pointer-events-auto"
+          >
+            <div className="flex items-center space-x-1 bg-slate-950/85 backdrop-blur-md px-2 py-1 rounded-xl border border-white/20 shadow-2xl">
+              {/* Exposure Buttons: -0.5, 0, +0.5, +1.0 */}
+              <span className="text-[10px] text-slate-400 font-bold mr-1 flex items-center">
+                <Sun className="w-3 h-3 mr-0.5 text-amber-400" />
+                SÁNG:
+              </span>
+              {[-0.5, 0.0, 0.5, 1.0].map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSetRemoteExposure(b);
+                  }}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                    remoteExposure === b
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/50 ring-1 ring-amber-300 font-black'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+                  }`}
+                  title={`Chỉnh bù sáng camera iPhone ${b > 0 ? `+${b}` : b} EV`}
+                >
+                  {b === 0 ? '0' : (b > 0 ? `+${b}` : b)}
+                </button>
+              ))}
+
+              <span className="w-px h-3.5 bg-white/20 mx-1" />
+
+              {/* Re-focus Button */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const targetRoom = roomId || stream?.userId || stream?.streamKey || '';
+                  if (socket) {
+                    socket.emit('camera_control', { roomId: targetRoom, action: 'focus', x: 0.5, y: 0.5 });
+                    showModeNotice('live', 'TỰ ĐỘNG LẤY NÉT', 'Đã yêu cầu iPhone lấy nét lại tâm bàn', '');
+                  }
+                }}
+                className="px-1.5 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 text-[10px] font-mono font-bold flex items-center space-x-1 transition-all cursor-pointer border border-emerald-500/30"
+                title="Lấy nét lại tâm bàn (Center Auto-Focus)"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                <span>Nét Tâm</span>
+              </button>
+            </div>
+
+            <div className="text-[9px] text-slate-400/90 font-medium bg-black/60 backdrop-blur px-2 py-0.5 rounded-md pointer-events-none border border-white/5">
+              💡 Chạm vào bàn Live để lấy nét điểm đó
+            </div>
+          </div>
         )}
 
         {textOverlays.map((item) => (
@@ -2347,138 +2901,118 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             hasFrame — vì effect khởi tạo HLS cần videoRef.current tồn tại TRƯỚC khi có frame đầu
             tiên. Nếu ẩn video đằng sau `hasFrame ? ... : ...` sẽ tạo deadlock: video chỉ mount khi
             hasFrame=true, nhưng hasFrame chỉ được set true SAU khi HLS đã load được vào video đó. */}
-        {/* SVG Edge-Sharpening Filter (Unsharp Mask Kernel) để khử mờ viền số và chất bài khi tua chậm */}
-        <svg className="absolute w-0 h-0 pointer-events-none" aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0 }}>
-          <defs>
-            <filter id="slomo-sharp-filter">
-              <feConvolveMatrix
-                order="3"
-                preserveAlpha="true"
-                kernelMatrix="0 -0.5 0 -0.5 3.0 -0.5 0 -0.5 0"
-              />
-            </filter>
-          </defs>
-        </svg>
-
         {/* Thẻ 2: HLS DVR Replay & HLS Live Fallback (MÀN HÌNH TO KHI TUA) */}
         <video
           ref={replayVideoRef}
           className={`w-full h-full object-contain bg-black transition-opacity duration-150 ${
-            (!isLive || !hasLiveFrame) && hasFrame ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+            !isLive || !hasLiveFrame ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-0 invisible z-0 pointer-events-none'
           }`}
           style={{
-            transform: !isLive
-              ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
-              : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+            transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)}) translateZ(0)`,
             transition: 'transform 0.1s ease-out',
             position: 'absolute',
             inset: 0,
-            imageRendering: '-webkit-optimize-contrast' as any,
-            filter: isSharpBoost ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
+            imageRendering: 'auto' as any,
+            willChange: 'transform',
+            filter: (!isMobileDevice && isSharpBoost) ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
           }}
           playsInline
-          muted={true}
+          muted={isLive ? true : (isMuted || playbackRate !== 1.0)}
         />
 
         {/* Thẻ 1: Live WebRTC
             - Khi LIVE: Màn hình to toàn bộ.
-            - Khi TUA: Cửa sổ PiP nhỏ có thể kéo thả di chuyển tự do (sang trái/phải), chỉnh to/nhỏ linh hoạt */}
+            - Khi TUA: Ẩn hoàn toàn để dồn 100% GPU cho màn hình tua lại sắc nét, mượt mà và sáng rõ nhất (không có ô PiP che khuất) */}
         <div
-          data-pip-window={!isLive ? 'true' : undefined}
-          onMouseDown={(e) => {
-            if (!isLive) {
-              e.preventDefault();
-              handlePipMouseDown(e.clientX, e.clientY);
-            }
-          }}
-          onTouchStart={(e) => {
-            if (!isLive) {
-              handlePipTouchStart(e);
-            }
-          }}
           style={
-            !isLive
+            !isLive && hasLiveFrame
               ? {
-                  position: 'absolute',
-                  left: pipPos ? `${pipPos.xPercent}%` : undefined,
-                  right: pipPos ? undefined : '0.75rem',
-                  top: pipPos ? `${pipPos.yPercent}%` : '0.75rem',
                   width: `${pipWidth}px`,
-                  zIndex: 35,
-                  cursor: isPipDragging ? 'grabbing' : 'grab',
-                  touchAction: 'none',
+                  aspectRatio: '16 / 9',
+                  left: pipPos ? `${pipPos.xPercent}%` : undefined,
+                  right: pipPos ? undefined : '12px',
+                  top: pipPos ? `${pipPos.yPercent}%` : '12px'
                 }
               : undefined
           }
+          onClick={isLive ? handleLiveVideoClick : undefined}
+          onMouseDown={!isLive ? (e) => handlePipMouseDown(e.clientX, e.clientY) : undefined}
+          onTouchStart={!isLive ? handlePipTouchStart : undefined}
           className={`select-none ${
             isLive
-              ? 'absolute inset-0 w-full h-full z-10 pointer-events-auto'
-              : 'aspect-[9/16] sm:aspect-video rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border-2 border-red-500/90 bg-black group ring-4 ring-black/70 shadow-black'
-          } ${isPipDragging ? '' : 'transition-[top,left] duration-150 ease-out'}`}
-          title={!isLive ? 'Kéo để di chuyển, chạm để về Live' : undefined}
+              ? hasLiveFrame
+                ? 'absolute inset-0 w-full h-full z-10 opacity-100 pointer-events-auto'
+                : 'absolute inset-0 w-full h-full z-0 opacity-0 pointer-events-none'
+              : hasLiveFrame
+                ? `absolute z-30 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black pointer-events-auto ${isPipDragging ? 'cursor-grabbing scale-[1.02]' : 'cursor-grab hover:border-red-400'}`
+                : 'hidden pointer-events-none opacity-0'
+          }`}
         >
           <video
             ref={liveVideoRef}
             className="w-full h-full object-contain bg-black pointer-events-none opacity-100"
             style={{
-              transform: isLive
-                ? `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom}) scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`
-                : `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)})`,
+              transform: `scaleX(${isFlipped ? -1 : 1}) rotate(${rotation}deg) scale(${rotation % 180 === 0 ? 1 : (sourceIsPortrait ? 16 / 9 : 9 / 16)}) translateZ(0)`,
               transition: 'transform 0.1s ease-out',
-              imageRendering: '-webkit-optimize-contrast' as any,
-              filter: isSharpBoost && isLive ? 'url(#slomo-sharp-filter) contrast(1.10) saturate(1.12) brightness(1.02)' : 'none'
+              imageRendering: 'auto' as any,
+              willChange: 'transform',
+              filter: (!isMobileDevice && isSharpBoost && isLive) ? 'contrast(1.15) brightness(1.1) saturate(1.05)' : 'none'
             }}
             playsInline
             muted={isMuted}
             autoPlay
           />
+        </div>
 
-          {/* Huy hiệu và thanh công cụ điều khiển trên màn nhỏ PiP */}
-          {!isLive && (
-            <>
-              {/* Nhãn LIVE nhấp nháy ở góc trên-trái */}
-              <div className="absolute top-1.5 left-1.5 flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-red-600/90 text-white font-bold text-[9px] sm:text-[10px] uppercase shadow tracking-wider pointer-events-none">
+        {!isLive && hasLiveFrame && (
+          <div
+            className="absolute z-30 rounded-xl overflow-hidden pointer-events-none select-none"
+            style={{
+              width: `${pipWidth}px`,
+              aspectRatio: '16 / 9',
+              left: pipPos ? `${pipPos.xPercent}%` : undefined,
+              right: pipPos ? undefined : '12px',
+              top: pipPos ? `${pipPos.yPercent}%` : '12px'
+            }}
+          >
+            <div className="absolute top-0 inset-x-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-b from-black/85 via-black/40 to-transparent">
+              <div className="flex items-center space-x-1 bg-red-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                <span>LIVE</span>
+                <span>{hasLiveFrame ? 'LIVE (0.2s)' : 'LIVE'}</span>
               </div>
-
-              {/* Các nút bấm nhanh ở góc trên-phải: Đổi góc Trái/Phải & Đổi kích thước To/Nhỏ */}
-              <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 z-40">
-                {/* Nút chuyển nhanh góc Trái <-> Phải */}
+              <div className="flex items-center space-x-1 pointer-events-auto">
                 <button
                   type="button"
                   onClick={togglePipCorner}
-                  onTouchEnd={togglePipCorner}
-                  className="p-1 rounded-md bg-black/70 hover:bg-black/95 text-slate-200 hover:text-white backdrop-blur border border-white/20 shadow active:scale-95 cursor-pointer"
-                  title="Chuyển góc Trái / Phải"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  className="px-1.5 py-0.5 rounded bg-slate-900/85 hover:bg-slate-800 text-white text-[9px] font-bold border border-white/20"
+                  title="Đổi góc Trái / Phải"
                 >
-                  <ArrowLeftRight className="w-3 h-3 text-amber-300" />
+                  ⇄
                 </button>
-
-                {/* Nút đổi kích thước To / Vừa / Nhỏ */}
                 <button
                   type="button"
                   onClick={cyclePipSize}
-                  onTouchEnd={cyclePipSize}
-                  className="p-1 rounded-md bg-black/70 hover:bg-black/95 text-slate-200 hover:text-white backdrop-blur border border-white/20 shadow active:scale-95 cursor-pointer"
-                  title="Đổi kích thước To/Nhỏ"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  className="px-1.5 py-0.5 rounded bg-slate-900/85 hover:bg-slate-800 text-white text-[9px] font-bold border border-white/20"
+                  title="Đổi cỡ khung Live"
                 >
-                  <Maximize className="w-3 h-3 text-emerald-300" />
+                  ⤢
                 </button>
               </div>
-
-              {/* Tay nắm kéo góc dưới-phải để kéo giãn to/nhỏ tự do */}
-              <div
-                onMouseDown={handlePipResizeStart}
-                onTouchStart={handlePipResizeStart}
-                className="absolute bottom-0 right-0 w-6 h-6 flex items-end justify-end p-1 cursor-nwse-resize z-40 hover:opacity-100 opacity-70 active:opacity-100"
-                title="Kéo góc để phóng to/thu nhỏ"
-              >
-                <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-amber-400 rounded-br-sm" />
-              </div>
-            </>
-          )}
-        </div>
+            </div>
+            <div
+              onMouseDown={handlePipResizeStart}
+              onTouchStart={handlePipResizeStart}
+              className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 text-white/80 hover:text-white bg-black/50 rounded-tl pointer-events-auto"
+              title="Kéo để chỉnh kích thước khung Live"
+            >
+              <span className="text-[9px] leading-none select-none">◢</span>
+            </div>
+          </div>
+        )}
 
         {!hasFrame && !hasLiveFrame && (
           <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center space-y-1.5 sm:space-y-2 text-slate-500 z-20">
@@ -2586,23 +3120,121 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       {/* Controls Bar */}
       <div className="p-2 sm:p-2.5 bg-slate-900/95 space-y-1.5 border-t border-white/5">
         <div className="flex items-center justify-between gap-2 pb-1">
-          <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[11px] sm:text-xs font-black font-mono ${
-            isLive
-              ? 'bg-red-600/20 text-red-300 border-red-500/40'
-              : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-          }`}>
-            <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-red-400 animate-pulse' : 'bg-amber-400'}`} />
-            {isLive ? 'CHẾ ĐỘ: LIVE - TRỰC TIẾP' : `CHẾ ĐỘ: SLOW - ${playbackRate}x`}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[11px] sm:text-xs font-black font-mono ${
+              isLive
+                ? 'bg-red-600/20 text-red-300 border-red-500/40'
+                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-red-400 animate-pulse' : 'bg-amber-400'}`} />
+              {isLive ? 'CHẾ ĐỘ: LIVE - TRỰC TIẾP' : `CHẾ ĐỘ: SLOW - ${playbackRate}x`}
+            </div>
+            {streamDimensions && (
+              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/10 text-[10px] font-mono font-bold">
+                {streamDimensions.width}x{streamDimensions.height}
+              </span>
+            )}
+
+            {/* Thanh đo tốc độ mạng & Ping 2 chặng: iPhone -> Server & Web <- Server */}
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              {/* Chặng 1: iPhone -> Server */}
+              <div 
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 border border-slate-700/60 text-[10px] sm:text-[11px] font-mono font-bold shadow-sm"
+                title="Tốc độ đẩy luồng và độ trễ từ iPhone tới Server"
+              >
+                <span className={`w-2 h-2 rounded-full ${
+                  !phoneStats || !phoneStats.isStreaming ? 'bg-slate-500' :
+                  (phoneStats.ping < 80 ? 'bg-emerald-400' : (phoneStats.ping < 180 ? 'bg-amber-400' : 'bg-red-500 animate-pulse'))
+                }`} />
+                <span className="text-slate-400">📱 iPhone:</span>
+                <span className="text-white">{phoneStats && phoneStats.isStreaming ? `${phoneStats.bitrate} Mbps` : 'Sẵn sàng'}</span>
+                {phoneStats && phoneStats.isStreaming && (
+                  <>
+                    <span className="text-amber-400 font-extrabold">• {phoneStats.fps} FPS</span>
+                    <span className="text-cyan-400 font-extrabold">• {phoneStats.ping}ms</span>
+                  </>
+                )}
+              </div>
+
+              {/* Chặng 2: Web <- Server */}
+              <div 
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 border border-slate-700/60 text-[10px] sm:text-[11px] font-mono font-bold shadow-sm"
+                title="Tốc độ tải video và độ trễ từ Web tới Server"
+              >
+                <span className={`w-2 h-2 rounded-full ${
+                  webPing === null ? 'bg-slate-500' :
+                  (webPing < 80 ? 'bg-emerald-400' : (webPing < 180 ? 'bg-amber-400' : 'bg-red-500'))
+                }`} />
+                <span className="text-slate-400">💻 Web:</span>
+                <span className="text-white">{webBitrate !== null ? `${webBitrate.toFixed(1)} Mbps` : '--'}</span>
+                <span className="text-cyan-400 font-extrabold">{webPing !== null ? `• ${webPing}ms` : ''}</span>
+              </div>
+            </div>
           </div>
-          {!isLive && (
-            <button
-              type="button"
-              onClick={() => jumpToLive()}
-              className="px-3 py-1 rounded-full bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold transition-all active:scale-95"
-            >
-              VỀ LIVE
-            </button>
-          )}
+          <div className="flex items-center gap-1.5">
+            {scheduledSlow && !scheduledSlow.triggered ? (
+              <div className="flex items-center gap-1">
+                <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border bg-cyan-500 text-slate-950 border-cyan-300 shadow-sm animate-pulse">
+                  <span>⏳</span>
+                  <span>Đang hẹn Slow {scheduledSlow.speed}x...</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    scheduledSlowRef.current = null;
+                    setScheduledSlow(null);
+                    showModeNotice('live', 'ĐÃ HỦY CỜ HẸN', 'Đã hủy lệnh tự động quay chậm', '');
+                  }}
+                  className="px-1.5 py-1 rounded-full text-[11px] font-bold text-slate-400 hover:text-red-400 transition-all"
+                  title="Hủy mốc hẹn"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : scheduledSlow ? (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => jumpToScheduledSlow()}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer bg-cyan-500/90 hover:bg-cyan-400 text-slate-950 border-cyan-300 shadow-sm"
+                  title="Bấm để phát lại mốc hẹn (S)"
+                >
+                  <span>🚩</span>
+                  <span>Mốc Hẹn {scheduledSlow.speed}x (S)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    scheduledSlowRef.current = null;
+                    setScheduledSlow(null);
+                  }}
+                  className="px-1.5 py-1 rounded-full text-[11px] font-bold text-slate-400 hover:text-red-400 transition-all"
+                  title="Xóa mốc hẹn"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => toggleScheduledSlow()}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300 shadow-sm"
+                title="Cắm cờ hẹn tự động Slow sau khi lật bài (Phím tắt: S)"
+              >
+                <span>🎯</span>
+                <span>Hẹn Slow {autoSlowSpeed}x (S)</span>
+              </button>
+            )}
+            {!isLive && (
+              <button
+                type="button"
+                onClick={() => jumpToLive()}
+                className="px-3 py-1 rounded-full bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold transition-all active:scale-95"
+              >
+                VỀ LIVE
+              </button>
+            )}
+          </div>
         </div>
 
         {/* DVR Seekbar: YouTube-style với hover tooltip, progress fill, drag mượt */}
@@ -2626,16 +3258,25 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             <div className="absolute inset-x-0 rounded-full overflow-hidden transition-all"
               style={{ height: isDraggingSeek || seekHoverTime !== null ? 6 : 4, top: '50%', transform: 'translateY(-50%)' }}>
               {/* Grey track */}
-              <div className="absolute inset-0 bg-slate-600/70" />
-              {/* Progress fill */}
+              <div className="absolute inset-0 bg-slate-800/90 border border-slate-700/50" />
+              
+              {/* Dải HLS Buffer: Toàn bộ vùng đã nạp sẵn trong RAM (nổi bật màu vàng hổ phách) */}
               <div
-                className="absolute left-0 top-0 h-full rounded-full"
-                style={{
-                  width: `${seekFillRatio * 100}%`,
-                  background: isLive ? '#ef4444' : '#6366f1',
-                  transition: isDraggingSeek ? 'none' : 'width 0.1s linear'
-                }}
+                className="absolute left-0 top-0 h-full bg-gradient-to-r from-indigo-500/30 via-amber-400/40 to-amber-400/70 rounded-full pointer-events-none transition-all duration-300"
+                style={{ width: `${hlsBufferRatio * 100}%` }}
+                title="Vùng video HLS nét căng đã lưu sẵn trong RAM"
               />
+
+              {/* Progress fill: Khi live chỉ chạy tới mép Live, khi replay chạy tới điểm tua */}
+              {!isLive && (
+                <div
+                  className="absolute left-0 top-0 h-full rounded-full shadow-sm bg-indigo-500"
+                  style={{
+                    width: `${seekFillRatio * 100}%`,
+                    transition: isDraggingSeek ? 'none' : 'width 0.1s linear'
+                  }}
+                />
+              )}
               {/* Hover preview */}
               {seekHoverTime !== null && seekbarRef.current && (
                 <div
@@ -2648,7 +3289,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
-            {/* Thumb - chỉ hiện khi hover/drag */}
+            {/* Thumb chỉ hiện khi hover/drag hoặc đang ở chế độ Replay */}
             <div
               className="absolute rounded-full shadow-lg pointer-events-none transition-transform"
               style={{
@@ -2657,23 +3298,72 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 left: `${seekFillRatio * 100}%`,
                 top: '50%',
                 transform: 'translate(-50%, -50%)',
-                background: isLive ? '#ef4444' : '#818cf8',
-                opacity: seekHoverTime !== null || isDraggingSeek ? 1 : 0,
+                background: !isLive ? '#818cf8' : '#ef4444',
+                opacity: (!isLive || seekHoverTime !== null || isDraggingSeek) ? 1 : 0,
                 boxShadow: isDraggingSeek ? '0 0 0 4px rgba(99,102,241,0.3)' : 'none',
                 transition: isDraggingSeek ? 'none' : 'opacity 0.15s, width 0.1s, height 0.1s',
               }}
             />
 
+            {/* 1. CỜ HẸN SLOW (Marker xanh neon) nếu người dùng đã bấm hẹn */}
+            {flagMarkerRatio !== null && (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 z-20 flex flex-col items-center cursor-pointer group/flag select-none"
+                style={{ left: `${flagMarkerRatio * 100}%`, transform: 'translate(-50%, -50%)' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  jumpToScheduledSlow();
+                }}
+                title={`Bấm để nhảy tới mốc hẹn ${scheduledSlow?.speed}x`}
+              >
+                <span className="px-1.5 py-0.2 rounded bg-cyan-400 text-slate-950 font-black text-[9px] shadow-lg animate-pulse mb-0.5 whitespace-nowrap hover:scale-110 transition-transform">
+                  🚩 HẸN {scheduledSlow?.speed}x
+                </span>
+                <span className="w-1.5 h-4 bg-cyan-300 rounded-full shadow-md shadow-cyan-400/80"></span>
+              </div>
+            )}
+
+            {/* 2. CHẤM MÀU VÀNG: HLS ĐÃ NẠP TỚI ĐÂU (Hiện kể cả khi đang xem Live) */}
+            {hlsBufferRatio > 0 && (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 pointer-events-none z-10 transition-all duration-300"
+                style={{ left: `${hlsBufferRatio * 100}%`, transform: 'translate(-50%, -50%)' }}
+                title="HLS đã tải tới đây (sẵn sàng tua lại 0ms)"
+              >
+                <div className="relative flex items-center justify-center">
+                  <span className="w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-white shadow-lg animate-pulse"></span>
+                </div>
+              </div>
+            )}
+
+            {/* 3. CHẤM MÀU ĐỎ LIVE: Mép video thời gian thực */}
+            {isLive && (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 pointer-events-none z-10 transition-all duration-200"
+                style={{ left: `100%`, transform: 'translate(-50%, -50%)' }}
+              >
+                <div className="relative flex items-center justify-center">
+                  <span className="absolute w-4 h-4 rounded-full bg-red-500 opacity-75 animate-ping"></span>
+                  <span className="relative w-3 h-3 rounded-full bg-red-500 border-2 border-white shadow-lg"></span>
+                </div>
+              </div>
+            )}
+
             {/* Tooltip thời gian hover với độ chính xác phần trăm giây */}
             {seekHoverTime !== null && (
               <div
-                className="absolute pointer-events-none z-20 bottom-full mb-2 px-2 py-0.5 rounded-md bg-slate-900/95 text-white text-[11px] font-mono font-bold border border-white/10 shadow-xl whitespace-nowrap"
+                className="absolute pointer-events-none z-20 bottom-full mb-2 px-2.5 py-1 rounded-lg bg-slate-900/98 text-white text-[11px] font-mono font-bold border border-indigo-500/40 shadow-2xl whitespace-nowrap flex items-center space-x-1.5"
                 style={{
-                  left: Math.max(20, Math.min((seekbarRef.current?.getBoundingClientRect().width ?? 200) - 20, seekHoverX)),
+                  left: Math.max(40, Math.min((seekbarRef.current?.getBoundingClientRect().width ?? 200) - 40, seekHoverX)),
                   transform: 'translateX(-50%)',
                 }}
               >
-                {formatTime(seekHoverTime - timelineStart, true)}
+                <span>{formatTime(seekHoverTime - timelineStart, true)}</span>
+                {bufferedRanges.some(b => seekHoverTime >= b.start - 0.2 && seekHoverTime <= b.end + 0.2) ? (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-sans">Đã nạp RAM</span>
+                ) : (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-700 text-slate-400 font-sans">Chưa có</span>
+                )}
               </div>
             )}
           </div>
@@ -2741,11 +3431,17 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
 
             <button
               onClick={() => {
-                const v = videoRef.current;
-                if (!v) return;
-                setVolume(isMuted ? 1 : 0);
-                v.muted = !isMuted;
-                setIsMuted(!isMuted);
+                const nextMuted = !isMuted;
+                setVolume(nextMuted ? 0 : 1);
+                setIsMuted(nextMuted);
+                if (liveVideoRef.current) {
+                  liveVideoRef.current.muted = nextMuted;
+                  if (!nextMuted) liveVideoRef.current.play().catch(() => {});
+                }
+                if (replayVideoRef.current) {
+                  replayVideoRef.current.muted = !hasLiveFrame ? nextMuted : true;
+                  if (!hasLiveFrame && !nextMuted) replayVideoRef.current.play().catch(() => {});
+                }
               }}
               className="p-1.5 sm:p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 transition-all flex-shrink-0"
               title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
@@ -2846,7 +3542,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             ) : (
               <div className="flex items-center space-x-1 px-1.5 py-0.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-400 text-[10px] font-bold flex-shrink-0">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
-                <span>LIVE</span>
+                <span>{hasLiveFrame ? 'LIVE (0.2s)' : 'LIVE'}</span>
               </div>
             )}
 
@@ -2935,8 +3631,14 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               onClick={() => {
                 const nextMuted = !isMuted;
                 setIsMuted(nextMuted);
+                setVolume(nextMuted ? 0 : 1);
                 if (liveVideoRef.current) {
                   liveVideoRef.current.muted = nextMuted;
+                  if (!nextMuted) liveVideoRef.current.play().catch(() => {});
+                }
+                if (replayVideoRef.current) {
+                  replayVideoRef.current.muted = !hasLiveFrame ? nextMuted : true;
+                  if (!hasLiveFrame && !nextMuted) replayVideoRef.current.play().catch(() => {});
                 }
               }}
               className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
@@ -3098,22 +3800,6 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
             </div>
 
-            {/* Nút Bật/Tắt Bảng nhập số nổi (Chỉ xuất hiện khi ở chế độ phóng to Toàn màn hình) */}
-            {isFullscreen && (
-              <button
-                type="button"
-                onClick={() => setIsLiveKeypadOpen(prev => !prev)}
-                className={`p-1.5 rounded-lg border transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm active:scale-95 ${
-                  isLiveKeypadOpen
-                    ? 'bg-amber-500/25 border-amber-400 text-amber-300 ring-1 ring-amber-400'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-white/10'
-                }`}
-                title={isLiveKeypadOpen ? 'Ẩn Bảng nhập số Live' : 'Mở Bảng nhập số Live (Bắn số về App)'}
-              >
-                <Calculator className="w-3.5 h-3.5" />
-              </button>
-            )}
-
             {/* Nút Phóng to toàn màn hình như YouTube */}
             <button
               type="button"
@@ -3256,29 +3942,139 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         </div>
       )}
 
-      {/* Nút mở nhanh Bảng nhập số trên màn hình khi Fullscreen mà lỡ đóng */}
-      {isFullscreen && !isLiveKeypadOpen && (
-        <button
-          type="button"
-          onClick={() => setIsLiveKeypadOpen(true)}
-          className="absolute top-4 left-4 z-[999990] flex items-center space-x-1.5 px-3 py-1.5 rounded-xl backdrop-blur-md bg-amber-500/90 hover:bg-amber-400 text-black font-bold text-xs shadow-xl transition-all active:scale-95 border border-white/20 cursor-pointer"
-          title="Mở Bảng nhập số Live"
-        >
-          <Calculator className="w-4 h-4 text-black" />
-          <span>Mở Bảng Nhập</span>
-        </button>
+      {/* CỤM NÚT NỔI: HẸN SLOW TỰ ĐỘNG TẠI FULLSCREEN */}
+      {isFullscreen && (
+        <div className="absolute top-4 right-4 z-[999990] flex items-center gap-2">
+          {isLive ? (
+            <>
+              {scheduledSlow && !scheduledSlow.triggered ? (
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md border bg-cyan-500 text-slate-950 border-cyan-300 ring-2 ring-cyan-400/50 animate-pulse"
+                  >
+                    <span>⏳</span>
+                    <span>ĐANG HẸN SLOW {scheduledSlow.speed}x (Tự động sau 3s)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      scheduledSlowRef.current = null;
+                      setScheduledSlow(null);
+                      showModeNotice('live', 'ĐÃ HỦY CỜ HẸN', 'Đã hủy lệnh tự động quay chậm', '');
+                    }}
+                    className="p-1.5 rounded-xl bg-slate-900/90 text-slate-400 hover:text-red-400 border border-white/20 transition-all text-xs font-bold"
+                    title="Hủy mốc hẹn"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => toggleScheduledSlow()}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300"
+                  title="Cắm cờ hẹn tự động Slow sau khi lật bài (Phím tắt: S)"
+                >
+                  <span>🎯</span>
+                  <span>HẸN SLOW {autoSlowSpeed}x (S)</span>
+                </button>
+              )}
+
+              <div className="bg-slate-900/95 border border-white/20 rounded-xl p-0.5 flex items-center gap-0.5 text-[11px] font-mono font-bold shadow-xl">
+                {[0.1, 0.25, 0.5].map((spd) => (
+                  <button
+                    key={spd}
+                    type="button"
+                    onClick={() => {
+                      setAutoSlowSpeed(spd);
+                      if (scheduledSlow) {
+                        const updated = { ...scheduledSlow, speed: spd };
+                        scheduledSlowRef.current = updated;
+                        setScheduledSlow(updated);
+                      }
+                    }}
+                    className={`px-2 py-1 rounded-lg transition-all ${
+                      autoSlowSpeed === spd
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {spd}x
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              {scheduledSlow && (
+                <button
+                  type="button"
+                  onClick={() => jumpToScheduledSlow()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs shadow-xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-cyan-500/90 hover:bg-cyan-400 text-slate-950 border-cyan-300"
+                  title="Tua lại đúng mốc hẹn"
+                >
+                  <span>🚩</span>
+                  <span>Về mốc hẹn ({scheduledSlow.speed}x)</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => jumpToLive()}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-2xl backdrop-blur-md transition-all active:scale-95 border cursor-pointer bg-red-600 hover:bg-red-500 text-white border-red-400 animate-pulse"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>VỀ LIVE (Enter)</span>
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Bảng nhập số nổi truyền realtime về app CHỈ hiển thị khi phóng to màn hình live */}
+      {/* Thanh Buffer Bar ở đáy màn hình khi Fullscreen (chiều cao 5px hiển thị Chấm Vàng & Chấm Đỏ) */}
       {isFullscreen && (
-        <LiveFloatingKeypad
-          isOpen={isLiveKeypadOpen}
-          onClose={() => setIsLiveKeypadOpen(false)}
-          socket={socket || null}
-          currentRoomId={roomId || ''}
-          roomName={roomName}
-          container={playerContainerRef.current}
-        />
+        <div className="absolute bottom-0 inset-x-0 h-1.5 bg-slate-900 border-t border-slate-800 pointer-events-none z-[999980]">
+          {/* Dải HLS Buffer màu hổ phách */}
+          <div
+            className="absolute left-0 top-0 h-full bg-amber-400/60 transition-all duration-300"
+            style={{ width: `${hlsBufferRatio * 100}%` }}
+          />
+          {/* Vạch phát khi Replay */}
+          {!isLive && (
+            <div
+              className="absolute left-0 top-0 h-full bg-indigo-500 shadow-sm"
+              style={{ width: `${seekFillRatio * 100}%` }}
+            />
+          )}
+
+          {/* Cờ Hẹn tại đáy Fullscreen */}
+          {flagMarkerRatio !== null && (
+            <div
+              className="absolute bottom-0 -translate-x-1/2 w-2 h-4 bg-cyan-400 shadow-lg shadow-cyan-400/80 cursor-pointer pointer-events-auto z-20"
+              style={{ left: `${flagMarkerRatio * 100}%` }}
+              onClick={(e) => {
+                e.stopPropagation();
+                jumpToScheduledSlow();
+              }}
+              title={`Mốc hẹn ${scheduledSlow?.speed}x`}
+            />
+          )}
+
+          {/* Chấm Vàng HLS tại đáy Fullscreen */}
+          {hlsBufferRatio > 0 && (
+            <div
+              className="absolute bottom-[-1px] -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-amber-400 border border-white shadow"
+              style={{ left: `${hlsBufferRatio * 100}%` }}
+            />
+          )}
+
+          {/* Chấm Đỏ Live tại đáy Fullscreen */}
+          {isLive && (
+            <div
+              className="absolute bottom-[-1px] -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-red-500 border border-white shadow animate-pulse"
+              style={{ left: `100%` }}
+            />
+          )}
+        </div>
       )}
     </div>
   );

@@ -20,6 +20,9 @@ public class NetworkManager: ObservableObject {
     @Published public var currentUsername: String? = nil
     @Published public var currentUserId: String? = nil
     @Published public var userExpiresAt: String? = nil
+    @Published public var allowedMode: String = "mode1"
+    @Published public var effectiveMode: String = "mode1"
+    @Published public var isAiModeEnabled: Bool = false
     @Published public var activeStreamId: String? = nil
     @Published public var streamKey: String? = nil
     @Published public var rtmpIngestUrl: String? = nil
@@ -39,23 +42,14 @@ public class NetworkManager: ObservableObject {
     }
 
     private init() {
-        let savedUrl = UserDefaults.standard.string(forKey: "saved_server_url")
-        if savedUrl == nil || savedUrl?.contains("157.66.100.10") == true || savedUrl?.contains("slomoview.stream") == true {
-            self.serverURL = NetworkManager.defaultServerURL
-            UserDefaults.standard.set(NetworkManager.defaultServerURL, forKey: "saved_server_url")
-        } else {
-            self.serverURL = savedUrl ?? NetworkManager.defaultServerURL
-        }
+        self.serverURL = NetworkManager.defaultServerURL
+        UserDefaults.standard.set(NetworkManager.defaultServerURL, forKey: "saved_server_url")
 
-        let savedHost = UserDefaults.standard.string(forKey: "custom_rtmp_host")
-        if savedHost == nil || savedHost == "157.66.100.10" || savedHost?.contains("slomoview.stream") == true {
-            self.customRtmpHost = NetworkManager.defaultRtmpHost
-            UserDefaults.standard.set(NetworkManager.defaultRtmpHost, forKey: "custom_rtmp_host")
-        } else {
-            self.customRtmpHost = savedHost ?? NetworkManager.defaultRtmpHost
-        }
+        self.customRtmpHost = NetworkManager.defaultRtmpHost
+        UserDefaults.standard.set(NetworkManager.defaultRtmpHost, forKey: "custom_rtmp_host")
 
-        self.customRtmpPort = UserDefaults.standard.string(forKey: "custom_rtmp_port") ?? NetworkManager.defaultRtmpPort
+        self.customRtmpPort = NetworkManager.defaultRtmpPort
+        UserDefaults.standard.set(NetworkManager.defaultRtmpPort, forKey: "custom_rtmp_port")
 
         // Khôi phục phiên đăng nhập đã lưu (ghi nhớ đăng nhập)
         if let token = UserDefaults.standard.string(forKey: "saved_auth_token"), !token.isEmpty {
@@ -63,6 +57,7 @@ public class NetworkManager: ObservableObject {
             self.currentUsername = UserDefaults.standard.string(forKey: "saved_username")
             self.currentUserId = UserDefaults.standard.string(forKey: "saved_user_id")
             self.userExpiresAt = UserDefaults.standard.string(forKey: "saved_user_expires_at")
+            self.applyAccountMode(allowed: "mode1", effective: "mode1")
             self.isAuthenticated = true
 
             // Tự động làm mới hạn dùng và thông tin tài khoản từ máy chủ
@@ -77,14 +72,14 @@ public class NetworkManager: ObservableObject {
         if clean.isEmpty { return clean }
 
         if !clean.hasPrefix("http://") && !clean.hasPrefix("https://") {
-            if clean.contains("trycloudflare.com") || clean.contains("ngrok") {
+            if clean.contains("trycloudflare.com") || clean.contains("ngrok") || clean.contains("slomoview.stream") {
                 clean = "https://\(clean)"
             } else {
                 clean = "http://\(clean)"
             }
         }
 
-        if clean.contains("trycloudflare.com") || clean.contains("ngrok") {
+        if clean.contains("trycloudflare.com") || clean.contains("ngrok") || clean.contains("slomoview.stream") {
             if clean.hasPrefix("http://") {
                 clean = clean.replacingOccurrences(of: "http://", with: "https://")
             }
@@ -95,6 +90,14 @@ public class NetworkManager: ObservableObject {
             clean.removeLast()
         }
         return clean
+    }
+
+    public func applyAccountMode(allowed: String?, effective: String?) {
+        self.allowedMode = "mode1"
+        self.effectiveMode = "mode1"
+        self.isAiModeEnabled = false
+        UserDefaults.standard.set("mode1", forKey: "saved_allowed_mode")
+        UserDefaults.standard.set("mode1", forKey: "saved_effective_mode")
     }
 
     private var apiBaseURL: String {
@@ -154,6 +157,7 @@ public class NetworkManager: ObservableObject {
                     self.currentUsername = user["username"] as? String
                     self.currentUserId = (user["id"] as? String) ?? (user["_id"] as? String)
                     self.userExpiresAt = user["expiresAt"] as? String
+                    self.applyAccountMode(allowed: user["allowedMode"] as? String, effective: user["effectiveMode"] as? String)
                     self.isAuthenticated = true
                     self.errorMessage = nil
 
@@ -224,6 +228,13 @@ public class NetworkManager: ObservableObject {
                 if let uname = user["username"] as? String {
                     self.currentUsername = uname
                     UserDefaults.standard.set(uname, forKey: "saved_username")
+                }
+                if let uid = (user["id"] as? String) ?? (user["_id"] as? String) {
+                    self.currentUserId = uid
+                    UserDefaults.standard.set(uid, forKey: "saved_user_id")
+                }
+                self.applyAccountMode(allowed: user["allowedMode"] as? String, effective: user["effectiveMode"] as? String)
+                if true {
                 }
                 completion?(true)
             }
@@ -333,6 +344,11 @@ public class NetworkManager: ObservableObject {
                 // sẽ báo lỗi "chưa cấu hình RTMP" thay vì mặc định localhost (gây crash qua 5G).
                 self.rtmpIngestUrl = json["rtmpIngestUrl"] as? String
                 self.hlsPlaylistUrl = streamObj["hlsPlaylistUrl"] as? String
+                self.applyAccountMode(allowed: json["allowedMode"] as? String, effective: json["effectiveMode"] as? String)
+                if let roiObj = json["roi"] as? [String: Any] {
+                    RoiSyncManager.shared.updateRoi(data: roiObj)
+                }
+                RoiSyncManager.shared.connect()
                 completion(true)
             }
         }.resume()

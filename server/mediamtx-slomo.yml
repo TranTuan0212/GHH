@@ -1,9 +1,20 @@
 logLevel: info
 
+readTimeout: 60s
+writeTimeout: 60s
+writeQueueSize: 16384
+udpMaxPayloadSize: 1472
+udpReadBufferSize: 33554432
+
+api: true
+apiAddress: 127.0.0.1:9997
+
 rtsp: true
 rtspAddress: 127.0.0.1:8554
 
-rtmp: false
+rtmp: true
+rtmpAddress: :1935
+rtmpEncryption: "no"
 hls: false
 
 webrtc: true
@@ -13,7 +24,7 @@ webrtcEncryption: false
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: true
-webrtcAdditionalHosts: ["161.248.146.201", "streamslo.date"]
+webrtcAdditionalHosts: ["161.248.146.201", "streamslo.date", "www.streamslo.date"]
 
 paths:
   all_others:

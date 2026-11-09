@@ -21,7 +21,7 @@ workflows:
           cd ios
           ls -la Podfile
           pod install --repo-update 2>&1 | tee $HOME/pod_install.log
-          ls -la SloMoLive.xcworkspace || echo "WORKSPACE_MISSING"
+          ls -la SloMoLive.xcworkspace
           echo "=== Podfile.lock ==="
           cat Podfile.lock || echo "PODFILE_LOCK_MISSING"
           echo "=== LFLiveKit product in Pods dir? ==="

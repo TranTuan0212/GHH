@@ -2,7 +2,7 @@ platform :ios, '16.0'
 use_frameworks! :linkage => :static
 
 target 'SloMoLive' do
-  # RTMP push từ iOS lên Node Media Server (NMS).
+  # RTMP push từ iOS lên Node Media Server (NMS) / MediaMTX.
   # LFLiveKit đã được dùng trong CameraManager.swift để đẩy luồng H.264 120/240fps.
   pod 'LFLiveKit'
 end
@@ -17,18 +17,236 @@ post_install do |installer|
       config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
     end
 
-    # LFLiveKit enables B-frame reordering by default. At 120/240fps its RTMP publisher
-    # can emit non-monotonic DTS, which makes the server-side 60fps decoder stall. For this
-    # low-latency DVR pipeline, encode in display order (no B-frames) so PTS/DTS are monotonic.
     if target.name == 'LFLiveKit'
+      # 1. Patch LFHardwareVideoEncoder.m: B-frame off, Dynamic Quality, Keyframe interval
       encoder = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'coder', 'LFHardwareVideoEncoder.m')
       if File.exist?(encoder)
         source = File.read(encoder)
         patched = source.gsub(
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanTrue',
           'kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse'
+        ).gsub(
+          'VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel);',
+          "VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);\n        float customQuality = [[NSUserDefaults standardUserDefaults] floatForKey:@\"SloMoLive.videoQuality\"];\n        if (customQuality <= 0.0f || customQuality > 1.0f) { customQuality = 0.70f; }\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_Quality, (__bridge CFTypeRef)@(customQuality));\n        int64_t bytesPerSec = (int64_t)((_configuration.videoMaxBitRate > 0 ? _configuration.videoMaxBitRate : 8000000) * 1.2 / 8);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_DataRateLimits, (__bridge CFArrayRef)@[@(bytesPerSec), @(1)]);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2);\n        VTSessionSetProperty(compressionSession, kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2);"
+        ).gsub(
+          'if (frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {',
+          'if (frameCount <= 10 || frameCount % (int32_t)_configuration.videoMaxKeyframeInterval == 0) {'
         )
-        File.write(encoder, patched) if patched != source
+        if patched != source
+          File.write(encoder, patched)
+          puts '[Podfile] Patched LFHardwareVideoEncoder.m (B-frame off, Quality, Profile High, Keyframe)'
+        else
+          puts '[Podfile] WARNING: LFHardwareVideoEncoder.m patch pattern not found'
+        end
+      end
+
+      # 2. Patch LFLiveSession.h: Khai báo method pushVideo:timeStamp: để nhận Hardware PTS từ camera
+      session_h = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'LFLiveSession.h')
+      if File.exist?(session_h)
+        h_source = File.read(session_h)
+        h_patched = h_source.gsub(
+          '- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer;',
+          "- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer;\n- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer timeStamp:(uint64_t)timeStamp;"
+        )
+        if h_patched != h_source
+          File.write(session_h, h_patched)
+          puts '[Podfile] Patched LFLiveSession.h (declared pushVideo:timeStamp:)'
+        else
+          puts '[Podfile] WARNING: LFLiveSession.h pushVideo pattern not found'
+        end
+      end
+
+      # 3. Patch LFLiveSession.m: Triệt tiêu Timestamp Jitter bằng Hardware PTS và phân tách Video/Audio base timestamp
+      session_file = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'LFLiveSession.m')
+      if File.exist?(session_file)
+        sess_source = File.read(session_file)
+        old_push_video = "- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer{\n    if(self.captureType & LFLiveInputMaskVideo){\n        if (self.uploading) [self.videoEncoder encodeVideoData:pixelBuffer timeStamp:NOW];\n    }\n}"
+        new_push_video = "- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer{\n    [self pushVideo:pixelBuffer timeStamp:NOW];\n}\n\n- (void)pushVideo:(nullable CVPixelBufferRef)pixelBuffer timeStamp:(uint64_t)timeStamp{\n    if(self.captureType & LFLiveInputMaskVideo){\n        if (self.uploading) [self.videoEncoder encodeVideoData:pixelBuffer timeStamp:timeStamp];\n    }\n}"
+        
+        old_send_buffer = "- (void)pushSendBuffer:(LFFrame*)frame{\n    if(self.relativeTimestamps == 0){\n        self.relativeTimestamps = frame.timestamp;\n    }\n    frame.timestamp = [self uploadTimestamp:frame.timestamp];\n    [self.socket sendFrame:frame];\n}"
+        new_send_buffer = <<-'OBJC'.chomp
+- (void)pushSendBuffer:(LFFrame*)frame{
+    static uint64_t _relVideoTs = 0;
+    static uint64_t _relAudioTs = 0;
+    if (self.relativeTimestamps == 0) {
+        self.relativeTimestamps = frame.timestamp;
+        _relVideoTs = 0;
+        _relAudioTs = 0;
+    }
+    if ([frame isKindOfClass:[LFVideoFrame class]]) {
+        if (_relVideoTs == 0) _relVideoTs = frame.timestamp;
+        frame.timestamp = (frame.timestamp >= _relVideoTs) ? (frame.timestamp - _relVideoTs) : 0;
+    } else {
+        if (_relAudioTs == 0) _relAudioTs = frame.timestamp;
+        frame.timestamp = (frame.timestamp >= _relAudioTs) ? (frame.timestamp - _relAudioTs) : 0;
+    }
+    [self.socket sendFrame:frame];
+}
+OBJC
+
+        sess_patched = sess_source.gsub(
+          'if(frame.isKeyFrame && self.hasCaptureAudio) self.hasKeyFrameVideo = YES;',
+          'if(frame.isKeyFrame) { self.hasCaptureAudio = YES; self.hasKeyFrameVideo = YES; }'
+        ).gsub(
+          old_push_video,
+          new_push_video
+        ).gsub(
+          old_send_buffer,
+          new_send_buffer
+        )
+
+        # Adaptive bitrate steps
+        sess_patched = sess_patched.gsub(
+          'videoBitRate = videoBitRate + 50 * 1000;',
+          'videoBitRate = MIN(videoBitRate + 250 * 1000, _videoConfiguration.videoMaxBitRate);'
+        ).gsub(
+          'videoBitRate = videoBitRate - 100 * 1000;',
+          'videoBitRate = (videoBitRate > self.videoConfiguration.videoMinBitRate + 1000 * 1000) ? (videoBitRate - 1000 * 1000) : self.videoConfiguration.videoMinBitRate;'
+        )
+
+        if sess_patched != sess_source
+          File.write(session_file, sess_patched)
+          puts '[Podfile] Patched LFLiveSession.m (pushVideo:timeStamp:, Monotonic Video/Audio Timestamps, ABR)'
+        else
+          puts '[Podfile] WARNING: LFLiveSession.m patch pattern not found'
+        end
+      end
+
+      # 4. Patch LFLiveVideoConfiguration.m: Bỏ dummy AVCaptureSession
+      video_cfg = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'configuration', 'LFLiveVideoConfiguration.m')
+      if File.exist?(video_cfg)
+        cfg_source = File.read(video_cfg)
+        cfg_patched = cfg_source.gsub(
+          "- (LFLiveVideoSessionPreset)supportSessionPreset:(LFLiveVideoSessionPreset)sessionPreset {",
+          "- (LFLiveVideoSessionPreset)supportSessionPreset:(LFLiveVideoSessionPreset)sessionPreset {\n    return sessionPreset;"
+        )
+        if cfg_patched != cfg_source
+          File.write(video_cfg, cfg_patched)
+          puts '[Podfile] Patched LFLiveVideoConfiguration.m (bypass dummy AVCaptureSession)'
+        else
+          puts '[Podfile] WARNING: LFLiveVideoConfiguration.m patch pattern not found'
+        end
+      end
+
+      # 5. Patch LFStreamingBuffer.m: Tối ưu hàng đợi đệm trễ < 1.6s
+      ['publish', 'buffer'].each do |subdir|
+        streaming_buf = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', subdir, 'LFStreamingBuffer.m')
+        if File.exist?(streaming_buf)
+          buf_source = File.read(streaming_buf)
+          buf_patched = buf_source.gsub(
+            'defaultSendBufferMaxCount = 600;',
+            'defaultSendBufferMaxCount = 200;'
+          )
+          if buf_patched != buf_source
+            File.write(streaming_buf, buf_patched)
+            puts "[Podfile] Patched LFStreamingBuffer.m in #{subdir} (buffer max 200f)"
+          else
+            puts "[Podfile] WARNING: LFStreamingBuffer.m patch pattern not found in #{subdir}"
+          end
+        end
+      end
+
+      # 6. Patch LFStreamRtmpSocket.m: Eliminate dispatch ping-pong, sync audio sequence header, separate channels
+      ['LFStreamRtmpSocket.m', 'LFStreamRTMPSocket.m'].each do |sock_name|
+        rtmp_sock = File.join(target.project.path.dirname, 'LFLiveKit', 'LFLiveKit', 'publish', sock_name)
+        next unless File.exist?(rtmp_sock)
+        sock_source = File.read(rtmp_sock)
+        old_send_block = <<-'OBJC'.chomp
+            if ([frame isKindOfClass:[LFVideoFrame class]]) {
+                if (!_self.sendVideoHead) {
+                    _self.sendVideoHead = YES;
+                    if(!((LFVideoFrame*)frame).sps || !((LFVideoFrame*)frame).pps){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    [_self sendVideoHeader:(LFVideoFrame *)frame];
+                } else {
+                    [_self sendVideo:(LFVideoFrame *)frame];
+                }
+            } else {
+                if (!_self.sendAudioHead) {
+                    _self.sendAudioHead = YES;
+                    if(!((LFAudioFrame*)frame).audioInfo){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    [_self sendAudioHeader:(LFAudioFrame *)frame];
+                } else {
+                    [_self sendAudio:frame];
+                }
+            }
+OBJC
+        new_send_block = <<-'OBJC'.chomp
+            if ([frame isKindOfClass:[LFVideoFrame class]]) {
+                if (!_self.sendVideoHead) {
+                    if(!((LFVideoFrame*)frame).sps || !((LFVideoFrame*)frame).pps){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    _self.sendVideoHead = YES;
+                    [_self sendVideoHeader:(LFVideoFrame *)frame];
+                    if (!_self.sendAudioHead && _self.stream.audioConfiguration && _self.stream.audioConfiguration.asc) {
+                        _self.sendAudioHead = YES;
+                        unsigned char ascBody[4] = {0xAF, 0x00, (unsigned char)_self.stream.audioConfiguration.asc[0], (unsigned char)_self.stream.audioConfiguration.asc[1]};
+                        [_self sendPacket:RTMP_PACKET_TYPE_AUDIO data:ascBody size:4 nTimestamp:0];
+                    }
+                    [_self sendVideo:(LFVideoFrame *)frame];
+                } else {
+                    [_self sendVideo:(LFVideoFrame *)frame];
+                }
+            } else {
+                if (!_self.sendAudioHead) {
+                    if(!((LFAudioFrame*)frame).audioInfo){
+                        _self.isSending = NO;
+                        return;
+                    }
+                    _self.sendAudioHead = YES;
+                    [_self sendAudioHeader:(LFAudioFrame *)frame];
+                    if (_self.sendVideoHead) {
+                        [_self sendAudio:frame];
+                    }
+                } else if (_self.sendVideoHead) {
+                    [_self sendAudio:frame];
+                }
+            }
+OBJC
+        old_channel_block = <<-'OBJC'.chomp
+    rtmp_pack.m_nChannel = 0x04;
+    rtmp_pack.m_headerType = RTMP_PACKET_SIZE_LARGE;
+    if (RTMP_PACKET_TYPE_AUDIO == nPacketType && size != 4) {
+        rtmp_pack.m_headerType = RTMP_PACKET_SIZE_MEDIUM;
+    }
+OBJC
+        new_channel_block = <<-'OBJC'.chomp
+    rtmp_pack.m_nChannel = (RTMP_PACKET_TYPE_AUDIO == nPacketType) ? 0x05 : 0x04;
+    rtmp_pack.m_headerType = RTMP_PACKET_SIZE_LARGE;
+OBJC
+        sock_patched = sock_source.gsub(
+          /dispatch_async\(dispatch_get_global_queue\(DISPATCH_QUEUE_PRIORITY_DEFAULT,\s*0\),\s*\^\{\s*\/\/[^
+]*
+\s*_self\.isSending\s*=\s*NO;\s*\}\);/,
+          '_self.isSending = NO;'
+        ).gsub(
+          old_send_block.gsub("
+", "
+"),
+          new_send_block.gsub("
+", "
+")
+        ).gsub(
+          old_channel_block.gsub("
+", "
+"),
+          new_channel_block.gsub("
+", "
+")
+        )
+        if sock_patched != sock_source
+          File.write(rtmp_sock, sock_patched)
+          puts "[Podfile] Patched #{sock_name} (direct sending, audio header sync, chunk channels 0x04/0x05)"
+        else
+          puts "[Podfile] WARNING: #{sock_name} patch pattern not found"
+        end
       end
     end
   end

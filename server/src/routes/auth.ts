@@ -2,8 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
-import { generateVoiceLicenseKey, generateOfflineLicenseToken } from '../utils/cryptoLicense';
-import { VOICE_LICENSE_ENABLED } from '../config';
+
 
 export const authRouter = Router();
 
@@ -111,12 +110,10 @@ authRouter.post('/login', (req: Request, res: Response) => {
   }
 
   let boundDevice = null;
-  let licenseToken: string | null = null;
-  let voiceLicense: any = null;
-
+    
   if (appType === 'APP_INPUT') {
     return res.status(400).json({
-      error: 'Cổng này không còn tiếp nhận App Nhập. Tính năng đăng nhập App Nhập đã được chuyển sang cổng bảo mật độc lập AceAnalytics Master.'
+      error: 'Cổng này không còn nhận App Nhập. Tính năng đã chuyển sang hệ thống bảo mật độc lập AceAnalytics Master.'
     });
   }
 
@@ -162,14 +159,7 @@ authRouter.post('/login', (req: Request, res: Response) => {
       expiresAt: user.expiresAt,
       platform: platform || 'web',
       device: boundDevice,
-      licenseToken,
-      voiceLicense: voiceLicense ? {
-        licenseKey: voiceLicense.licenseKey,
-        registeredAt: voiceLicense.registeredAt,
-        expiresAt: voiceLicense.expiresAt,
-        isLifetime: voiceLicense.isLifetime
-      } : null
-    }
+                }
   });
 
 });

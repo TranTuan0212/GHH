@@ -87,11 +87,9 @@ exports.authRouter.post('/login', (req, res) => {
         return res.status(403).json({ error: 'Tài khoản đã hết hạn sử dụng (' + new Date(user.expiresAt).toLocaleDateString('vi-VN') + '). Vui lòng gia hạn!' });
     }
     let boundDevice = null;
-    let licenseToken = null;
-    let voiceLicense = null;
     if (appType === 'APP_INPUT') {
         return res.status(400).json({
-            error: 'Cổng này không còn tiếp nhận App Nhập. Tính năng đăng nhập App Nhập đã được chuyển sang cổng bảo mật độc lập AceAnalytics Master.'
+            error: 'Cổng này không còn nhận App Nhập. Tính năng đã chuyển sang hệ thống bảo mật độc lập AceAnalytics Master.'
         });
     }
     // Quản lý thiết bị di động phát Live (tối đa 1 máy)
@@ -123,13 +121,6 @@ exports.authRouter.post('/login', (req, res) => {
             expiresAt: user.expiresAt,
             platform: platform || 'web',
             device: boundDevice,
-            licenseToken,
-            voiceLicense: voiceLicense ? {
-                licenseKey: voiceLicense.licenseKey,
-                registeredAt: voiceLicense.registeredAt,
-                expiresAt: voiceLicense.expiresAt,
-                isLifetime: voiceLicense.isLifetime
-            } : null
         }
     });
 });

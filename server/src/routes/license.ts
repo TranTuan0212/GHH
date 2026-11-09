@@ -7,18 +7,8 @@ import {
   verifyDeviceFingerprint,
   normalizeFingerprint
 } from '../utils/cryptoLicense';
-import { VOICE_LICENSE_ENABLED } from '../config';
 
 export const licenseRouter = Router();
-
-licenseRouter.use((_req: Request, res: Response, next) => {
-  if (!VOICE_LICENSE_ENABLED) {
-    return res.status(403).json({
-      error: 'Tính năng bản quyền giọng nói hiện đang tạm khóa trên hệ thống.'
-    });
-  }
-  next();
-});
 
 // Anti-brute-force cache: Map<Key/IP, { count: number; lockedUntil: number }>
 const bruteForceMap = new Map<string, { count: number; lockedUntil: number }>();

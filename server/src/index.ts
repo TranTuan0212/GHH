@@ -5,14 +5,14 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
+import { WebSocketServer, WebSocket as WsWebSocket } from 'ws';
 import jwt from 'jsonwebtoken';
 import { authRouter, JWT_SECRET } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
-import { aiRouter } from './routes/ai';
 import { licenseRouter } from './routes/license';
 import { db } from './db';
-import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession } from './mediaServer';
+import { startNativeMediaServer, setStreamEndedHandler, resetReplaySession, isRtcRelayActive, isRtcRelayFailed, ensureRtcRelay, RTC_RELAY_SUFFIX } from './mediaServer';
 import { getLocalIpAddresses, resolveRtmpHostForClient, classifyConnection } from './utils/network';
 
 const app = express();
@@ -32,6 +32,58 @@ const io = new SocketIOServer(server, {
     methods: ['GET', 'POST', 'PUT', 'DELETE']
   },
   maxHttpBufferSize: 1e7
+});
+
+
+// Kênh WebSocket điều khiển camera từ xa (/ws/control & /ws/roi cho iPhone)
+const wssControl = new WebSocketServer({ noServer: true });
+const iosControlClients = new Map<string, Set<WsWebSocket>>();
+
+server.on('upgrade', (request, socket, head) => {
+  const pathname = request.url?.split('?')[0] || '';
+  if (pathname === '/ws/control' || pathname === '/ws/roi') {
+    wssControl.handleUpgrade(request, socket, head, (ws) => {
+      wssControl.emit('connection', ws, request);
+    });
+  }
+});
+
+wssControl.on('connection', (ws: WsWebSocket, req) => {
+  let boundUserId = '';
+
+  // Gửi ngay tín hiệu sẵn sàng để iOS kích hoạt receive
+  try {
+    ws.send(JSON.stringify({ type: 'ready', serverTime: Date.now() }));
+  } catch {}
+
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'register_device' || msg.type === 'register_ios_client' || msg.type === 'device_telemetry') {
+        const uid = msg.userId || msg.data?.userId;
+        if (uid) {
+          boundUserId = uid;
+          if (!iosControlClients.has(uid)) {
+            iosControlClients.set(uid, new Set());
+          }
+          iosControlClients.get(uid)!.add(ws);
+          console.log(`[CameraControl] 📱 Đã đăng ký iPhone userId=${uid} vào kênh điều khiển từ xa`);
+        }
+      }
+      if (msg.type === 'ios_ping') {
+        ws.send(JSON.stringify({ type: 'ios_pong', t: msg.t }));
+      }
+    } catch {}
+  });
+
+  ws.on('close', () => {
+    if (boundUserId && iosControlClients.has(boundUserId)) {
+      iosControlClients.get(boundUserId)!.delete(ws);
+      if (iosControlClients.get(boundUserId)!.size === 0) {
+        iosControlClients.delete(boundUserId);
+      }
+    }
+  });
 });
 
 // Middleware xác thực JWT cho mọi kết nối Socket.IO
@@ -140,7 +192,6 @@ app.use('/api/auth', realtimeUserChanges, authRouter);
 app.use('/api/admin', realtimeUserChanges, adminRouter);
 app.use('/api/license', realtimeUserChanges, licenseRouter);
 app.use('/api/stream', streamRouter);
-app.use('/api/ai', aiRouter);
 
 
 // Health check
@@ -165,7 +216,7 @@ app.get('/api/server-info', (req, res) => {
     primaryIp,
     serverUrl: `http://${primaryIp}:${PORT}`,
     // iOS cần biết cổng RTMP (1935) để push, và đường HLS (8000) để admin preview nếu cần.
-    rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+    rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live/`,
     hlsBaseUrl: resolveHlsBaseUrl(req),
     replayHlsBaseUrl: resolveReplayHlsBaseUrl(req),
     port: PORT,
@@ -212,12 +263,15 @@ app.use('/replay', express.static(path.join(MEDIA_ROOT, 'replay'), {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     } else if (filePath.endsWith('.ts')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.setHeader('Content-Type', 'video/MP2T');
     }
   }
 }));
 
-app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
+app.use('/live', express.static(path.join(MEDIA_ROOT, 'replay'), {
   setHeaders: (res, filePath) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
@@ -226,10 +280,109 @@ app.use('/live', express.static(path.join(MEDIA_ROOT, 'live'), {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     } else if (filePath.endsWith('.ts')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.setHeader('Content-Type', 'video/MP2T');
     }
   }
 }));
+
+// WebRTC WHEP Reverse Proxy (tránh lỗi Mixed Content HTTPS -> HTTP port 8888 trên slomoview.stream / VPS 157.66.100.10)
+app.post('/api/whep/:streamKey', express.text({ type: ['application/sdp', 'text/plain', '*/*'], limit: '2mb' }), async (req, res) => {
+  try {
+    const streamKey = (req.params.streamKey || '').replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!streamKey) {
+      return res.status(400).send('Invalid streamKey');
+    }
+    const sdpOffer = req.body;
+    // Live có tiếng: khi relay AAC -> Opus đang chạy thì CHỈ phát path `_rtc` (có Opus).
+    // Path gốc chỉ có AAC nên WebRTC mất tiếng; chỉ fallback về path gốc khi relay không chạy
+    // (vd FFmpeg thiếu libopus) để live vẫn có hình. Path `_rtc` chưa sẵn sàng -> 404 -> web tự thử lại.
+    // Kich hoat ngay lap tuc WebRTC Audio Relay (AAC -> Opus) khi co yeu cau xem
+    ensureRtcRelay(streamKey);
+    // Luon uu tien luong co tieng _rtc. Chi fallback neu relay that su bi loi
+    let targetKey = isRtcRelayFailed(streamKey) ? streamKey : `${streamKey}${RTC_RELAY_SUFFIX}`;
+    const ports = [8888, 8889];
+    let upstreamRes: any = null;
+    let answerText = '';
+
+    // Nếu relay vừa khởi động, đợi tối đa 1.2s (6 lần x 200ms) để MediaMTX nhận luồng _rtc thay vì trả 404/502
+    for (let retry = 0; retry < 10; retry++) {
+      for (const port of ports) {
+        try {
+          let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: sdpOffer
+          });
+          if (resp.status === 404) {
+            resp = await fetch(`http://127.0.0.1:${port}/${targetKey}/whep`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/sdp' },
+              body: sdpOffer
+            });
+          }
+          if (resp.ok) {
+            upstreamRes = resp;
+            answerText = await resp.text();
+            break;
+          }
+        } catch (e) {}
+      }
+      if (upstreamRes) break;
+      if (targetKey === streamKey || isRtcRelayFailed(streamKey)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    // Nếu sau khi đợi mà _rtc vẫn chưa có, fallback về luồng gốc streamKey để đảm bảo luôn có hình
+    if (!upstreamRes && targetKey !== streamKey) {
+      targetKey = streamKey;
+      for (const port of ports) {
+        try {
+          let resp = await fetch(`http://127.0.0.1:${port}/live/${targetKey}/whep`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: sdpOffer
+          });
+          if (resp.status === 404) {
+            resp = await fetch(`http://127.0.0.1:${port}/${targetKey}/whep`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/sdp' },
+              body: sdpOffer
+            });
+          }
+          if (resp.ok) {
+            upstreamRes = resp;
+            answerText = await resp.text();
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+
+    if (!upstreamRes) {
+      return res.status(502).send('WHEP upstream unavailable');
+    }
+
+    res.status(upstreamRes.status);
+    res.setHeader('Content-Type', upstreamRes.headers.get('content-type') || 'application/sdp');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const upstreamLoc = upstreamRes.headers.get('location');
+    if (upstreamLoc) {
+      res.setHeader('Location', upstreamLoc);
+      res.setHeader('Access-Control-Expose-Headers', 'Location, Content-Type');
+    }
+    res.send(answerText);
+  } catch (err: any) {
+    res.status(502).send('WHEP upstream unavailable');
+  }
+});
+
+app.all('/api/whep/:streamKey/*', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.status(200).end();
+});
 
 /**
  * Xác định base URL public mà trình duyệt/app dùng để tải HLS (.m3u8/.ts), LUÔN cùng
@@ -451,7 +604,7 @@ io.on('connection', (socket) => {
       groupNames: db.getGroupNames(roomId),
       serverIps: ips,
       serverUrl: `http://${primaryIp}:${PORT}`,
-      rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live`,
+      rtmpIngestUrl: `rtmp://${rtmpHost}:${rtmpPort}/live/`,
       hlsBaseUrl: resolveHlsBaseUrl(fakeReq)
     });
   });
@@ -491,7 +644,7 @@ io.on('connection', (socket) => {
         const existingEntries = db.getCardEntries(targetRoomId);
         const normalized = normalizeDataItem(itemStr);
         const sequenceOrder = existingEntries.length + 1;
-        const groupIndex = (targetGroup !== undefined && targetGroup !== null && targetGroup !== '') ? parseInt(targetGroup) : (((sequenceOrder - 1) % numGroups) + 1);
+        const groupIndex = targetGroup ? parseInt(targetGroup) : (((sequenceOrder - 1) % numGroups) + 1);
 
         const newEntry = {
           id: 'item-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
@@ -559,7 +712,7 @@ io.on('connection', (socket) => {
     io.to(`room_${targetRoomId}`).emit('card_added', { roomId: targetRoomId, allEntries: updated });
   });
 
-  socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string }) => {
+  socket.on('live_remote_card', (data: { cardValue?: string; action?: 'ADD' | 'DELETE' | 'CLEAR'; roomId?: string; source?: 'APP' | 'WEB' }) => {
     if (!user) return;
     const targetRoomId = (user.role === 'ADMIN' && data?.roomId) ? data.roomId : user.id;
     if (!canControlRoom(targetRoomId)) return;
@@ -568,6 +721,7 @@ io.on('connection', (socket) => {
       cardValue: data.cardValue,
       action: data.action || 'ADD',
       roomId: targetRoomId,
+      source: data.source || 'WEB',
       timestamp: Date.now()
     });
   });
@@ -609,6 +763,57 @@ io.on('connection', (socket) => {
     const ts = Date.now();
     io.to(`room_${targetRoomId}`).emit('round_finished', { roomId: targetRoomId, timestamp: ts });
     io.to(`room_${targetRoomId}`).emit('cards_cleared', { roomId: targetRoomId });
+  });
+
+
+  // Điều khiển camera từ xa (Focus, Zoom, Exposure) từ Web -> iPhone (Đúng theo room của user)
+  socket.on('camera_control', (data) => {
+    if (!data) return;
+    const roomId = data.roomId || (user?.role === 'ADMIN' ? '' : user?.id) || '';
+    console.log(`[CameraControl] Room ${roomId} action=${data.action}:`, data);
+
+    // 1. Phát lại cho các web viewer khác trong phòng để đồng bộ trạng thái (khung vàng / mức zoom / mức sáng)
+    if (roomId) {
+      socket.to(`room_${roomId}`).emit('camera_control_state', data);
+    }
+
+    // 2. Chuyển tiếp tới iPhone đang live trong phòng này qua WebSocket
+    const payload = JSON.stringify({
+      type: 'camera_control',
+      action: data.action,
+      x: data.x,
+      y: data.y,
+      factor: data.factor,
+      bias: data.bias
+    });
+
+    // Ưu tiên tìm đúng iPhone thuộc phòng (roomId hoặc userId)
+    let targets = roomId ? iosControlClients.get(roomId) : undefined;
+
+    // Nếu roomId là streamKey, tìm userId của stream đó
+    if ((!targets || targets.size === 0) && roomId) {
+      const activeStream = db.getStreams().find(s => s.streamKey === roomId || s.id === roomId);
+      if (activeStream && activeStream.userId) {
+        targets = iosControlClients.get(activeStream.userId);
+      }
+    }
+
+    if (targets && targets.size > 0) {
+      targets.forEach((client) => {
+        if (client.readyState === WsWebSocket.OPEN) client.send(payload);
+      });
+      console.log(`[CameraControl] ✅ Đã chuyển tiếp lệnh ${data.action} tới ${targets.size} iPhone thuộc room ${roomId}`);
+    } else if (iosControlClients.size === 1) {
+      // Fallback nếu hệ thống chỉ có 1 iPhone đang kết nối
+      iosControlClients.forEach((clients) => {
+        clients.forEach((client) => {
+          if (client.readyState === WsWebSocket.OPEN) client.send(payload);
+        });
+      });
+      console.log(`[CameraControl] ⚠️ Chuyển tiếp lệnh ${data.action} tới iPhone duy nhất đang online`);
+    } else {
+      console.warn(`[CameraControl] ❌ Không tìm thấy iPhone nào thuộc room: ${roomId}`);
+    }
   });
 
   socket.on('disconnect', () => {

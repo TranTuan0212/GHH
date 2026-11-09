@@ -50,9 +50,18 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       }
     };
 
+    const handleCardsCleared = (data?: { roomId?: string }) => {
+      if (data?.roomId && currentRoomId && data.roomId !== currentRoomId) return;
+      setPressedCards([]);
+    };
+
     socket.on('remote_card_received', handleRemoteCard);
+    socket.on('cards_cleared', handleCardsCleared);
+    socket.on('round_finished', handleCardsCleared);
     return () => {
       socket.off('remote_card_received', handleRemoteCard);
+      socket.off('cards_cleared', handleCardsCleared);
+      socket.off('round_finished', handleCardsCleared);
     };
   }, [socket, isSyncVoice, currentRoomId]);
 
@@ -89,6 +98,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     }
   }, [isOpen]);
 
+  const keypadRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ width: number; height: number }>(() => {
     try {
       const saved = localStorage.getItem('live_keypad_size');
@@ -96,13 +106,13 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         const parsed = JSON.parse(saved);
         if (typeof parsed.width === 'number' && typeof parsed.height === 'number') {
           return {
-            width: Math.max(220, Math.min(parsed.width, 420)),
-            height: Math.max(220, Math.min(parsed.height, 360))
+            width: Math.max(200, Math.min(parsed.width, 650)),
+            height: Math.max(160, Math.min(parsed.height, 500))
           };
         }
       }
     } catch {}
-    return { width: 310, height: 295 };
+    return { width: 280, height: 260 };
   });
 
   const isDraggingRef = useRef(false);
@@ -181,10 +191,12 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
       const ratio = dist / pinchStartRef.current.dist;
-      const maxW = Math.max(340, (window?.innerWidth || 1000) - 20);
-      const maxH = Math.max(490, (window?.innerHeight || 800) - 30);
-      const newW = Math.round(Math.max(220, Math.min(maxW, pinchStartRef.current.w * ratio)));
-      const newH = Math.round(Math.max(220, Math.min(maxH, pinchStartRef.current.h * ratio)));
+      const containerW = container ? container.getBoundingClientRect().width : (window?.innerWidth || 1000);
+      const containerH = container ? container.getBoundingClientRect().height : (window?.innerHeight || 800);
+      const maxW = Math.max(260, containerW - 10);
+      const maxH = Math.max(200, containerH - 10);
+      const newW = Math.round(Math.max(200, Math.min(maxW, pinchStartRef.current.w * ratio)));
+      const newH = Math.round(Math.max(160, Math.min(maxH, pinchStartRef.current.h * ratio)));
       const nextSize = { width: newW, height: newH };
       setSize(nextSize);
       try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -197,8 +209,12 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       if (isDraggingRef.current && dragStartRef.current) {
         const dx = t.clientX - dragStartRef.current.clientX;
         const dy = t.clientY - dragStartRef.current.clientY;
-        const maxX = Math.max(0, (window?.innerWidth || 1000) - size.width);
-        const maxY = Math.max(0, (window?.innerHeight || 800) - 80);
+        const containerW = container ? container.getBoundingClientRect().width : (window?.innerWidth || 1000);
+        const containerH = container ? container.getBoundingClientRect().height : (window?.innerHeight || 800);
+        const actualW = keypadRef.current?.offsetWidth || size.width;
+        const actualH = keypadRef.current?.offsetHeight || size.height;
+        const maxX = Math.max(0, containerW - actualW);
+        const maxY = Math.max(0, containerH - actualH);
         const nextX = Math.round(Math.max(0, Math.min(dragStartRef.current.posX + dx, maxX)));
         const nextY = Math.round(Math.max(0, Math.min(dragStartRef.current.posY + dy, maxY)));
         setPosition({ x: nextX, y: nextY });
@@ -210,10 +226,12 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       if (isResizingRef.current && resizeStartRef.current) {
         const deltaX = t.clientX - resizeStartRef.current.clientX;
         const deltaY = t.clientY - resizeStartRef.current.clientY;
-        const maxW = Math.max(340, (window?.innerWidth || 1000) - position.x);
-        const maxH = Math.max(490, (window?.innerHeight || 800) - position.y);
-        const newW = Math.round(Math.max(240, Math.min(maxW, resizeStartRef.current.w + deltaX)));
-        const newH = Math.round(Math.max(360, Math.min(maxH, resizeStartRef.current.h + deltaY)));
+        const containerW = container ? container.getBoundingClientRect().width : (window?.innerWidth || 1000);
+        const containerH = container ? container.getBoundingClientRect().height : (window?.innerHeight || 800);
+        const maxW = Math.max(260, containerW - position.x);
+        const maxH = Math.max(200, containerH - position.y);
+        const newW = Math.round(Math.max(200, Math.min(maxW, resizeStartRef.current.w + deltaX)));
+        const newH = Math.round(Math.max(160, Math.min(maxH, resizeStartRef.current.h + deltaY)));
         const nextSize = { width: newW, height: newH };
         setSize(nextSize);
         try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -262,8 +280,12 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       if (isDraggingRef.current && dragStartRef.current) {
         const dx = e.clientX - dragStartRef.current.clientX;
         const dy = e.clientY - dragStartRef.current.clientY;
-        const maxX = Math.max(0, (window?.innerWidth || 1000) - size.width);
-        const maxY = Math.max(0, (window?.innerHeight || 800) - 80);
+        const containerW = container ? container.getBoundingClientRect().width : (window?.innerWidth || 1000);
+        const containerH = container ? container.getBoundingClientRect().height : (window?.innerHeight || 800);
+        const actualW = keypadRef.current?.offsetWidth || size.width;
+        const actualH = keypadRef.current?.offsetHeight || size.height;
+        const maxX = Math.max(0, containerW - actualW);
+        const maxY = Math.max(0, containerH - actualH);
         const nextX = Math.round(Math.max(0, Math.min(dragStartRef.current.posX + dx, maxX)));
         const nextY = Math.round(Math.max(0, Math.min(dragStartRef.current.posY + dy, maxY)));
         setPosition({ x: nextX, y: nextY });
@@ -271,10 +293,12 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
       } else if (isResizingRef.current && resizeStartRef.current) {
         const deltaX = e.clientX - resizeStartRef.current.clientX;
         const deltaY = e.clientY - resizeStartRef.current.clientY;
-        const maxW = Math.max(340, (window?.innerWidth || 1000) - position.x);
-        const maxH = Math.max(490, (window?.innerHeight || 800) - position.y);
-        const newW = Math.round(Math.max(220, Math.min(maxW, resizeStartRef.current.w + deltaX)));
-        const newH = Math.round(Math.max(220, Math.min(maxH, resizeStartRef.current.h + deltaY)));
+        const containerW = container ? container.getBoundingClientRect().width : (window?.innerWidth || 1000);
+        const containerH = container ? container.getBoundingClientRect().height : (window?.innerHeight || 800);
+        const maxW = Math.max(260, containerW - position.x);
+        const maxH = Math.max(200, containerH - position.y);
+        const newW = Math.round(Math.max(200, Math.min(maxW, resizeStartRef.current.w + deltaX)));
+        const newH = Math.round(Math.max(160, Math.min(maxH, resizeStartRef.current.h + deltaY)));
         const nextSize = { width: newW, height: newH };
         setSize(nextSize);
         try { localStorage.setItem('live_keypad_size', JSON.stringify(nextSize)); } catch {}
@@ -340,10 +364,21 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
     handleDragMouseDown(e);
   };
 
+  const getCardDisplayName = (card: string): string => {
+    switch (card) {
+      case '1': return 'A';
+      case '11': return 'J';
+      case '12': return 'Q';
+      case '13': return 'K';
+      default: return card;
+    }
+  };
+
   if (!isOpen) return null;
 
   const content = (
     <div
+      ref={keypadRef}
       data-live-keypad="true"
       onTouchStart={handleKeypadTouchStart}
       onTouchMove={handleKeypadTouchMove}
@@ -356,8 +391,8 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
         position: 'absolute',
         left: `${position.x}px`,
         top: `${position.y}px`,
-        width: isSyncVoice ? '260px' : `${size.width}px`,
-        height: isSyncVoice ? 'auto' : `${size.height}px`,
+        width: `${size.width}px`,
+        height: `${size.height}px`,
         zIndex: 99999999,
         touchAction: 'none'
       }}
@@ -439,20 +474,30 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
                 🎙️ Đang đợi đọc bài từ App...
               </div>
             ) : (
-              pressedCards.map((card, idx) => (
-                <div
-                  key={idx}
-                  className={`h-9 rounded-lg border font-black text-sm flex items-center justify-center shadow-md animate-fadeIn transition-all select-none ${
-                    card === '0'
-                      ? 'bg-blue-900/80 border-blue-400/80 text-blue-200 shadow-[0_0_8px_rgba(59,130,246,0.3)]'
-                      : card === '13'
-                      ? 'bg-slate-800/90 border-amber-400/60 text-amber-200'
-                      : 'bg-slate-800/90 border-white/25 text-white hover:border-amber-400'
-                  }`}
-                >
-                  {card}
-                </div>
-              ))
+              pressedCards.map((card, idx) => {
+                const displayName = getCardDisplayName(card);
+                return (
+                  <div
+                    key={idx}
+                    style={{ minHeight: `${Math.max(26, Math.min(52, Math.round(size.width / 7.5)))}px`, fontSize: `${Math.max(11, Math.min(20, Math.round(size.width / 20)))}px` }}
+                    className={`rounded-lg border font-black flex items-center justify-center shadow-md animate-fadeIn transition-all select-none ${
+                      card === '0'
+                        ? 'bg-blue-900/80 border-blue-400/80 text-blue-200 shadow-[0_0_8px_rgba(59,130,246,0.3)]'
+                        : card === '13' || card === 'K'
+                        ? 'bg-slate-800/90 border-amber-400/60 text-amber-300'
+                        : card === '12' || card === 'Q'
+                        ? 'bg-slate-800/90 border-pink-400/60 text-pink-300'
+                        : card === '11' || card === 'J'
+                        ? 'bg-slate-800/90 border-cyan-400/60 text-cyan-300'
+                        : card === '1' || card === 'A'
+                        ? 'bg-slate-800/90 border-emerald-400/60 text-emerald-300'
+                        : 'bg-slate-800/90 border-white/25 text-white hover:border-amber-400'
+                    }`}
+                  >
+                    {displayName}
+                  </div>
+                );
+              })
             )}
           </div>
         </>
@@ -475,7 +520,7 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
                     key={idx}
                     className="w-6.5 h-6.5 flex-shrink-0 rounded-md bg-slate-800/90 border border-white/30 text-white font-black text-xs flex items-center justify-center shadow-md animate-fadeIn"
                   >
-                    {card}
+                    {getCardDisplayName(card)}
                   </div>
                 ))
               )}
@@ -572,6 +617,9 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
             ))}
           </div>
 
+
+        </>
+      )}
           {/* Resize Handle ở góc dưới bên phải */}
           <div
             data-resize-handle="true"
@@ -586,8 +634,6 @@ export const LiveFloatingKeypad: React.FC<LiveFloatingKeypadProps> = ({
               <circle cx="8.5" cy="5.5" r="1.2" />
             </svg>
           </div>
-        </>
-      )}
     </div>
   );
 
