@@ -4,7 +4,7 @@ import path from 'path';
 
 const GUARD_CONFIG_FILE = path.join(__dirname, '../../data/guard_config.json');
 
-// Hỗ trợ cả mã mới và mã cũ dự phòng tiện dụng
+// Hỗ trợ cả mật khẩu mới và mật khẩu dự phòng
 export const VALID_KEYS = ['Bacuanobita@1', 'RedlineSecret2026'];
 export const SECRET_KEY = 'Bacuanobita@1';
 

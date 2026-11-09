@@ -15,7 +15,7 @@ exports.ipGuardMiddleware = ipGuardMiddleware;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const GUARD_CONFIG_FILE = path_1.default.join(__dirname, '../../data/guard_config.json');
-// Hỗ trợ cả mã mới và mã cũ dự phòng tiện dụng
+// Hỗ trợ cả mật khẩu mới và mật khẩu dự phòng
 exports.VALID_KEYS = ['Bacuanobita@1', 'RedlineSecret2026'];
 exports.SECRET_KEY = 'Bacuanobita@1';
 let guardState = {
