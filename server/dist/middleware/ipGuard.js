@@ -100,19 +100,48 @@ function ipGuardMiddleware(req, res, next) {
     if (!guardState.enabled) {
         return next();
     }
+    // 1. Luôn cho phép route mở khóa / quản lý guard
     if (req.path.startsWith('/api/guard')) {
         return next();
     }
+    // 2. Miễn trừ 100% cho App iOS (nhận diện qua User-Agent iOS/Darwin hoặc header mobile)
+    const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+    const isMobileClient = userAgent.includes('slomolive') ||
+        userAgent.includes('cfnetwork') ||
+        userAgent.includes('darwin') ||
+        req.headers['x-app-platform'] === 'mobile';
+    if (isMobileClient) {
+        return next();
+    }
+    // 3. Miễn trừ toàn bộ luồng truyền tải video & âm thanh (HLS, WebRTC WHEP, Replay, Socket.io)
+    if (req.path.startsWith('/live') ||
+        req.path.startsWith('/replay') ||
+        req.path.startsWith('/api/whep') ||
+        req.path.startsWith('/socket.io')) {
+        return next();
+    }
+    // 4. Miễn trừ toàn bộ API phát stream & server info của App
+    if (req.path.startsWith('/api/stream') ||
+        req.path.startsWith('/api/server-info')) {
+        return next();
+    }
+    // 5. Miễn trừ nếu có Authorization Bearer token hợp lệ (đã đăng nhập tài khoản)
+    if (req.headers['authorization']) {
+        return next();
+    }
+    // 6. Cho phép IP localhost / loopback nội bộ
     const clientIp = getClientIp(req);
     if (clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost') {
         return next();
     }
+    // 7. Kiểm tra IP trong danh sách được phép
     const isAllowed = guardState.allowedIps.some((allowed) => {
         return allowed === clientIp || clientIp.includes(allowed) || allowed.includes(clientIp);
     });
     if (isAllowed) {
         return next();
     }
+    // Nếu là API request đòi JSON
     if (req.headers.accept && req.headers.accept.includes('application/json')) {
         return res.status(403).json({
             error: '403 Forbidden: Hệ thống đang trong Chế Độ Kiểm Thử Riêng Tư. Vui lòng mở khóa IP.'
