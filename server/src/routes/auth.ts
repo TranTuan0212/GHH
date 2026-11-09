@@ -114,20 +114,25 @@ authRouter.post('/login', (req: Request, res: Response) => {
   let licenseToken: string | null = null;
   let voiceLicense: any = null;
 
-  // Phân loại chuẩn xác loại app: APP_LIVE (tối đa 1 máy) vs APP_INPUT (tối đa 2 máy)
-  const effectiveAppType: 'APP_LIVE' | 'APP_INPUT' | null = 
-    appType === 'APP_INPUT' ? 'APP_INPUT' :
+  if (appType === 'APP_INPUT') {
+    return res.status(400).json({
+      error: 'Cổng này không còn tiếp nhận App Nhập. Tính năng đăng nhập App Nhập đã được chuyển sang cổng bảo mật độc lập AceAnalytics Master.'
+    });
+  }
+
+  // Quản lý thiết bị di động phát Live (tối đa 1 máy)
+  const effectiveAppType: 'APP_LIVE' | null = 
     (appType === 'APP_LIVE' || platform === 'mobile') ? 'APP_LIVE' : null;
 
   if (effectiveAppType) {
     if (!deviceUuid) {
-      return res.status(400).json({ error: 'Thiếu định danh phần cứng thiết bị (deviceUuid).' });
+      return res.status(400).json({ error: 'Thiếu định danh phần cứng thiết bị phát Live (deviceUuid).' });
     }
     try {
       boundDevice = db.bindDevice(
         user.id,
         deviceUuid,
-        deviceModel || (effectiveAppType === 'APP_LIVE' ? 'iOS Live Device' : 'iOS Input Device'),
+        deviceModel || 'iOS Live Device',
         effectiveAppType,
         deviceFingerprint
       );

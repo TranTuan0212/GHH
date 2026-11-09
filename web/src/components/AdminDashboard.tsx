@@ -323,10 +323,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Reset Device
-  const handleResetDevice = async (userId: string, appType: 'APP_LIVE' | 'APP_INPUT' = 'APP_LIVE') => {
-    const label = appType === 'APP_LIVE' ? 'thiết bị di động phát Live' : 'các máy Nhập bài';
-    if (!window.confirm(`Bạn có chắc chắn muốn Reset gán ${label} cho User này không?`)) return;
+  // Reset Device Live
+  const handleResetDevice = async (userId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn Reset thiết bị di động phát Live cho User này không?')) return;
     try {
       const res = await fetch(`/api/admin/users/${userId}/reset-device`, {
         method: 'POST',
@@ -334,12 +333,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ appType })
+        body: JSON.stringify({ appType: 'APP_LIVE' })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      showMsg(data.message, 'success');
+      showMsg(data.message || 'Đã reset máy Live thành công!', 'success');
       onRefreshUsers();
     } catch (err: any) {
       showMsg(err.message, 'error');
@@ -919,26 +918,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Máy Nhập */}
-        <div className="glass-panel p-5 rounded-2xl border border-purple-500/20 bg-gradient-to-br from-purple-950/40 via-slate-900/60 to-slate-950/80 shadow-lg relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-full blur-2xl -mr-6 -mt-6 pointer-events-none" />
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-purple-300">Máy Nhập (Game)</p>
-              <h3 className="text-2xl sm:text-3xl font-black text-white mt-1">
-                {users.reduce((acc, u) => acc + (u.devices?.filter((d) => d.appType === 'APP_INPUT').length || 0), 0)}
-              </h3>
-            </div>
-            <div className="p-3 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
-              <Smartphone className="w-6 h-6" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center space-x-1.5 text-xs text-purple-300">
-            <span>Tối đa 2 máy Nhập / tài khoản</span>
-          </div>
-        </div>
-
-        {/* Card 3: Cảnh Báo Hết Hạn */}
+        {/* Card 4: Cảnh Báo Hết Hạn */}
         {(() => {
           const expiredCount = users.filter((u) => new Date(u.expiresAt) <= new Date()).length;
           const warningCount = users.filter((u) => {
@@ -995,7 +975,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             <p className="text-xs text-slate-400 mt-1">
               Hiển thị chi tiết <strong>Thời Gian Kích Hoạt</strong>, <strong>Thời Gian Hết Hạn</strong> và <strong>Đồng Hồ Đếm Ngược</strong> theo thời gian thực.
-              Mỗi tài khoản được cấp phép <strong>1 Máy di động phát Live</strong>.
+              Mỗi tài khoản được cấp phép <strong>1 Thiết bị phát Live (Camera / Livestream)</strong>.
             </p>
           </div>
 
@@ -1038,7 +1018,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <tr>
                 <th className="py-3 px-4 min-w-[170px]">Tài Khoản & Quyền</th>
                 <th className="py-3 px-4 min-w-[240px]">Bộ Ba Thời Gian (Active - Hạn - Đếm Ngược)</th>
-                <th className="py-3 px-4 min-w-[320px]">Thiết Bị Cấp Phép (1 Live + 2 Nhập)</th>
+                <th className="py-3 px-4 min-w-[280px]">Thiết Bị Live (Camera / Livestream)</th>
                 <th className="py-3 px-4 min-w-[260px] text-right">Gia Hạn 1 Chạm & Quản Trị</th>
               </tr>
             </thead>
@@ -1069,8 +1049,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 return filtered.map((u) => {
                   const liveDevice = u.devices?.find((d) => d.isLiveDevice || d.appType === 'APP_LIVE');
-                  const inputDevices = u.devices?.filter((d) => d.appType === 'APP_INPUT') || [];
-                  const isExpired = new Date(u.expiresAt) <= new Date();
+                                    const isExpired = new Date(u.expiresAt) <= new Date();
 
                   return (
                     <tr key={u.id} className="hover:bg-slate-800/40 transition-all align-top">
@@ -1177,7 +1156,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </div>
                             {liveDevice && (
                               <button
-                                onClick={() => handleResetDevice(u.id, 'APP_LIVE')}
+                                onClick={() => handleResetDevice(u.id)}
                                 className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all cursor-pointer shrink-0"
                                 title="Reset máy Live"
                               >
@@ -1199,59 +1178,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           )}
                         </div>
 
-                        {/* Box 2: Máy Nhập (Tối đa 2 máy) */}
-                        <div className="bg-slate-900/80 p-2.5 rounded-xl border border-purple-500/20 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-1.5">
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                                NHẬP ({inputDevices.length}/2)
-                              </span>
-                            </div>
-                            {inputDevices.length > 0 && (
-                              <button
-                                onClick={() => handleResetDevice(u.id, 'APP_INPUT')}
-                                className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all cursor-pointer shrink-0"
-                                title="Reset 2 máy Nhập"
-                              >
-                                Reset Nhập
-                              </button>
-                            )}
-                          </div>
-
-                          {inputDevices.length === 0 ? (
-                            <div className="text-slate-500 italic text-[11px]">
-                              Chưa có máy Nhập nào đăng nhập (Còn trống 2 slot)
-                            </div>
-                          ) : (
-                            <div className="space-y-1.5">
-                              {inputDevices.map((d, idx) => (
-                                <div key={d.id || idx} className="p-2 rounded-lg bg-slate-950/60 border border-white/5 space-y-1">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-purple-300 font-bold truncate">
-                                      #{idx + 1} {d.deviceModel}
-                                    </span>
-                                  </div>
-
-                                  <div className="text-[11px] text-slate-500 truncate" title={d.deviceUuid}>
-                                    UUID: {d.deviceUuid ? d.deviceUuid.substring(0, 16) + '...' : 'N/A'}
-                                  </div>
-
-                                  <div className="flex items-center justify-between text-[10px] text-slate-400 border-t border-white/5 pt-1">
-                                    <span>Active: {formatDateTime(d.activatedAt)}</span>
-                                    <span className="text-emerald-400 font-semibold">{d.countdown || u.countdown}</span>
-                                  </div>
-                                </div>
-                              ))}
-
-                              {inputDevices.length < 2 && (
-                                <div className="text-slate-500 italic text-[10px]">
-                                  + Còn trống {2 - inputDevices.length} slot máy nhập
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </td>
+                        </td>
 
                       {/* Cột 4: Gia Hạn 1 Chạm & Quản Trị */}
                       <td className="py-4 px-4 text-right space-y-3">
