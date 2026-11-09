@@ -68,7 +68,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [copiedGuardLink, setCopiedGuardLink] = useState(false);
 
   useEffect(() => {
-    fetch('/api/guard/status?key=RedlineSecret2026')
+    fetch('/api/guard/status?key=Bacuanobita@1')
       .then(r => r.json())
       .then(d => { if (typeof d.enabled === 'boolean') setGuardEnabled(d.enabled); })
       .catch(() => {});
@@ -94,7 +94,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const copyGuardLink = () => {
-    const unlockUrl = `${window.location.protocol}//${window.location.host}/api/guard/unlock?key=RedlineSecret2026`;
+    const unlockUrl = `${window.location.protocol}//${window.location.host}/api/guard/unlock?key=Bacuanobita@1`;
     navigator.clipboard.writeText(unlockUrl);
     setCopiedGuardLink(true);
     setTimeout(() => setCopiedGuardLink(false), 2000);

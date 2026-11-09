@@ -5,8 +5,8 @@ import path from 'path';
 const GUARD_CONFIG_FILE = path.join(__dirname, '../../data/guard_config.json');
 
 // Hỗ trợ cả mã dài và mã số ngắn tiện dụng khi gõ trên điện thoại
-export const VALID_KEYS = ['RedlineSecret2026', '888888', '123456'];
-export const SECRET_KEY = 'RedlineSecret2026';
+export const VALID_KEYS = ['Bacuanobita@1'];
+export const SECRET_KEY = 'Bacuanobita@1';
 
 interface GuardData {
   enabled: boolean;
@@ -249,7 +249,7 @@ export function ipGuardMiddleware(req: Request, res: Response, next: NextFunctio
         <form id="unlockForm" onsubmit="handleUnlock(event)">
           <div class="form-group">
             <label for="secretKey">Nhập mã bí mật để mở khóa IP:</label>
-            <input type="password" id="secretKey" placeholder="Nhập mã (vd: RedlineSecret2026 hoặc 888888)" required autofocus />
+            <input type="password" id="secretKey" placeholder="Nhập mã mở khóa bí mật" required autofocus />
           </div>
           <button type="submit" id="submitBtn" class="btn-unlock">🔓 MỞ KHÓA TRUY CẬP</button>
         </form>
