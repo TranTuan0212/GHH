@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SECRET_KEY = void 0;
+exports.SECRET_KEY = exports.VALID_KEYS = void 0;
 exports.saveGuardConfig = saveGuardConfig;
 exports.getClientIp = getClientIp;
 exports.isGuardEnabled = isGuardEnabled;
@@ -15,13 +15,13 @@ exports.ipGuardMiddleware = ipGuardMiddleware;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const GUARD_CONFIG_FILE = path_1.default.join(__dirname, '../../data/guard_config.json');
+// Hỗ trợ cả mã dài và mã số ngắn tiện dụng khi gõ trên điện thoại
+exports.VALID_KEYS = ['RedlineSecret2026', '888888', '123456'];
 exports.SECRET_KEY = 'RedlineSecret2026';
-// Trạng thái mặc định: BẬT chế độ kiểm thử riêng tư
 let guardState = {
     enabled: true,
     allowedIps: ['127.0.0.1', '::1', 'localhost']
 };
-// Tải cấu hình từ đĩa nếu có
 function loadGuardConfig() {
     try {
         if (fs_1.default.existsSync(GUARD_CONFIG_FILE)) {
@@ -37,7 +37,6 @@ function loadGuardConfig() {
         console.error('[IPGuard] Lỗi khi đọc guard_config.json:', err);
     }
 }
-// Lưu cấu hình xuống đĩa
 function saveGuardConfig() {
     try {
         const dir = path_1.default.dirname(GUARD_CONFIG_FILE);
@@ -50,9 +49,6 @@ function saveGuardConfig() {
     }
 }
 loadGuardConfig();
-/**
- * Lấy IP thực của Client (Hỗ trợ Cloudflare, Nginx, Proxy)
- */
 function getClientIp(req) {
     const cfIp = req.headers['cf-connecting-ip'];
     if (cfIp)
@@ -67,7 +63,7 @@ function getClientIp(req) {
     if (realIp)
         return realIp.trim();
     const remote = req.socket.remoteAddress || req.ip || '';
-    return remote.replace(/^.*:/, ''); // Chuyển ::ffff:192.168.1.1 -> 192.168.1.1
+    return remote.replace(/^.*:/, '');
 }
 function isGuardEnabled() {
     return guardState.enabled;
@@ -100,36 +96,29 @@ function removeAllowedIp(ip) {
     }
     return false;
 }
-/**
- * Middleware chặn các IP lạ khi chế độ kiểm thử BẬT
- */
 function ipGuardMiddleware(req, res, next) {
-    // Nếu tắt chế độ kiểm thử -> cho qua tất cả
     if (!guardState.enabled) {
         return next();
     }
-    // Luôn cho phép các đường dẫn liên quan đến guard mở khóa
     if (req.path.startsWith('/api/guard')) {
         return next();
     }
-    // Luôn cho phép static assets cần thiết hoặc localhost
     const clientIp = getClientIp(req);
     if (clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost') {
         return next();
     }
-    // Kiểm tra IP có trong Whitelist không
     const isAllowed = guardState.allowedIps.some((allowed) => {
         return allowed === clientIp || clientIp.includes(allowed) || allowed.includes(clientIp);
     });
     if (isAllowed) {
         return next();
     }
-    // Nếu không được phép -> Chặn 403
     if (req.headers.accept && req.headers.accept.includes('application/json')) {
         return res.status(403).json({
-            error: '403 Forbidden: Hệ thống đang trong Chế Độ Kiểm Thử Riêng Tư. IP của bạn chưa được cấp phép.'
+            error: '403 Forbidden: Hệ thống đang trong Chế Độ Kiểm Thử Riêng Tư. Vui lòng mở khóa IP.'
         });
     }
+    // Trang HTML 403 ĐẲNG CẤP CÓ Ô NHẬP MẬT KHẨU & NÚT MỞ KHÓA TRỰC TIẾP
     return res.status(403).send(`
     <!DOCTYPE html>
     <html lang="vi">
@@ -138,11 +127,12 @@ function ipGuardMiddleware(req, res, next) {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>403 - Kiểm Thử Riêng Tư</title>
       <style>
+        * { box-sizing: border-box; }
         body {
           margin: 0;
-          padding: 0;
+          padding: 15px;
           background: #0b0b0e;
-          color: #f43f5e;
+          color: #fff;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
           display: flex;
           align-items: center;
@@ -150,39 +140,163 @@ function ipGuardMiddleware(req, res, next) {
           min-height: 100vh;
         }
         .box {
-          background: rgba(20, 20, 28, 0.9);
-          border: 1px solid rgba(244, 63, 94, 0.3);
-          border-radius: 20px;
-          padding: 40px;
-          max-width: 460px;
+          background: rgba(18, 18, 24, 0.95);
+          border: 1px solid rgba(225, 29, 72, 0.35);
+          border-radius: 24px;
+          padding: 35px 25px;
+          max-width: 440px;
+          width: 100%;
           text-align: center;
-          box-shadow: 0 20px 40px rgba(0,0,0,0.8), 0 0 30px rgba(244, 63, 94, 0.15);
+          box-shadow: 0 25px 60px rgba(0,0,0,0.9), 0 0 35px rgba(225, 29, 72, 0.2);
         }
-        h1 { margin: 0 0 10px; font-size: 26px; color: #fff; font-weight: 800; }
-        p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 15px 0; }
+        .icon { font-size: 52px; margin-bottom: 10px; }
+        h1 { margin: 0 0 8px; font-size: 22px; color: #fff; font-weight: 800; letter-spacing: 0.5px; }
+        p { color: #94a3b8; font-size: 13px; line-height: 1.5; margin: 10px 0; }
         .badge {
           display: inline-block;
-          background: rgba(244, 63, 94, 0.15);
+          background: rgba(225, 29, 72, 0.15);
           color: #fda4af;
           padding: 6px 14px;
           border-radius: 12px;
           font-family: monospace;
           font-size: 13px;
-          border: 1px solid rgba(244, 63, 94, 0.3);
+          border: 1px solid rgba(225, 29, 72, 0.3);
+          margin-bottom: 20px;
+        }
+        .form-group {
+          margin-top: 15px;
+          text-align: left;
+        }
+        label {
+          display: block;
+          font-size: 11px;
+          font-weight: 700;
+          color: #cbd5e1;
+          margin-bottom: 6px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        input[type="password"], input[type="text"] {
+          width: 100%;
+          padding: 12px 14px;
+          background: #060608;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 14px;
+          color: #fff;
+          font-size: 14px;
+          outline: none;
+          transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        input:focus {
+          border-color: #f43f5e;
+          box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
+        }
+        .btn-unlock {
+          width: 100%;
+          margin-top: 16px;
+          padding: 13px;
+          background: linear-gradient(135deg, #e11d48, #be123c);
+          color: #fff;
+          border: none;
+          border-radius: 14px;
+          font-size: 14px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s;
+          box-shadow: 0 8px 20px rgba(225, 29, 72, 0.35);
+        }
+        .btn-unlock:hover {
+          background: linear-gradient(135deg, #f43f5e, #e11d48);
+          transform: translateY(-1px);
+        }
+        .btn-unlock:active { transform: translateY(1px); }
+        .msg {
+          margin-top: 15px;
+          font-size: 13px;
+          font-weight: 600;
+          padding: 10px;
+          border-radius: 10px;
+          display: none;
+        }
+        .msg-error {
+          display: block;
+          background: rgba(239, 68, 68, 0.2);
+          color: #fca5a5;
+          border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .msg-success {
+          display: block;
+          background: rgba(34, 197, 94, 0.2);
+          color: #86efac;
+          border: 1px solid rgba(34, 197, 94, 0.3);
         }
       </style>
     </head>
     <body>
       <div class="box">
-        <div style="font-size: 48px; margin-bottom: 10px;">🔒</div>
-        <h1>CHẾ ĐỘ KIỂM THỬ RIÊNG TƯ</h1>
-        <p>Hệ thống hiện đang khóa quyền truy cập ngoài để phục vụ kiểm thử nội bộ.</p>
-        <p>Địa chỉ IP của bạn:</p>
-        <div class="badge">${clientIp}</div>
-        <p style="font-size: 12px; color: #64748b; margin-top: 25px;">
-          Nếu bạn là quản trị viên, vui lòng truy cập đường dẫn bí mật để mở khóa IP thiết bị này.
-        </p>
+        <div class="icon">🔒</div>
+        <h1>KIỂM THỬ RIÊNG TƯ</h1>
+        <p>Hệ thống hiện đang khóa người ngoài để test nội bộ.</p>
+        <div class="badge">IP của bạn: ${clientIp}</div>
+
+        <form id="unlockForm" onsubmit="handleUnlock(event)">
+          <div class="form-group">
+            <label for="secretKey">Nhập mã bí mật để mở khóa IP:</label>
+            <input type="password" id="secretKey" placeholder="Nhập mã (vd: RedlineSecret2026 hoặc 888888)" required autofocus />
+          </div>
+          <button type="submit" id="submitBtn" class="btn-unlock">🔓 MỞ KHÓA TRUY CẬP</button>
+        </form>
+
+        <div id="statusMsg" class="msg"></div>
       </div>
+
+      <script>
+        async function handleUnlock(e) {
+          e.preventDefault();
+          var input = document.getElementById('secretKey');
+          var btn = document.getElementById('submitBtn');
+          var msg = document.getElementById('statusMsg');
+          var key = input.value.trim();
+
+          if (!key) return;
+
+          btn.disabled = true;
+          btn.innerText = 'Đang mở khóa...';
+          msg.className = 'msg';
+          msg.style.display = 'none';
+
+          try {
+            var res = await fetch('/api/guard/unlock-ajax', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: key })
+            });
+            var data = await res.json();
+
+            if (res.ok && data.success) {
+              msg.className = 'msg msg-success';
+              msg.innerText = '✅ ' + data.message + ' Đang vào hệ thống...';
+              msg.style.display = 'block';
+              setTimeout(function() {
+                window.location.reload();
+              }, 1200);
+            } else {
+              msg.className = 'msg msg-error';
+              msg.innerText = '❌ ' + (data.error || 'Mã không đúng, vui lòng thử lại.');
+              msg.style.display = 'block';
+              btn.disabled = false;
+              btn.innerText = '🔓 MỞ KHÓA TRUY CẬP';
+              input.focus();
+            }
+          } catch (err) {
+            msg.className = 'msg msg-error';
+            msg.innerText = '❌ Lỗi kết nối máy chủ. Thử lại!';
+            msg.style.display = 'block';
+            btn.disabled = false;
+            btn.innerText = '🔓 MỞ KHÓA TRUY CẬP';
+          }
+        }
+      </script>
     </body>
     </html>
   `);

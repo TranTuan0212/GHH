@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import {
+  VALID_KEYS,
   SECRET_KEY,
   getClientIp,
   isGuardEnabled,
@@ -13,12 +14,37 @@ import { authMiddleware, AuthRequest } from './auth';
 export const guardRouter = Router();
 
 /**
- * 1. MỞ KHÓA IP BẰNG LINK BÍ MẬT:
+ * 1. MỞ KHÓA IP TRỰC TIẾP TỪ FORM (AJAX):
+ * POST /api/guard/unlock-ajax
+ */
+guardRouter.post('/unlock-ajax', (req: Request, res: Response) => {
+  const { key } = req.body;
+  const trimmedKey = (key || '').trim();
+
+  if (!trimmedKey || !VALID_KEYS.includes(trimmedKey)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Mã bí mật không chính xác. Vui lòng kiểm tra lại.'
+    });
+  }
+
+  const clientIp = getClientIp(req);
+  addAllowedIp(clientIp);
+
+  return res.json({
+    success: true,
+    message: `Đã mở khóa IP (${clientIp}) thành công!`,
+    ip: clientIp
+  });
+});
+
+/**
+ * 2. MỞ KHÓA IP BẰNG LINK URL (GET):
  * GET /api/guard/unlock?key=RedlineSecret2026
  */
 guardRouter.get('/unlock', (req: Request, res: Response) => {
-  const key = req.query.key as string;
-  if (key !== SECRET_KEY) {
+  const key = ((req.query.key as string) || '').trim();
+  if (!VALID_KEYS.includes(key)) {
     return res.status(403).send(`
       <body style="background:#0b0b0e;color:#ef4444;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
         <div style="text-align:center;">
@@ -38,7 +64,7 @@ guardRouter.get('/unlock', (req: Request, res: Response) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta http-equiv="refresh" content="3;url=/">
+      <meta http-equiv="refresh" content="2;url=/">
       <title>Mở Khóa IP Thành Công</title>
       <style>
         body {
@@ -85,19 +111,17 @@ guardRouter.get('/unlock', (req: Request, res: Response) => {
           font-weight: bold;
           font-size: 14px;
           box-shadow: 0 10px 20px rgba(34, 197, 94, 0.3);
-          transition: transform 0.2s;
         }
-        .btn:hover { transform: scale(1.03); }
       </style>
     </head>
     <body>
       <div class="card">
         <div class="icon">🔓</div>
         <h1>MỞ KHÓA IP THÀNH CÔNG!</h1>
-        <p>Thiết bị của bạn đã được thêm vào danh sách kiểm thử đặc quyền:</p>
+        <p>Thiết bị của bạn đã được thêm vào danh sách kiểm thử:</p>
         <div class="ip-pill">${clientIp}</div>
         <p style="font-size: 12px; color: #64748b; margin-top: 20px;">
-          Đang tự động chuyển hướng vào hệ thống trong 3 giây...
+          Đang tự động chuyển hướng vào hệ thống trong 2 giây...
         </p>
         <a href="/" class="btn">TRUY CẬP HỆ THỐNG NGAY</a>
       </div>
@@ -107,34 +131,34 @@ guardRouter.get('/unlock', (req: Request, res: Response) => {
 });
 
 /**
- * 2. BẬT CHẾ ĐỘ KIỂM THỬ:
+ * 3. BẬT CHẾ ĐỘ KIỂM THỬ:
  * GET /api/guard/enable?key=RedlineSecret2026
  */
 guardRouter.get('/enable', (req: Request, res: Response) => {
   const key = req.query.key as string;
-  if (key !== SECRET_KEY) return res.status(403).json({ error: 'Sai secret key' });
+  if (!VALID_KEYS.includes(key)) return res.status(403).json({ error: 'Sai secret key' });
   setGuardEnabled(true);
   res.json({ success: true, message: 'Đã BẬT Chế Độ Kiểm Thử Riêng Tư. Mọi IP lạ sẽ bị chặn.', enabled: true });
 });
 
 /**
- * 3. TẮT CHẾ ĐỘ KIỂM THỬ (Mở cho tất cả):
+ * 4. TẮT CHẾ ĐỘ KIỂM THỬ:
  * GET /api/guard/disable?key=RedlineSecret2026
  */
 guardRouter.get('/disable', (req: Request, res: Response) => {
   const key = req.query.key as string;
-  if (key !== SECRET_KEY) return res.status(403).json({ error: 'Sai secret key' });
+  if (!VALID_KEYS.includes(key)) return res.status(403).json({ error: 'Sai secret key' });
   setGuardEnabled(false);
   res.json({ success: true, message: 'Đã TẮT Chế Độ Kiểm Thử. Hệ thống mở tự do cho mọi IP.', enabled: false });
 });
 
 /**
- * 4. XEM TRẠNG THÁI:
+ * 5. XEM TRẠNG THÁI:
  * GET /api/guard/status?key=RedlineSecret2026
  */
 guardRouter.get('/status', (req: Request, res: Response) => {
   const key = req.query.key as string;
-  if (key !== SECRET_KEY) return res.status(403).json({ error: 'Sai secret key' });
+  if (!VALID_KEYS.includes(key)) return res.status(403).json({ error: 'Sai secret key' });
   res.json({
     enabled: isGuardEnabled(),
     allowedIps: getAllowedIps(),
@@ -143,19 +167,18 @@ guardRouter.get('/status', (req: Request, res: Response) => {
 });
 
 /**
- * 5. API QUẢN TRỊ ADMIN (Dành cho công tắc trên Dashboard):
+ * 6. API ADMIN TOGGLE:
  * POST /api/guard/admin/toggle
  */
 guardRouter.post('/admin/toggle', authMiddleware, (req: AuthRequest, res: Response) => {
   if (req.user?.role !== 'ADMIN') {
-    return res.status(403).json({ error: 'Chỉ Admin mới có quyền bật tắt chế độ kiểm thử.' });
+    return res.status(403).json({ error: 'Chỉ Admin mới có quyền.' });
   }
 
   const { enabled } = req.body;
   const newState = typeof enabled === 'boolean' ? enabled : !isGuardEnabled();
   setGuardEnabled(newState);
 
-  // Tự động whitelist luôn IP của Admin đang thực hiện thao tác
   const adminIp = getClientIp(req);
   addAllowedIp(adminIp);
 
@@ -164,18 +187,7 @@ guardRouter.post('/admin/toggle', authMiddleware, (req: AuthRequest, res: Respon
     enabled: isGuardEnabled(),
     allowedIps: getAllowedIps(),
     message: isGuardEnabled()
-      ? 'Đã BẬT Chế Độ Kiểm Thử Riêng Tư. Người ngoài sẽ bị chặn.'
-      : 'Đã TẮT Chế Độ Kiểm Thử. Mọi IP đều có thể truy cập.'
+      ? 'Đã BẬT Chế Độ Kiểm Thử Riêng Tư.'
+      : 'Đã TẮT Chế Độ Kiểm Thử.'
   });
-});
-
-/**
- * 6. XÓA 1 IP KHỎI WHITELIST:
- * POST /api/guard/admin/remove-ip
- */
-guardRouter.post('/admin/remove-ip', authMiddleware, (req: AuthRequest, res: Response) => {
-  if (req.user?.role !== 'ADMIN') return res.status(403).json({ error: 'Chỉ Admin mới có quyền.' });
-  const { ip } = req.body;
-  removeAllowedIp(ip);
-  res.json({ success: true, allowedIps: getAllowedIps() });
 });
