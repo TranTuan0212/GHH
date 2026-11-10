@@ -8,8 +8,6 @@ import { Server as SocketIOServer } from 'socket.io';
 import { WebSocketServer, WebSocket as WsWebSocket } from 'ws';
 import jwt from 'jsonwebtoken';
 import { authRouter, JWT_SECRET } from './routes/auth';
-import { guardRouter } from './routes/guard';
-import { ipGuardMiddleware } from './middleware/ipGuard';
 import { adminRouter } from './routes/admin';
 import { streamRouter, setSocketServer } from './routes/stream';
 import { licenseRouter } from './routes/license';
@@ -190,11 +188,6 @@ const realtimeUserChanges: express.RequestHandler = (req, res, next) => {
 };
 
 // API Routes
-// Đường dẫn mở khóa / quản lý Chế độ kiểm thử (luôn cho phép để mở khóa)
-app.use('/api/guard', guardRouter);
-
-// Middleware chặn mọi IP lạ khi Chế Độ Kiểm Thử Riêng Tư đang BẬT
-app.use(ipGuardMiddleware);
 
 app.use('/api/auth', realtimeUserChanges, authRouter);
 app.use('/api/admin', realtimeUserChanges, adminRouter);

@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.JWT_SECRET = exports.authRouter = void 0;
 exports.authMiddleware = authMiddleware;
 exports.adminMiddleware = adminMiddleware;
-const ipGuard_1 = require("../middleware/ipGuard");
 const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
@@ -113,9 +112,6 @@ exports.authRouter.post('/login', (req, res) => {
         platform: platform || 'web',
         deviceUuid: deviceUuid || null
     }, exports.JWT_SECRET, { expiresIn: '30d' });
-    // Tự động mở khóa IP khi đăng nhập thành công (cho cả Web và App Live 4G/5G)
-    const clientIp = (0, ipGuard_1.getClientIp)(req);
-    (0, ipGuard_1.addAllowedIp)(clientIp);
     return res.json({
         token,
         user: {

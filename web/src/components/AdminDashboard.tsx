@@ -62,42 +62,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [userSearchTerm, setUserSearchTerm] = useState('');
-  const [guardEnabled, setGuardEnabled] = useState(true);
-  const [guardLoading, setGuardLoading] = useState(false);
-  const [copiedGuardLink, setCopiedGuardLink] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/guard/status?key=Bacuanobita@1')
-      .then(r => r.json())
-      .then(d => { if (typeof d.enabled === 'boolean') setGuardEnabled(d.enabled); })
-      .catch(() => {});
-  }, []);
-
-  const handleToggleGuard = async () => {
-    setGuardLoading(true);
-    try {
-      const res = await fetch('/api/guard/admin/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ enabled: !guardEnabled })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setGuardEnabled(data.enabled);
-      showMsg(data.message, 'success');
-    } catch (err: any) {
-      showMsg(err.message, 'error');
-    } finally {
-      setGuardLoading(false);
-    }
-  };
-
-  const copyGuardLink = () => {
-    const unlockUrl = `${window.location.protocol}//${window.location.host}/api/guard/unlock?key=Bacuanobita@1`;
-    navigator.clipboard.writeText(unlockUrl);
-    setCopiedGuardLink(true);
-    setTimeout(() => setCopiedGuardLink(false), 2000);
-  };
     
   // Quản lý file IPA & Chứng chỉ
   interface AppFile {
