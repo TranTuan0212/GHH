@@ -2,7 +2,7 @@ logLevel: info
 
 readTimeout: 60s
 writeTimeout: 60s
-writeQueueSize: 16384
+writeQueueSize: 512
 udpMaxPayloadSize: 1472
 udpReadBufferSize: 33554432
 
