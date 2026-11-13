@@ -135,7 +135,10 @@ OBJC
           buf_source = File.read(streaming_buf)
           buf_patched = buf_source.gsub(
             'defaultSendBufferMaxCount = 600;',
-            'defaultSendBufferMaxCount = 200;'
+            'defaultSendBufferMaxCount = 60;'
+          ).gsub(
+            'defaultSortBufferMaxCount = 10;',
+            'defaultSortBufferMaxCount = 3;'
           )
           if buf_patched != buf_source
             File.write(streaming_buf, buf_patched)

@@ -1166,11 +1166,10 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             try {
               const anyReceiver = receiver as any;
               if (anyReceiver && 'playoutDelayHint' in anyReceiver) {
-                // Tang dem thich ung mang ping cao 200-500ms triet tieu lag khung (xem DEBUG_LOG.md)
-                anyReceiver.playoutDelayHint = 0.40;
+                anyReceiver.playoutDelayHint = 0.12;
               }
               if (anyReceiver && 'jitterBufferTarget' in anyReceiver) {
-                anyReceiver.jitterBufferTarget = 400;
+                anyReceiver.jitterBufferTarget = 120;
               }
             } catch {}
             if (cancelled || !streams[0]) return;
@@ -1218,11 +1217,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                   const rv = replayVideoRef.current;
                   rv.muted = isMuted;
                   rv.playbackRate = 1.0;
-                  if (rv.buffered.length > 0) {
-                    const bEnd = rv.buffered.end(rv.buffered.length - 1);
-                    if (bEnd - rv.currentTime > 2.5 || rv.currentTime === 0) {
-                      rv.currentTime = Math.max(0, bEnd - 1.0);
-                    }
+                  if (hlsRef.current) {
+                    hlsRef.current.config.liveMaxLatencyDuration = 3.0;
+                    try { hlsRef.current.startLoad(-1); } catch {}
+                  }
+                  const targetEdge = Math.max(
+                    hlsLiveEdgeRef.current,
+                    rv.buffered.length > 0 ? rv.buffered.end(rv.buffered.length - 1) : 0
+                  );
+                  if (targetEdge > 0 && (targetEdge - rv.currentTime > 2.0 || rv.currentTime === 0)) {
+                    rv.currentTime = Math.max(0, targetEdge - 1.0);
                   }
                   rv.play().catch(() => {});
                 }
@@ -1255,11 +1259,16 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               const rv = replayVideoRef.current;
               rv.muted = isMuted;
               rv.playbackRate = 1.0;
-              if (rv.buffered.length > 0) {
-                const bEnd = rv.buffered.end(rv.buffered.length - 1);
-                if (bEnd - rv.currentTime > 2.5 || rv.currentTime === 0) {
-                  rv.currentTime = Math.max(0, bEnd - 1.0);
-                }
+              if (hlsRef.current) {
+                hlsRef.current.config.liveMaxLatencyDuration = 3.0;
+                try { hlsRef.current.startLoad(-1); } catch {}
+              }
+              const targetEdge = Math.max(
+                hlsLiveEdgeRef.current,
+                rv.buffered.length > 0 ? rv.buffered.end(rv.buffered.length - 1) : 0
+              );
+              if (targetEdge > 0 && (targetEdge - rv.currentTime > 2.0 || rv.currentTime === 0)) {
+                rv.currentTime = Math.max(0, targetEdge - 1.0);
               }
               rv.play().catch(() => {});
             }
@@ -1307,12 +1316,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // Tối ưu Mobile/Tablet: Dừng decoder replay video khi Live sẵn sàng để dồn 100% phần cứng cho WebRTC Live
         replayVideoRef.current.pause();
       }
-      if (isLiveRef.current && isMobileDevice && hlsRef.current) {
-        // Trên điện thoại: Tạm ngắt tải HLS ngầm khi Live đang phát, dồn 100% băng thông 4G/Wi-Fi cho WebRTC Live
-        try {
-          (hlsRef.current as any).stopLoad();
-        } catch {}
-      }
+      // Giữ HLS ở chế độ rolling window siêu nhẹ (chỉ bám sát 2s cuối của mép Live)
     };
     const onLiveVideoResize = () => {
       if (video.videoWidth > 0 && video.videoHeight > 0) {
@@ -1386,6 +1390,50 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       replayVideoRef.current.playbackRate = isLive ? 1.0 : playbackRate;
     }
   }, [playbackRate, isLive]);
+
+  // Bộ canh chống tích tụ delay (Live Catch-up Watchdog):
+  // Đảm bảo cả WebRTC Live lẫn HLS Fallback luôn bám sát mép thời gian thực, tuyệt đối không dồn delay về sau.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!isLiveRef.current) return;
+
+      // 1. Giữ thẻ <video> WebRTC luôn ở sát mép buffer mới nhất (không để trình duyệt tích lũy trễ khi khác mạng)
+      const lv = liveVideoRef.current;
+      if (lv && !lv.paused && lv.buffered && lv.buffered.length > 0) {
+        const bEnd = lv.buffered.end(lv.buffered.length - 1);
+        const lag = bEnd - lv.currentTime;
+        if (lag > 0.65) {
+          lv.currentTime = Math.max(0, bEnd - 0.08);
+          lv.playbackRate = 1.0;
+        } else if (lag > 0.30) {
+          lv.playbackRate = 1.06;
+        } else if (lv.playbackRate !== 1.0) {
+          lv.playbackRate = 1.0;
+        }
+      }
+
+      // 2. Nếu đang chạy HLS Fallback ở chế độ Live (khi WebRTC tạm ngắt), ép bám sát hlsLiveEdge
+      if (!hasLiveFrameRef.current && replayVideoRef.current) {
+        const rv = replayVideoRef.current;
+        const edge = Math.max(
+          hlsLiveEdgeRef.current,
+          rv.buffered.length > 0 ? rv.buffered.end(rv.buffered.length - 1) : 0
+        );
+        if (edge > 0) {
+          const lag = edge - rv.currentTime;
+          if (lag > 2.8) {
+            rv.currentTime = Math.max(0, edge - 1.0);
+            rv.playbackRate = 1.0;
+          } else if (lag > 1.6) {
+            rv.playbackRate = 1.08;
+          } else if (rv.playbackRate !== 1.0) {
+            rv.playbackRate = 1.0;
+          }
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // HLS DVR Player. Luôn tải ngầm và đệm sẵn các segment vào RAM để tua tức thì 0ms
   useEffect(() => {
@@ -1493,19 +1541,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
         // RAM Buffer 3 phút (180s) cho instant rewind 0ms delay, buffer 15-30s phía trước
         // Mở rộng bộ đệm 90s - 180s nạp liên tục một mạch, loại bỏ triệt để hiện tượng đứt đoạn / lủng lỗ:
         // Cấu hình đệm tinh gọn, bám sát Live 0.8s, giải phóng triệt để CPU và băng thông server:
-        maxBufferLength: isMobileDevice ? 12 : 60,
-        maxMaxBufferLength: isMobileDevice ? 24 : 120,
-        maxBufferSize: isMobileDevice ? (24 * 1024 * 1024) : (128 * 1024 * 1024),
-        backBufferLength: isMobileDevice ? 10 : 60,
+        maxBufferLength: isMobileDevice ? 4 : 6,
+        maxMaxBufferLength: isMobileDevice ? 8 : 12,
+        maxBufferSize: isMobileDevice ? (16 * 1024 * 1024) : (48 * 1024 * 1024),
+        backBufferLength: isMobileDevice ? 8 : 15,
         maxBufferHole: 0.3,
         nudgeOffset: 0.1,
         nudgeMaxRetry: 5,
         // TẮT hoàn toàn watchdog buffer cao để không kích hoạt stall giả khi phát slow-mo
         highBufferWatchdogPeriod: 0,
-        // Đệm an toàn 2.5s để triệt tiêu bufferNudgeOnStall và nạp thanh HLS mượt mà:
-        liveSyncDuration: 2.5,
-        liveMaxLatencyDuration: 5.0,
-        maxLiveSyncPlaybackRate: 1.0,
+        // Bám sát mép Live 1.5s và tự tăng tốc nhẹ (1.15x) nếu trễ quá 3.0s:
+        liveSyncDuration: 1.5,
+        liveMaxLatencyDuration: 3.0,
+        maxLiveSyncPlaybackRate: 1.15,
         enableWorker: true,
         // TẮT lowLatencyMode để hls.js dùng XHRLoader nạp dứt điểm từng segment .ts
         lowLatencyMode: false,
@@ -1550,10 +1598,18 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
             setHlsWindowStart(start);
             setHlsLiveEdge(end);
 
-            // Chế độ On-Demand: khi đang xem Live bình thường (không có hẹn slow),
-            // giữ video ngầm ở trạng thái pause để không ngốn CPU/băng thông
-            if (!scheduledSlowRef.current && !video.paused) {
-              video.pause();
+            // Khi đang xem WebRTC Live bình thường: giữ video HLS ngầm ở trạng thái pause
+            // NHƯNG luôn tịnh tiến con trỏ currentTime bám theo (end - 1.5s) để hls.js tự xả
+            // buffer cũ (backBufferLength) và chỉ giữ đúng 2-3 segment mới nhất tại mép Live!
+            if (hasLiveFrameRef.current && !scheduledSlowRef.current) {
+              if (!video.paused) {
+                video.pause();
+              }
+              if (end > 1.5 && Math.abs(end - 1.5 - video.currentTime) > 2.5) {
+                try {
+                  video.currentTime = Math.max(start, end - 1.5);
+                } catch {}
+              }
             }
           }
         }
@@ -1968,13 +2024,19 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       }
     }
 
-    // 2. Dừng giải mã và dừng nạp HLS khi đang xem Live trực tiếp để giải phóng 100% GPU/CPU
+    // 2. Dừng giải mã HLS khi đang xem WebRTC Live và đưa con trỏ HLS về sát mép Live mới nhất
     if (replayVideoRef.current) {
       replayVideoRef.current.pause();
+      if (hlsLiveEdgeRef.current > 1.5) {
+        try {
+          replayVideoRef.current.currentTime = Math.max(0, hlsLiveEdgeRef.current - 1.5);
+        } catch {}
+      }
     }
     if (hlsRef.current) {
+      hlsRef.current.config.liveMaxLatencyDuration = 3.0;
       try {
-        (hlsRef.current as any).stopLoad();
+        hlsRef.current.startLoad(-1);
       } catch {}
     }
 
@@ -2473,7 +2535,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   }, [isTextOverlayOpen, isLive]);
 
   // Chrome/Safari tối thiểu hỗ trợ playbackRate = 0.0625 (1/16). 0.05 sẽ throw NotSupportedError.
-  const speedOptions = [0.0625, 0.1, 0.125, 0.25, 0.5, 0.75, 1.0];
+  const speedOptions = [0.0625, 0.1, 0.125, 0.25, 0.35, 0.5, 0.75, 1.0];
 
   // Menu chọn tốc độ Custom chuẩn YouTube (tránh iPad văng fullscreen do thẻ select)
   const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState(false);
@@ -3596,6 +3658,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                           rate === 0.1   ? '0.1x (Cực chậm)'   :
                           rate === 0.125 ? '1/8x (Rất chậm)'   :
                           rate === 0.25  ? '0.25x (Chậm)'       :
+                          rate === 0.35  ? '0.35x (Vừa chậm)'   :
                           rate === 0.5   ? '0.5x (Nửa tốc)'    :
                           rate === 0.75  ? '0.75x (Hơi chậm)'  :
                                           '1.0x (Bình thường)';
@@ -3981,7 +4044,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
               )}
 
               <div className="bg-slate-900/95 border border-white/20 rounded-xl p-0.5 flex items-center gap-0.5 text-[11px] font-mono font-bold shadow-xl">
-                {[0.1, 0.25, 0.5].map((spd) => (
+                {[0.1, 0.25, 0.35, 0.5].map((spd) => (
                   <button
                     key={spd}
                     type="button"

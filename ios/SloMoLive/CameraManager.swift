@@ -213,7 +213,7 @@ public class CameraManager: NSObject, ObservableObject {
         BitratePreset(mbps: 12, label: "12 Mbps - Wi-Fi mạnh")
     ]
     public static let defaultBitrateMbps = 6
-    private static let minBitrateRatio = 0.50
+    private static let minBitrateRatio = 0.30
     private static let bitrateDefaultsKey = "SloMoLive.streamBitrateMbps"
     private static let adaptiveDefaultsKey = "SloMoLive.streamAdaptiveBitrate"
 
@@ -574,8 +574,8 @@ public class CameraManager: NSObject, ObservableObject {
         videoCfg.videoSizeRespectingAspectRatio = false
 
         // Khớp hoàn hảo videoSize của bộ nén với resolution thực tế của camera (mặc định chuẩn Full HD 1920x1080).
-        var captureWidth: CGFloat = 1920
-        var captureHeight: CGFloat = 1080
+        var captureWidth: CGFloat = CGFloat(selectedResolution.targetWidth)
+        var captureHeight: CGFloat = CGFloat(selectedResolution.targetHeight)
         if let device = videoDeviceInput?.device {
             let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
             let maxDim = max(CGFloat(dims.width), CGFloat(dims.height))
