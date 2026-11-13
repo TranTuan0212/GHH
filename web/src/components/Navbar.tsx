@@ -152,10 +152,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               {/* Đổi mật khẩu button */}
               <button
                 onClick={openChangePw}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-sky-600/20 hover:text-sky-300 text-slate-400 border border-white/10 transition-all active:scale-95"
-                title="Đổi mật khẩu"
+                className="p-2 sm:px-3 sm:py-2 rounded-xl bg-slate-800 hover:bg-sky-600/20 hover:text-sky-300 text-slate-300 border border-white/10 transition-all flex items-center space-x-1 text-xs active:scale-95"
+                title="Đổi mật khẩu tài khoản hiện tại"
               >
-                <Key className="w-4 h-4" />
+                <Key className="w-4 h-4 text-sky-400" />
+                <span className="hidden sm:inline">Đổi Mật Khẩu</span>
               </button>
 
               <button
