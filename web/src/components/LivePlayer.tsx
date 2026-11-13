@@ -3281,15 +3281,34 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => toggleScheduledSlow()}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300 shadow-sm"
-                title="Cắm cờ hẹn tự động Slow sau khi lật bài (Phím tắt: S)"
-              >
-                <span>🎯</span>
-                <span>Hẹn Slow {autoSlowSpeed}x (S)</span>
-              </button>
+              <div className="flex items-center gap-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => toggleScheduledSlow()}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 border cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 border-amber-300 shadow-sm"
+                  title="Cắm cờ hẹn tự động Slow sau khi lật bài (Phím tắt: S)"
+                >
+                  <span>🎯</span>
+                  <span>Hẹn Slow {autoSlowSpeed}x (S)</span>
+                </button>
+                <div className="bg-slate-800/90 border border-white/10 rounded-full p-0.5 flex items-center gap-0.5 text-[10px] font-mono font-bold">
+                  {[0.1, 0.25, 0.35, 0.5].map((spd) => (
+                    <button
+                      key={spd}
+                      type="button"
+                      onClick={() => setAutoSlowSpeed(spd)}
+                      className={`px-1.5 py-0.5 rounded-full transition-all cursor-pointer ${
+                        autoSlowSpeed === spd
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title={`Chọn tốc độ hẹn Slow ${spd}x`}
+                    >
+                      {spd}x
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
             {!isLive && (
               <button
