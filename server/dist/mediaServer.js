@@ -95,14 +95,14 @@ function ensureRtcRelay(streamKey) {
         '-rtsp_transport', 'tcp',
         '-i', `rtsp://127.0.0.1:8554/live/${streamKey}`,
         '-map', '0:v:0',
-        '-vf', "fps=fps=60:round=near,scale='if(gt(iw,ih),-2,min(720,iw))':'if(gt(iw,ih),min(720,ih),-2)':flags=fast_bilinear",
+        '-vf', "fps=fps=60:round=near,scale='if(gt(iw,ih),-2,min(480,iw))':'if(gt(iw,ih),min(480,ih),-2)':flags=fast_bilinear",
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-threads', '2',
-        '-b:v', '1600k',
-        '-maxrate', '1800k',
-        '-bufsize', '300k',
+        '-b:v', '1100k',
+        '-maxrate', '1300k',
+        '-bufsize', '250k',
         '-g', '30',
         '-keyint_min', '30',
         '-sc_threshold', '0',
@@ -120,7 +120,7 @@ function ensureRtcRelay(streamKey) {
     const proc = (0, child_process_1.spawn)(resolveFfmpegPath(), ffmpegArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
     const relay = { proc, startedAt: Date.now(), alive: true };
     rtcRelays.set(streamKey, relay);
-    console.log(`[MediaServer] 🔊 Khởi động WebRTC Live Transcode (720p 60fps 2.2M, không audio): live/${streamKey}${exports.RTC_RELAY_SUFFIX}`);
+    console.log(`[MediaServer] 🔊 Khởi động WebRTC Live Transcode (480p 60fps 1.1M, không audio): live/${streamKey}${exports.RTC_RELAY_SUFFIX}`);
     proc.stderr?.on('data', (data) => {
         const line = data.toString().trim();
         if (line)

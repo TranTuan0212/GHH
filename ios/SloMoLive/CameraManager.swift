@@ -212,14 +212,14 @@ public class CameraManager: NSObject, ObservableObject {
         BitratePreset(mbps: 10, label: "10 Mbps - Cực nét"),
         BitratePreset(mbps: 12, label: "12 Mbps - Wi-Fi mạnh")
     ]
-    public static let defaultBitrateMbps = 6
+    public static let defaultBitrateMbps = 8
     private static let minBitrateRatio = 0.30
     private static let bitrateDefaultsKey = "SloMoLive.streamBitrateMbps"
     private static let adaptiveDefaultsKey = "SloMoLive.streamAdaptiveBitrate"
 
     @Published public private(set) var selectedResolution: ResolutionPreset = {
         let saved = UserDefaults.standard.string(forKey: CameraManager.resolutionDefaultsKey) ?? ""
-        return ResolutionPreset(rawValue: saved) ?? .p720_120
+        return ResolutionPreset(rawValue: saved) ?? .p1080_120
     }()
 
     @Published public private(set) var selectedQuality: Float = {
