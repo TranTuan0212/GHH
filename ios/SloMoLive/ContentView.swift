@@ -784,6 +784,9 @@ extension ContentView {
                 locationManager.onGpsUpdated = { lat, lng in
                     networkManager.sendGPS(lat: lat, lng: lng)
                 }
+                DispatchQueue.main.async {
+                    self.showFakeBlackScreen()
+                }
             }
         }
     }
@@ -852,16 +855,24 @@ final class BlackScreenManager {
     static let shared = BlackScreenManager()
     private var blackWindow: UIWindow?
     private var lockObserver: NSObjectProtocol?
+    private var previousBrightness: CGFloat = 0.6
 
     private init() {}
 
     func show() {
         DispatchQueue.main.async {
+            guard self.blackWindow == nil else { return }
             guard let windowScene = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .first(where: { $0.activationState == .foregroundActive })
                 ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
             else { return }
+
+            // Lưu độ sáng hiện tại trước khi hạ về 0
+            self.previousBrightness = UIScreen.main.brightness
+
+            // Ngắt render preview layer để giảm tải GPU & nhiệt độ, không ảnh hưởng luồng Live
+            VideoPreviewView.activePreviewLayer?.connection?.isEnabled = false
 
             let win = UIWindow(windowScene: windowScene)
             win.windowLevel = UIWindow.Level.normal + 1
@@ -903,7 +914,9 @@ final class BlackScreenManager {
             self.blackWindow?.resignKey()
             self.blackWindow?.isHidden = true
             self.blackWindow = nil
-            UIScreen.main.brightness = 0.6
+            // Bật lại render preview layer khi mở sáng màn hình
+            VideoPreviewView.activePreviewLayer?.connection?.isEnabled = true
+            UIScreen.main.brightness = self.previousBrightness
             UIApplication.shared.isIdleTimerDisabled = false
             VolumeObserver.shared.resetVolumeSliderToMid()
             print("[BlackScreenManager] Màn hình đen OFF")
