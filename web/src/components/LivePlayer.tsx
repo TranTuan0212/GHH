@@ -147,7 +147,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
   const scheduledSlowRef = useRef<ScheduledSlow | null>(null);
   const [autoSlowSpeed, setAutoSlowSpeed] = useState<number>(0.25);
 
-  // Tự động kích hoạt Slow-Mo tại mốc hẹn (Auto-trigger hoàn toàn tự động sau 2.5s - 3.5s)
+  // Tự động kích hoạt Slow-Mo tại mốc hẹn (Auto-trigger nhanh, tối đa 1.0s)
   useEffect(() => {
     const timer = setInterval(() => {
       if (scheduledSlowRef.current && isLiveRef.current) {
@@ -156,7 +156,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           const elapsedSec = (Date.now() - sched.scheduledAt) / 1000;
           const b = replayVideoRef.current?.buffered;
           const lastHlsEnd = (b && b.length > 0) ? b.end(b.length - 1) : 0;
-          if ((elapsedSec >= 2.5 && lastHlsEnd >= sched.targetTime) || elapsedSec >= 4.0) {
+          if ((elapsedSec >= 0.4 && lastHlsEnd >= sched.targetTime) || elapsedSec >= 1.0) {
             console.log('[LivePlayer] 🎯 Tự động kích hoạt Slow tại mốc hẹn:', sched);
             sched.triggered = true;
             setScheduledSlow({ ...sched, triggered: true });
@@ -165,7 +165,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
           }
         }
       }
-    }, 200);
+    }, 100);
     return () => clearInterval(timer);
   }, []);
   const hasLiveFrameRef = useRef<boolean>(false);
@@ -2222,7 +2222,7 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     showModeNotice(
       'slow',
       `🎯 ĐÃ HẸN SLOW ${speed}x!`,
-      `Đang đón khoảnh khắc lật bài, hệ thống sẽ TỰ ĐỘNG phát quay chậm sau ~3 giây...`,
+      `Đang đón khoảnh khắc lật bài, hệ thống sẽ TỰ ĐỘNG phát quay chậm sau ~1 giây...`,
       'Bạn cứ xem Live bình thường, video sẽ tự động phát lại slow-mo!'
     );
   };
