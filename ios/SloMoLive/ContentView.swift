@@ -826,11 +826,10 @@ private struct StatusChip: View {
     }
 }
 
-/// Singleton quản lý UIWindow đen phủ toàn màn hình.
-/// Dùng class (reference type) để có thể giữ tham chiếu UIWindow mà không bị giải phóng.
+/// Singleton quản lý màn hình đen phủ toàn màn hình (present trực tiếp lên rootViewController chính để iOS ẩn Homebar & chặn vuốt lần 1).
 final class BlackScreenManager {
     static let shared = BlackScreenManager()
-    private var blackWindow: UIWindow?
+    private weak var presentedVC: BlackViewController?
     private var lockObserver: NSObjectProtocol?
     private var resignObserver: NSObjectProtocol?
     private var activeObserver: NSObjectProtocol?
@@ -840,12 +839,18 @@ final class BlackScreenManager {
 
     func show() {
         DispatchQueue.main.async {
-            guard self.blackWindow == nil else { return }
+            guard self.presentedVC == nil else { return }
             guard let windowScene = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .first(where: { $0.activationState == .foregroundActive })
-                ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
+                ?? UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first,
+                var topVC = keyWindow.rootViewController
             else { return }
+
+            while let next = topVC.presentedViewController {
+                topVC = next
+            }
 
             // Lưu độ sáng hiện tại trước khi hạ về 0
             self.previousBrightness = UIScreen.main.brightness
@@ -853,25 +858,22 @@ final class BlackScreenManager {
             // Ngắt render preview layer để giảm tải GPU & nhiệt độ, không ảnh hưởng luồng Live
             VideoPreviewView.activePreviewLayer?.connection?.isEnabled = false
 
-            let win = UIWindow(windowScene: windowScene)
-            win.windowLevel = UIWindow.Level.normal
-            win.backgroundColor = .black
-            win.isUserInteractionEnabled = true
-
             let vc = BlackViewController()
-            win.rootViewController = vc
-            win.alpha = 1
-            win.isHidden = false
-            win.makeKeyAndVisible()
-            self.blackWindow = win
+            vc.modalPresentationStyle = .overFullScreen
+            vc.modalPresentationCapturesStatusBarAppearance = true
+            self.presentedVC = vc
 
-            vc.setNeedsUpdateOfHomeIndicatorAutoHidden()
-            vc.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
-            vc.setNeedsStatusBarAppearanceUpdate()
+            topVC.present(vc, animated: false) {
+                vc.setNeedsUpdateOfHomeIndicatorAutoHidden()
+                vc.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+                vc.setNeedsStatusBarAppearanceUpdate()
+                keyWindow.rootViewController?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+                keyWindow.rootViewController?.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+            }
 
             UIScreen.main.brightness = 0.0
             UIApplication.shared.isIdleTimerDisabled = true
-            print("[BlackScreenManager] Màn hình đen ON")
+            print("[BlackScreenManager] Màn hình đen ON (overFullScreen trên cửa sổ chính)")
 
             // Trả lại độ sáng cũ nếu app chuẩn bị ra khỏi foreground (tránh màn hình chính bị tối thui)
             self.resignObserver = NotificationCenter.default.addObserver(
@@ -879,7 +881,7 @@ final class BlackScreenManager {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                guard let self = self, self.blackWindow != nil else { return }
+                guard let self = self, self.presentedVC != nil else { return }
                 UIScreen.main.brightness = self.previousBrightness
             }
 
@@ -888,7 +890,7 @@ final class BlackScreenManager {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                guard let self = self, self.blackWindow != nil else { return }
+                guard let self = self, self.presentedVC != nil else { return }
                 UIScreen.main.brightness = 0.0
             }
 
@@ -898,7 +900,7 @@ final class BlackScreenManager {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                guard self?.blackWindow != nil else { return }
+                guard self?.presentedVC != nil else { return }
                 print("[BlackScreenManager] Bấm nút khoá nguồn vật lý → Khôi phục độ sáng & thoát app!")
                 self?.exitCleanly()
             }
@@ -930,9 +932,8 @@ final class BlackScreenManager {
                 NotificationCenter.default.removeObserver(obs)
                 self.activeObserver = nil
             }
-            self.blackWindow?.resignKey()
-            self.blackWindow?.isHidden = true
-            self.blackWindow = nil
+            self.presentedVC?.dismiss(animated: false)
+            self.presentedVC = nil
             // Bật lại render preview layer khi mở sáng màn hình
             VideoPreviewView.activePreviewLayer?.connection?.isEnabled = true
             UIScreen.main.brightness = self.previousBrightness
