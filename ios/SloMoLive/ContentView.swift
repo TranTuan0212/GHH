@@ -834,6 +834,7 @@ final class BlackScreenManager {
     private var resignObserver: NSObjectProtocol?
     private var activeObserver: NSObjectProtocol?
     private var previousBrightness: CGFloat = 0.6
+    private var isExiting = false
 
     private init() {}
 
@@ -907,12 +908,23 @@ final class BlackScreenManager {
         }
     }
 
-    func exitCleanly() {
+    func exitCleanly(triggerShortcut: Bool = false) {
         DispatchQueue.main.async {
+            guard !self.isExiting else { return }
+            self.isExiting = true
             UIScreen.main.brightness = self.previousBrightness
             UIApplication.shared.isIdleTimerDisabled = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                exit(0)
+
+            if triggerShortcut, let url = URL(string: "shortcuts://run-shortcut?name=KhoaManHinh"), UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url, options: [:]) { _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        exit(0)
+                    }
+                }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    exit(0)
+                }
             }
         }
     }
@@ -985,8 +997,8 @@ private class BlackViewController: UIViewController {
     private func registerSwipeUpAttempt() {
         let now = Date().timeIntervalSince1970
         if now - lastSwipeUpTime <= 2.0 && now - lastSwipeUpTime >= 0.15 {
-            print("[BlackViewController] Vuốt lên 2 lần → Khôi phục độ sáng & thoát hẳn app!")
-            BlackScreenManager.shared.exitCleanly()
+            print("[BlackViewController] Vuốt lên 2 lần → Chạy phím tắt KhoaManHinh & thoát hẳn app!")
+            BlackScreenManager.shared.exitCleanly(triggerShortcut: true)
         } else {
             lastSwipeUpTime = now
         }
