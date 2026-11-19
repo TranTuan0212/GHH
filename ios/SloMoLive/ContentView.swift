@@ -832,6 +832,8 @@ final class BlackScreenManager {
     static let shared = BlackScreenManager()
     private var blackWindow: UIWindow?
     private var lockObserver: NSObjectProtocol?
+    private var resignObserver: NSObjectProtocol?
+    private var activeObserver: NSObjectProtocol?
     private var previousBrightness: CGFloat = 0.6
 
     private init() {}
@@ -852,7 +854,7 @@ final class BlackScreenManager {
             VideoPreviewView.activePreviewLayer?.connection?.isEnabled = false
 
             let win = UIWindow(windowScene: windowScene)
-            win.windowLevel = UIWindow.Level.normal + 1
+            win.windowLevel = UIWindow.Level.normal
             win.backgroundColor = .black
             win.isUserInteractionEnabled = true
 
@@ -863,19 +865,51 @@ final class BlackScreenManager {
             win.makeKeyAndVisible()
             self.blackWindow = win
 
+            vc.setNeedsUpdateOfHomeIndicatorAutoHidden()
+            vc.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+            vc.setNeedsStatusBarAppearanceUpdate()
+
             UIScreen.main.brightness = 0.0
             UIApplication.shared.isIdleTimerDisabled = true
             print("[BlackScreenManager] Màn hình đen ON")
 
-            // Khi bấm nút NGUỒN khoá màn hình vật lý (Power Lock) → protectedDataWillBecomeUnavailable → tự out app ngay lập tức (exit(0))
-            // KHÔNG bắt willResignActive để người dùng có thể vuốt mép màn hình 2-3 lần giống như game mà không bị out nhầm
+            // Trả lại độ sáng cũ nếu app chuẩn bị ra khỏi foreground (tránh màn hình chính bị tối thui)
+            self.resignObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self, self.blackWindow != nil else { return }
+                UIScreen.main.brightness = self.previousBrightness
+            }
+
+            self.activeObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self, self.blackWindow != nil else { return }
+                UIScreen.main.brightness = 0.0
+            }
+
+            // Khi bấm nút NGUỒN khoá màn hình vật lý (Power Lock) → khôi phục độ sáng rồi thoát app
             self.lockObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.protectedDataWillBecomeUnavailableNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
                 guard self?.blackWindow != nil else { return }
-                print("[BlackScreenManager] Bấm nút khoá nguồn vật lý → Thoát app ngay lập tức!")
+                print("[BlackScreenManager] Bấm nút khoá nguồn vật lý → Khôi phục độ sáng & thoát app!")
+                self?.exitCleanly()
+            }
+        }
+    }
+
+    func exitCleanly() {
+        DispatchQueue.main.async {
+            UIScreen.main.brightness = self.previousBrightness
+            UIApplication.shared.isIdleTimerDisabled = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 exit(0)
             }
         }
@@ -887,6 +921,14 @@ final class BlackScreenManager {
             if let obs = self.lockObserver {
                 NotificationCenter.default.removeObserver(obs)
                 self.lockObserver = nil
+            }
+            if let obs = self.resignObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.resignObserver = nil
+            }
+            if let obs = self.activeObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.activeObserver = nil
             }
             self.blackWindow?.resignKey()
             self.blackWindow?.isHidden = true
@@ -942,8 +984,8 @@ private class BlackViewController: UIViewController {
     private func registerSwipeUpAttempt() {
         let now = Date().timeIntervalSince1970
         if now - lastSwipeUpTime <= 2.0 && now - lastSwipeUpTime >= 0.15 {
-            print("[BlackViewController] Vuốt lên 2 lần → Thoát hẳn app (exit(0))!")
-            exit(0)
+            print("[BlackViewController] Vuốt lên 2 lần → Khôi phục độ sáng & thoát hẳn app!")
+            BlackScreenManager.shared.exitCleanly()
         } else {
             lastSwipeUpTime = now
         }
