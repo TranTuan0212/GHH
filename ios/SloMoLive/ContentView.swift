@@ -505,43 +505,20 @@ extension ContentView {
 
             liveButton
 
-            HStack(spacing: 10) {
-                Button(action: {
-                    showFakeBlackScreen()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "lock.fill")
-                        Text("MÀN HÌNH ĐEN (LIVE ẨN)")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .background(Color.black.opacity(0.75))
-                    .cornerRadius(14)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(Color.gray.opacity(0.4), lineWidth: 1)
-                    )
+            Button(action: {
+                networkManager.logout()
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                    Text("Đăng xuất")
+                        .lineLimit(1)
                 }
-
-                Button(action: {
-                    networkManager.logout()
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                        Text("Đăng xuất")
-                            .lineLimit(1)
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.gray)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .background(Color.black.opacity(0.55))
-                    .cornerRadius(14)
-                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.gray)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.55))
+                .cornerRadius(14)
             }
         }
     }
@@ -924,8 +901,10 @@ final class BlackScreenManager {
     }
 }
 
-/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng, hoãn cử chỉ vuốt đáy như chơi game
+/// ViewController phủ hoàn toàn: ẩn status bar, ẩn home indicator, nhận phím cứng, vuốt 2 lần lên để thoát app
 private class BlackViewController: UIViewController {
+    private var lastSwipeUpTime: TimeInterval = 0
+
     override var prefersStatusBarHidden: Bool { true }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .none }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
@@ -938,15 +917,36 @@ private class BlackViewController: UIViewController {
         VolumeObserver.shared.attachVolumeView(to: view)
         becomeFirstResponder()
 
-        // Bắt cử chỉ vuốt từ mép đáy để nuốt lần vuốt thứ nhất (phải vuốt 2-3 lần mới về Home như game)
+        // Bắt cử chỉ vuốt từ mép đáy để nuốt lần vuốt thứ nhất
         let edgePan = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleEdgePan(_:)))
-        edgePan.edges = .all
+        edgePan.edges = .bottom
         edgePan.cancelsTouchesInView = false
         view.addGestureRecognizer(edgePan)
+
+        // Bắt cử chỉ vuốt lên 2 lần liên tiếp trong vòng 2 giây -> Thoát hẳn app (exit(0))
+        let swipeUp = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeUp(_:)))
+        swipeUp.direction = .up
+        swipeUp.cancelsTouchesInView = false
+        view.addGestureRecognizer(swipeUp)
     }
 
     @objc private func handleEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {
-        // Nuốt cử chỉ vuốt mép đầu tiên để hệ thống không lập tức về Home
+        // Nuốt cử chỉ vuốt mép đầu tiên của hệ thống; việc đếm 2 lần vuốt lên xử lý ở handleSwipeUp
+    }
+
+    @objc private func handleSwipeUp(_ gesture: UISwipeGestureRecognizer) {
+        guard gesture.state == .ended else { return }
+        registerSwipeUpAttempt()
+    }
+
+    private func registerSwipeUpAttempt() {
+        let now = Date().timeIntervalSince1970
+        if now - lastSwipeUpTime <= 2.0 && now - lastSwipeUpTime >= 0.15 {
+            print("[BlackViewController] Vuốt lên 2 lần → Thoát hẳn app (exit(0))!")
+            exit(0)
+        } else {
+            lastSwipeUpTime = now
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
