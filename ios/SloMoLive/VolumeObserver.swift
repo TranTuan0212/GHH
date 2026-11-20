@@ -31,11 +31,13 @@ public class VolumeObserver: NSObject, ObservableObject {
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth])
+            if session.category != .playAndRecord {
+                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth])
+            }
             try session.setActive(true)
             lastVolume = session.outputVolume
             UIApplication.shared.beginReceivingRemoteControlEvents()
-            print("[VolumeObserver] AVAudioSession sẵn sàng, initial volume = \(lastVolume)")
+            print("[VolumeObserver] AVAudioSession sẵn sàng (category=\(session.category.rawValue)), initial volume = \(lastVolume)")
         } catch {
             print("[VolumeObserver] Lỗi kích hoạt AVAudioSession: \(error)")
         }

@@ -33,6 +33,12 @@ public final class SloMoLiveDylibEntry: NSObject, UIGestureRecognizerDelegate {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleWillResignActive),
+            name: UIApplication.willResignActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleDidEnterBackground),
             name: UIApplication.didEnterBackgroundNotification,
             object: nil
@@ -42,6 +48,13 @@ public final class SloMoLiveDylibEntry: NSObject, UIGestureRecognizerDelegate {
     @objc private func handleDidBecomeActive() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             self.attachGestureIfNeeded()
+        }
+    }
+
+    @objc private func handleWillResignActive() {
+        // Nếu đang mở bảng đăng nhập (chưa Live) mà vuốt ra ngoài -> đóng ngay trước lúc iOS chụp snapshot đa nhiệm
+        if !NetworkManager.shared.isAuthenticated, hostedVC != nil {
+            dismissOverlay(cleanSession: true)
         }
     }
 
@@ -144,8 +157,13 @@ public final class SloMoLiveDylibEntry: NSObject, UIGestureRecognizerDelegate {
         }
 
         if let host = hostedVC {
-            host.dismiss(animated: false)
             hostedVC = nil
+            // Dismiss từ presentingViewController gốc để đóng trọn cả BlackViewController lẫn hostedVC trong 1 lần
+            if let presenter = host.presentingViewController {
+                presenter.dismiss(animated: false)
+            } else {
+                host.dismiss(animated: false)
+            }
         }
     }
 }

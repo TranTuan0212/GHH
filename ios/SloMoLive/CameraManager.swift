@@ -558,12 +558,29 @@ public class CameraManager: NSObject, ObservableObject {
     /// Cấu hình RTMP ingest + stream key trước khi bấm Start Live. App iOS lấy 2 giá trị này từ
     /// POST /api/stream/start (server trả `rtmpIngestUrl` + `streamKey` qua field session.streamKey).
     /// Trước đây có fallback "rtmp://localhost:1935/live" làm crash qua 5G — đã bỏ.
-    public func configureRtmp(serverHost: String, port: Int = 1935, streamKey: String) {
+    public func beginConnecting() {
+        DispatchQueue.main.async {
+            self.errorMessage = nil
+            self.isConnecting = true
+        }
+    }
+
+    public func cancelPendingConnect() {
+        DispatchQueue.main.async {
+            if !self.isStreaming {
+                self.isConnecting = false
+            }
+        }
+    }
+
+    public func configureRtmp(serverHost: String, port: Int = 1935, streamKey: String, rebuild: Bool = true) {
         // Nếu server trả về host chỉ là "localhost" mà thiết bị đang ngoài mạng LAN (5G), vẫn cho qua
         // nhưng sẽ fail ở startLive() — error delegate sẽ báo lên UI. Không tự ý đổi sang IP khác.
         self.rtmpIngestUrl = "rtmp://\(serverHost):\(port)/live/"
         self.streamKey = streamKey
-        rebuildLiveSession()
+        if rebuild {
+            rebuildLiveSession()
+        }
     }
 
     private func rebuildLiveSession() {
@@ -1068,23 +1085,26 @@ public class CameraManager: NSObject, ObservableObject {
         // Bật RTMP push — server (NMS + FFmpeg) sẽ slice thành HLS .ts/.m3u8.
         guard let session = liveSession else {
             DispatchQueue.main.async {
+                self.isConnecting = false
                 self.errorMessage = "Chưa khởi tạo LFLiveSession. Gọi configureRtmp(...) trước."
             }
             return
         }
         if streamKey.isEmpty {
             DispatchQueue.main.async {
+                self.isConnecting = false
                 self.errorMessage = "Chưa có stream key. Gọi configureRtmp(...) trước."
             }
             return
         }
         if rtmpIngestUrl.isEmpty {
             DispatchQueue.main.async {
+                self.isConnecting = false
                 self.errorMessage = "Chưa có RTMP ingest URL. Gọi configureRtmp(...) trước."
             }
             return
         }
-        guard !isConnecting, !isStreaming else { return }
+        guard !isStreaming, session.running != true else { return }
 
         let url = "\(rtmpIngestUrl)\(streamKey)"
 
