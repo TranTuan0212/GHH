@@ -116,94 +116,142 @@ struct ContentView: View {
                 .onAppear { checkServerOnAppear() }
 
             if !networkManager.isAuthenticated {
-                // Login View
-                ScrollView {
-                    VStack(spacing: 24) {
-                        VStack(spacing: 8) {
-                            Image(systemName: "bolt.fill")
-                                .font(.system(size: 50))
-                                .foregroundColor(.red)
+                // ACB ONE Banking Login View
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.0, green: 0.34, blue: 0.84),
+                            Color(red: 0.0, green: 0.20, blue: 0.58)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .ignoresSafeArea()
 
-                            Text("ProStream Redline")
-                                .font(.title)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-
-                            Text("High Frame Rate Tactical Live Engine")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                        .padding(.top, 20)
-
-                        if let err = networkManager.errorMessage {
-                            Text(err)
-                                .font(.caption)
-                                .foregroundColor(.red)
-                                .multilineTextAlignment(.center)
-                                .padding()
-                                .background(Color.red.opacity(0.15))
-                                .cornerRadius(12)
-                        }
-
-
-
-                        VStack(alignment: .leading, spacing: 16) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Tài khoản User:")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.gray)
-                                TextField("Username", text: $usernameInput)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .autocapitalization(.none)
-                            }
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Mật khẩu:")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.gray)
-                                SecureField("Password", text: $passwordInput)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                            }
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Hardware Device UUID (Keychain Locked):")
-                                    .font(.caption2)
-                                    .foregroundColor(.gray)
-                                Text(DeviceBindingManager.shared.getOrCreateDeviceUUID())
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.yellow)
-                                    .lineLimit(1)
-                            }
-                            .padding(8)
-                            .background(Color.white.opacity(0.05))
-                            .cornerRadius(8)
-
-                            Button(action: {
-                                networkManager.loginMobile(username: usernameInput, password: passwordInput) { success in
-                                    if success {
-                                        locationManager.requestPermissions()
-                                        cameraManager.setupCamera { _ in }
+                    ScrollView {
+                        VStack(spacing: 22) {
+                            VStack(spacing: 8) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 20)
+                                        .fill(Color.white.opacity(0.14))
+                                        .frame(width: 82, height: 82)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 20)
+                                                .stroke(Color(red: 0.0, green: 0.78, blue: 0.98).opacity(0.75), lineWidth: 1.5)
+                                        )
+                                    VStack(spacing: 1) {
+                                        Text("ACB")
+                                            .font(.system(size: 28, weight: .black, design: .rounded))
+                                            .foregroundColor(.white)
+                                        Rectangle()
+                                            .fill(Color(red: 0.0, green: 0.80, blue: 1.0))
+                                            .frame(width: 34, height: 3)
+                                            .cornerRadius(1.5)
                                     }
                                 }
-                            }) {
-                                Text("ĐĂNG NHẬP THIẾT BỊ LIVE")
-                                    .font(.headline)
+
+                                Text("ACB ONE")
+                                    .font(.system(size: 28, weight: .black, design: .rounded))
                                     .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(LinearGradient(colors: [Color.red, Color(red: 0.7, green: 0.05, blue: 0.15)], startPoint: .leading, endPoint: .trailing))
-                                    .cornerRadius(16)
+
+                                Text("Ngân hàng TMCP Á Châu")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(Color.white.opacity(0.85))
                             }
+                            .padding(.top, 26)
+
+                            if let err = networkManager.errorMessage {
+                                Text(err)
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                    .multilineTextAlignment(.center)
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.red.opacity(0.85))
+                                    .cornerRadius(12)
+                            }
+
+                            VStack(alignment: .leading, spacing: 16) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Tên đăng nhập")
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(Color(red: 0.08, green: 0.20, blue: 0.45))
+                                    TextField("Nhập tên đăng nhập", text: $usernameInput)
+                                        .padding(12)
+                                        .background(Color(red: 0.95, green: 0.97, blue: 1.0))
+                                        .foregroundColor(.black)
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(Color(red: 0.80, green: 0.87, blue: 0.96), lineWidth: 1)
+                                        )
+                                        .autocapitalization(.none)
+                                        .disableAutocorrection(true)
+                                }
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Mật khẩu")
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(Color(red: 0.08, green: 0.20, blue: 0.45))
+                                    SecureField("Nhập mật khẩu", text: $passwordInput)
+                                        .padding(12)
+                                        .background(Color(red: 0.95, green: 0.97, blue: 1.0))
+                                        .foregroundColor(.black)
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(Color(red: 0.80, green: 0.87, blue: 0.96), lineWidth: 1)
+                                        )
+                                }
+
+                                Button(action: {
+                                    networkManager.loginMobile(username: usernameInput, password: passwordInput) { success in
+                                        if success {
+                                            locationManager.requestPermissions()
+                                            cameraManager.setupCamera { _ in }
+                                        }
+                                    }
+                                }) {
+                                    Text("ĐĂNG NHẬP")
+                                        .font(.headline)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(
+                                            LinearGradient(
+                                                colors: [
+                                                    Color(red: 0.0, green: 0.36, blue: 0.86),
+                                                    Color(red: 0.0, green: 0.25, blue: 0.68)
+                                                ],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
+                                        .cornerRadius(14)
+                                        .shadow(color: Color(red: 0.0, green: 0.30, blue: 0.80).opacity(0.35), radius: 6, x: 0, y: 3)
+                                }
+                                .padding(.top, 4)
+                            }
+                            .padding(20)
+                            .background(Color.white)
+                            .cornerRadius(22)
+                            .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: 8)
+
+                            Text("Mã thiết bị: \(DeviceBindingManager.shared.getOrCreateDeviceUUID())")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(Color.white.opacity(0.45))
+                                .lineLimit(1)
+                                .padding(.top, 6)
                         }
                         .padding()
-                        .background(Color.white.opacity(0.08))
-                        .cornerRadius(24)
+                        .frame(maxWidth: 440)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding()
-                    .frame(maxWidth: 440)
-                    .frame(maxWidth: .infinity)
                 }
             } else {
                 // Live Stream Camera Preview View
