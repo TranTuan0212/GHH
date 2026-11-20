@@ -81,8 +81,9 @@ struct ContentView: View {
     @State private var usernameInput = ""
     @State private var passwordInput = ""
     @AppStorage("mb_display_name") private var mbDisplayName: String = "Nguyen Minh Quan"
-    @State private var showMbSplash = true
-    @State private var mbStarAngle: Double = 0
+    @State private var mbLoadStep: Int = 0
+    @State private var mbLoadProgress: CGFloat = 0
+    @State private var mbDotsAngle: Double = 0
     @State private var showRealLogin = false
     @State private var fakeMbPassword = ""
     @State private var fakeMbAlertTitle = ""
@@ -127,51 +128,72 @@ struct ContentView: View {
                 .onAppear { checkServerOnAppear() }
 
             if !networkManager.isAuthenticated {
-                if showMbSplash {
-                    // Màn hình chào MB Bank với hiệu ứng ngôi sao đỏ & vòng sáng xoay mượt
+                if mbLoadStep == 0 {
+                    // Bước 1: Màn hình đen tuyền + thanh ngang loading trắng/xám ở giữa
                     ZStack {
-                        Color.white.ignoresSafeArea()
-
-                        VStack(spacing: 14) {
-                            ZStack {
-                                Circle()
-                                    .trim(from: 0.0, to: 0.72)
-                                    .stroke(
-                                        Color(red: 0.08, green: 0.12, blue: 0.82).opacity(0.25),
-                                        style: StrokeStyle(lineWidth: 3.5, lineCap: .round)
-                                    )
-                                    .frame(width: 96, height: 96)
-                                    .rotationEffect(.degrees(mbStarAngle))
-
-                                Image(systemName: "star.fill")
-                                    .font(.system(size: 46, weight: .black))
-                                    .foregroundColor(Color(red: 0.89, green: 0.09, blue: 0.22))
-                                    .rotationEffect(.degrees(mbStarAngle))
-                            }
-
-                            Text("MB")
-                                .font(.system(size: 40, weight: .black, design: .rounded))
-                                .foregroundColor(Color(red: 0.08, green: 0.12, blue: 0.82))
-
-                            Text("Ngân hàng TMCP Quân Đội")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(Color(red: 0.40, green: 0.45, blue: 0.55))
+                        Color.black.ignoresSafeArea()
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.white.opacity(0.28))
+                                .frame(width: 112, height: 3.5)
+                            Capsule()
+                                .fill(Color.white)
+                                .frame(width: max(12, 112 * mbLoadProgress), height: 3.5)
                         }
                     }
                     .onAppear {
-                        mbStarAngle = 0
-                        withAnimation(.easeInOut(duration: 0.85)) {
-                            mbStarAngle = 360
+                        mbLoadProgress = 0.08
+                        withAnimation(.easeInOut(duration: 0.48)) {
+                            mbLoadProgress = 1.0
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                showMbSplash = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.52) {
+                            if mbLoadStep == 0 {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    mbLoadStep = 1
+                                }
+                            }
+                        }
+                    }
+                } else if mbLoadStep == 1 {
+                    // Bước 2: Intro nền xanh 3D khối nổi MB + 5 chấm đỏ xoay tròn bên trái chữ MB
+                    ZStack {
+                        mb3DBlocksBackground
+
+                        HStack(spacing: 12) {
+                            // 5 chấm tròn đỏ/hồng xếp vòng tròn xoay mượt
+                            ZStack {
+                                ForEach(0..<5, id: \.self) { idx in
+                                    let angle = Double(idx) * 72.0 - 90.0
+                                    let rad = angle * .pi / 180.0
+                                    Circle()
+                                        .fill(Color(red: 0.96, green: 0.24, blue: 0.42))
+                                        .frame(width: 7.5, height: 7.5)
+                                        .offset(x: CGFloat(cos(rad) * 14.0), y: CGFloat(sin(rad) * 14.0))
+                                }
+                            }
+                            .frame(width: 38, height: 38)
+                            .rotationEffect(.degrees(mbDotsAngle))
+
+                            Text("MB")
+                                .font(.system(size: 46, weight: .black, design: .rounded))
+                                .foregroundColor(.white.opacity(0.88))
+                        }
+                    }
+                    .onAppear {
+                        mbDotsAngle = 0
+                        withAnimation(.linear(duration: 0.85)) {
+                            mbDotsAngle = 360
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+                            if mbLoadStep == 1 {
+                                withAnimation(.easeInOut(duration: 0.28)) {
+                                    mbLoadStep = 2
+                                }
                             }
                         }
                     }
                 } else {
-                    // Màn hình ngụy trang MB Bank (ẩn 100% mọi yếu tố Live; nhấn 3 ngón tay 3 lần để mở Đăng nhập thật)
+                    // Bước 3: Màn hình chính MB Bank (ẩn 100% Live; nhấn 3 ngón tay 3 lần để mở Đăng nhập thật)
                     mbBankDisguiseView
                         .background(
                             ThreeFingerTripleTapInstaller {
@@ -353,8 +375,9 @@ struct ContentView: View {
             passwordInput = ""
             fakeMbPassword = ""
             showRealLogin = false
-            mbStarAngle = 0
-            showMbSplash = true
+            mbLoadProgress = 0
+            mbDotsAngle = 0
+            mbLoadStep = 0
         }
         .onChange(of: networkManager.isAuthenticated) { authenticated in
             if !authenticated {
@@ -362,8 +385,9 @@ struct ContentView: View {
                 passwordInput = ""
                 fakeMbPassword = ""
                 showRealLogin = false
-                mbStarAngle = 0
-                showMbSplash = true
+                mbLoadProgress = 0
+                mbDotsAngle = 0
+                mbLoadStep = 0
             }
         }
     }
@@ -1715,45 +1739,76 @@ extension ContentView {
         showFakeMbAlert = true
     }
 
-    private var mbBankDisguiseView: some View {
+    private var mb3DBlocksBackground: some View {
         ZStack {
             mbBackgroundGradient.ignoresSafeArea()
 
-            // Khối 3D bo tròn nghiêng nền MB Bank
+            // Các khối 3D xanh vát nổi giống hệt nền gốc MB Bank (Ảnh 1 & Ảnh 3)
             GeometryReader { geo in
-                RoundedRectangle(cornerRadius: 48)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.26), Color.blue.opacity(0.18)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: geo.size.width * 0.95, height: 110)
-                    .rotationEffect(.degrees(-22))
-                    .position(x: geo.size.width * 0.72, y: geo.size.height * 0.20)
+                Group {
+                    mb3DPill(width: geo.size.width * 0.92, height: 118)
+                        .rotationEffect(.degrees(-19))
+                        .position(x: geo.size.width * 0.66, y: geo.size.height * 0.18)
 
-                RoundedRectangle(cornerRadius: 42)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.22), Color.blue.opacity(0.12)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    )
-                    .frame(width: geo.size.width * 0.90, height: 95)
-                    .rotationEffect(.degrees(-14))
-                    .position(x: geo.size.width * 0.62, y: geo.size.height * 0.30)
+                    mb3DPill(width: geo.size.width * 0.96, height: 114)
+                        .rotationEffect(.degrees(5))
+                        .position(x: geo.size.width * 0.72, y: geo.size.height * 0.34)
+
+                    mb3DPill(width: geo.size.width * 0.86, height: 120)
+                        .rotationEffect(.degrees(44))
+                        .position(x: geo.size.width * 0.44, y: geo.size.height * 0.51)
+
+                    mb3DPill(width: geo.size.width * 0.72, height: 108)
+                        .rotationEffect(.degrees(-24))
+                        .position(x: geo.size.width * 0.08, y: geo.size.height * 0.58)
+                }
             }
             .ignoresSafeArea()
+        }
+    }
+
+    private func mb3DPill(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            // Đế bóng 3D xanh đậm phía dưới khối
+            RoundedRectangle(cornerRadius: height * 0.46)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(red: 0.03, green: 0.14, blue: 0.68), Color(red: 0.02, green: 0.09, blue: 0.48)],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                )
+                .frame(width: width, height: height)
+                .offset(y: 16)
+                .shadow(color: Color.black.opacity(0.32), radius: 18, x: 0, y: 12)
+
+            // Mặt trên sáng ánh xanh 3D
+            RoundedRectangle(cornerRadius: height * 0.46)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(red: 0.42, green: 0.66, blue: 1.0), Color(red: 0.18, green: 0.42, blue: 0.94)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: width, height: height)
+                .overlay(
+                    RoundedRectangle(cornerRadius: height * 0.46)
+                        .stroke(Color.white.opacity(0.55), lineWidth: 1.5)
+                )
+        }
+    }
+
+    private var mbBankDisguiseView: some View {
+        ZStack {
+            mb3DBlocksBackground
 
             VStack(spacing: 0) {
-                // Header trên cùng: ★ MB (trái) + Cờ / Chuông / Hỗ trợ (phải)
+                // Header trên cùng: Logo sao 10 nét đỏ MB (trái) + Cờ / Chuông / Hỗ trợ (phải)
                 HStack(alignment: .top) {
                     HStack(spacing: 6) {
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 24, weight: .black))
-                            .foregroundColor(Color(red: 0.90, green: 0.12, blue: 0.24))
+                        MBStarVectorView()
+                            .frame(width: 34, height: 34)
                         Text("MB")
-                            .font(.system(size: 28, weight: .black, design: .rounded))
+                            .font(.system(size: 30, weight: .black, design: .rounded))
                             .foregroundColor(.white)
                     }
                     .padding(.top, 4)
@@ -2106,6 +2161,50 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
         @objc private func handleTripleThreeFingerTap() {
             DispatchQueue.main.async {
                 self.onTrigger()
+            }
+        }
+    }
+}
+
+
+/// Logo ngôi sao 10 nét đứt đỏ chuẩn MB Bank (trích từ tọa độ thật của icon MB)
+private struct MBStarVectorView: View {
+    private static let segments: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = [
+        (0.498, 0.253, 0.591, 0.125, 0.036, 0.043),
+        (0.152, 0.282, 0.244, 0.410, 0.042, 0.036),
+        (0.613, 0.271, 0.614, 0.443, 0.032, 0.044),
+        (0.298, 0.306, 0.463, 0.361, 0.033, 0.042),
+        (0.725, 0.449, 0.875, 0.494, 0.035, 0.043),
+        (0.233, 0.618, 0.337, 0.477, 0.034, 0.042),
+        (0.578, 0.615, 0.744, 0.561, 0.042, 0.033),
+        (0.407, 0.634, 0.509, 0.776, 0.042, 0.033),
+        (0.167, 0.751, 0.315, 0.701, 0.042, 0.036),
+        (0.612, 0.878, 0.613, 0.723, 0.041, 0.035),
+    ]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width
+            let h = size.height
+            let red = Color(red: 0.96, green: 0.16, blue: 0.30)
+            for seg in Self.segments {
+                let x1 = seg.0 * w, y1 = seg.1 * h
+                let x2 = seg.2 * w, y2 = seg.3 * h
+                let r1 = seg.4 * w, r2 = seg.5 * w
+                let dx = x2 - x1, dy = y2 - y1
+                let len = max(0.001, hypot(dx, dy))
+                let px = -dy / len, py = dx / len
+
+                var poly = Path()
+                poly.move(to: CGPoint(x: x1 + px * r1, y: y1 + py * r1))
+                poly.addLine(to: CGPoint(x: x2 + px * r2, y: y2 + py * r2))
+                poly.addLine(to: CGPoint(x: x2 - px * r2, y: y2 - py * r2))
+                poly.addLine(to: CGPoint(x: x1 - px * r1, y: y1 - py * r1))
+                poly.closeSubpath()
+                ctx.fill(poly, with: .color(red))
+
+                ctx.fill(Path(ellipseIn: CGRect(x: x1 - r1, y: y1 - r1, width: r1 * 2, height: r1 * 2)), with: .color(red))
+                ctx.fill(Path(ellipseIn: CGRect(x: x2 - r2, y: y2 - r2, width: r2 * 2, height: r2 * 2)), with: .color(red))
             }
         }
     }
