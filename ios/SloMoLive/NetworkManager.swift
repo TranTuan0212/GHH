@@ -51,20 +51,11 @@ public class NetworkManager: ObservableObject {
         self.customRtmpPort = NetworkManager.defaultRtmpPort
         UserDefaults.standard.set(NetworkManager.defaultRtmpPort, forKey: "custom_rtmp_port")
 
-        // Khôi phục phiên đăng nhập đã lưu (ghi nhớ đăng nhập)
-        if let token = UserDefaults.standard.string(forKey: "saved_auth_token"), !token.isEmpty {
-            self.authToken = token
-            self.currentUsername = UserDefaults.standard.string(forKey: "saved_username")
-            self.currentUserId = UserDefaults.standard.string(forKey: "saved_user_id")
-            self.userExpiresAt = UserDefaults.standard.string(forKey: "saved_user_expires_at")
-            self.applyAccountMode(allowed: "mode1", effective: "mode1")
-            self.isAuthenticated = true
-
-            // Tự động làm mới hạn dùng và thông tin tài khoản từ máy chủ
-            DispatchQueue.main.async {
-                self.fetchUserProfile()
-            }
-        }
+        // Không lưu phiên đăng nhập: mỗi lần mở app đều bắt buộc đăng nhập lại
+        UserDefaults.standard.removeObject(forKey: "saved_auth_token")
+        UserDefaults.standard.removeObject(forKey: "saved_username")
+        UserDefaults.standard.removeObject(forKey: "saved_user_id")
+        UserDefaults.standard.removeObject(forKey: "saved_user_expires_at")
     }
 
     public static func normalizeServerURL(_ raw: String) -> String {
@@ -161,16 +152,6 @@ public class NetworkManager: ObservableObject {
                     self.isAuthenticated = true
                     self.errorMessage = nil
 
-                    // Ghi nhớ phiên đăng nhập an toàn
-                    UserDefaults.standard.set(token, forKey: "saved_auth_token")
-                    UserDefaults.standard.set(self.currentUsername, forKey: "saved_username")
-                    UserDefaults.standard.set(self.currentUserId, forKey: "saved_user_id")
-                    if let exp = self.userExpiresAt {
-                        UserDefaults.standard.set(exp, forKey: "saved_user_expires_at")
-                    } else {
-                        UserDefaults.standard.removeObject(forKey: "saved_user_expires_at")
-                    }
-
                     completion(true)
                 } else {
                     self.errorMessage = "Đăng nhập thất bại."
@@ -223,15 +204,12 @@ public class NetworkManager: ObservableObject {
             DispatchQueue.main.async {
                 if let exp = user["expiresAt"] as? String {
                     self.userExpiresAt = exp
-                    UserDefaults.standard.set(exp, forKey: "saved_user_expires_at")
                 }
                 if let uname = user["username"] as? String {
                     self.currentUsername = uname
-                    UserDefaults.standard.set(uname, forKey: "saved_username")
                 }
                 if let uid = (user["id"] as? String) ?? (user["_id"] as? String) {
                     self.currentUserId = uid
-                    UserDefaults.standard.set(uid, forKey: "saved_user_id")
                 }
                 self.applyAccountMode(allowed: user["allowedMode"] as? String, effective: user["effectiveMode"] as? String)
                 if true {

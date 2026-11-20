@@ -350,6 +350,20 @@ struct ContentView: View {
                 cameraManager.setupCamera { _ in }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            // Thoát/ẩn app ra ngoài -> đăng xuất ngay để lần mở lại luôn hiện màn hình đăng nhập
+            if cameraManager.isStreaming || cameraManager.isConnecting {
+                cameraManager.stopLiveStream()
+                locationManager.stopTracking()
+                networkManager.stopStream()
+            }
+            if isFakeLocked {
+                hideFakeBlackScreen()
+            }
+            if networkManager.isAuthenticated {
+                networkManager.logout()
+            }
+        }
     }
 
     // MARK: - Black Screen Window (phủ TOÀN BỘ màn hình kể cả status bar + home indicator)
