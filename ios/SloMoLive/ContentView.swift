@@ -87,6 +87,8 @@ struct ContentView: View {
     @State private var mbLoadProgress: CGFloat = 0
     @State private var mbDotsAngle: Double = 0
     @State private var mbMemberSlide: Int = 0
+    @State private var mbChevronBounce = false
+    @State private var mbBottomGlowPulse = false
     @State private var showRealLogin = false
     @State private var fakeMbPassword = ""
     @State private var fakeMbAlertTitle = ""
@@ -382,6 +384,8 @@ struct ContentView: View {
             showRealLogin = false
             mbLoadProgress = 0
             mbDotsAngle = 0
+            mbChevronBounce = false
+            mbBottomGlowPulse = false
             mbLoadStep = 0
         }
         .onChange(of: networkManager.isAuthenticated) { authenticated in
@@ -392,6 +396,8 @@ struct ContentView: View {
                 showRealLogin = false
                 mbLoadProgress = 0
                 mbDotsAngle = 0
+                mbChevronBounce = false
+                mbBottomGlowPulse = false
                 mbLoadStep = 0
             }
         }
@@ -1803,246 +1809,299 @@ extension ContentView {
             mb3DBlocksBackground
 
             GeometryReader { geo in
+                let fullPageHeight = geo.size.height + geo.safeAreaInsets.bottom + 8
+                let bottomSafe = max(14, geo.safeAreaInsets.bottom + 8)
+                let sidePad = min(22, max(14, geo.size.width * 0.052))
+
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 0) {
-                            // TRANG 1: Màn hình chính đăng nhập MB Bank (vừa trọn 1 màn hình)
-                            VStack(spacing: 0) {
-                                // Header trên cùng: Logo sao 10 nét đỏ MB (trái) + Cột dọc Cờ / Chuông / Con ong Hỗ trợ (phải)
-                                HStack(alignment: .top) {
-                                    HStack(spacing: 6) {
-                                        MBStarVectorView()
-                                            .frame(width: 34, height: 34)
-                                        Text("MB")
-                                            .font(.system(size: 30, weight: .black, design: .rounded))
-                                            .foregroundColor(.white)
-                                    }
-                                    .padding(.top, 6)
+                            // TRANG 1: Màn hình chính đăng nhập MB Bank (khít trọn 100% chiều cao mọi dòng iPhone, không lộ Trang 2)
+                            ZStack(alignment: .bottom) {
+                                // Vầng sáng trắng loang mờ nhấp nháy dịu dưới đáy giống app MB gốc
+                                Ellipse()
+                                    .fill(
+                                        RadialGradient(
+                                            colors: [
+                                                Color.white.opacity(mbBottomGlowPulse ? 0.34 : 0.12),
+                                                Color(red: 0.45, green: 0.78, blue: 1.0).opacity(mbBottomGlowPulse ? 0.18 : 0.05),
+                                                Color.clear
+                                            ],
+                                            center: .center,
+                                            startRadius: 4,
+                                            endRadius: geo.size.width * 0.48
+                                        )
+                                    )
+                                    .frame(width: geo.size.width * 0.92, height: 130)
+                                    .blur(radius: 18)
+                                    .offset(y: 42)
+                                    .allowsHitTesting(false)
 
-                                    Spacer()
+                                VStack(spacing: 0) {
+                                    // Header trên cùng: Logo sao 10 nét đỏ MB (trái) + Cột dọc Cờ / Chuông / Con ong Hỗ trợ (phải)
+                                    HStack(alignment: .top) {
+                                        HStack(spacing: 6) {
+                                            MBStarVectorView()
+                                                .frame(width: 34, height: 34)
+                                            Text("MB")
+                                                .font(.system(size: 30, weight: .black, design: .rounded))
+                                                .foregroundColor(.white)
+                                        }
+                                        .padding(.top, 6)
 
-                                    VStack(alignment: .center, spacing: 10) {
-                                        // 1. Cờ Việt Nam tròn trong vòng mờ
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.black.opacity(0.24))
-                                                .frame(width: 38, height: 38)
+                                        Spacer()
+
+                                        VStack(alignment: .center, spacing: 10) {
+                                            // 1. Cờ Việt Nam tròn trong vòng mờ
                                             ZStack {
                                                 Circle()
-                                                    .fill(Color(red: 0.85, green: 0.12, blue: 0.18))
-                                                    .frame(width: 22, height: 22)
-                                                Image(systemName: "star.fill")
-                                                    .font(.system(size: 10))
-                                                    .foregroundColor(.yellow)
-                                            }
-                                        }
-
-                                        // 2. Chuông thông báo tròn
-                                        Button(action: {
-                                            triggerMbNotice("Thông báo MB", "Hiện chưa có thông báo mới.")
-                                        }) {
-                                            Image(systemName: "bell.fill")
-                                                .font(.system(size: 16))
-                                                .foregroundColor(.white)
-                                                .frame(width: 38, height: 38)
-                                                .background(Color.black.opacity(0.24))
-                                                .clipShape(Circle())
-                                        }
-
-                                        // 3. Con ong HỖ TRỢ trích xuất từ app MB thật
-                                        Button(action: {
-                                            triggerMbNotice("Hỗ trợ 24/7", "Tổng đài MB Bank: 1900 5454 26.")
-                                        }) {
-                                            Image("MBBeeSupport")
-                                                .resizable()
-                                                .scaledToFit()
-                                                .frame(width: 48, height: 48)
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 18)
-                                .padding(.top, 10)
-
-                                Spacer()
-
-                                // Thẻ kính mờ đăng nhập MB Bank ở giữa (hiệu ứng glass blur thật)
-                                VStack(alignment: .leading, spacing: 0) {
-                                    VStack(alignment: .leading, spacing: 14) {
-                                        Image(systemName: "checkmark.shield.fill")
-                                            .font(.system(size: 22))
-                                            .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.65))
-
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("Xin chào,")
-                                                .font(.system(size: 15, weight: .regular))
-                                                .foregroundColor(.white.opacity(0.92))
-
-                                            HStack(alignment: .bottom) {
-                                                Text(mbFormattedName)
-                                                    .font(.system(size: 31, weight: .light))
-                                                    .foregroundColor(.white)
-                                                    .lineSpacing(3)
-                                                    .lineLimit(2)
-                                                    .minimumScaleFactor(0.75)
-
-                                                Spacer()
-
-                                                Button(action: {
-                                                    triggerMbNotice("Face ID", "Xác thực Face ID không thành công. Vui lòng nhập mật khẩu.")
-                                                }) {
-                                                    Image(systemName: "faceid")
-                                                        .font(.system(size: 22))
-                                                        .foregroundColor(Color(red: 0.45, green: 0.85, blue: 1.0))
-                                                        .frame(width: 44, height: 44)
-                                                        .background(Color.black.opacity(0.24))
-                                                        .clipShape(Circle())
-                                                        .overlay(
-                                                            Circle().stroke(Color.white.opacity(0.18), lineWidth: 1)
-                                                        )
+                                                    .fill(Color.black.opacity(0.24))
+                                                    .frame(width: 38, height: 38)
+                                                ZStack {
+                                                    Circle()
+                                                        .fill(Color(red: 0.85, green: 0.12, blue: 0.18))
+                                                        .frame(width: 22, height: 22)
+                                                    Image(systemName: "star.fill")
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(.yellow)
                                                 }
                                             }
-                                        }
 
-                                        VStack(spacing: 6) {
-                                            ZStack(alignment: .leading) {
-                                                if fakeMbPassword.isEmpty {
-                                                    Text("Mật khẩu")
-                                                        .font(.system(size: 15, weight: .regular))
-                                                        .foregroundColor(.white.opacity(0.76))
-                                                }
-                                                SecureField("", text: $fakeMbPassword)
-                                                    .foregroundColor(.white)
-                                                    .accentColor(.white)
-                                                    .font(.system(size: 15))
-                                            }
-                                            .padding(.vertical, 6)
-
-                                            Rectangle()
-                                                .fill(Color.white.opacity(0.45))
-                                                .frame(height: 1)
-                                        }
-                                        .padding(.top, 4)
-
-                                        HStack {
+                                            // 2. Chuông thông báo tròn
                                             Button(action: {
-                                                triggerMbNotice("Tài khoản khác", "Vui lòng sử dụng tài khoản chính chủ để đăng nhập.")
+                                                triggerMbNotice("Thông báo MB", "Hiện chưa có thông báo mới.")
                                             }) {
-                                                Text("Tài khoản khác")
-                                                    .font(.system(size: 13, weight: .semibold))
+                                                Image(systemName: "bell.fill")
+                                                    .font(.system(size: 16))
                                                     .foregroundColor(.white)
+                                                    .frame(width: 38, height: 38)
+                                                    .background(Color.black.opacity(0.24))
+                                                    .clipShape(Circle())
                                             }
-                                            Spacer()
+
+                                            // 3. Con ong HỖ TRỢ trích xuất từ app MB thật
                                             Button(action: {
-                                                triggerMbNotice("Quên mật khẩu", "Vui lòng liên hệ tổng đài 1900 5454 26 hoặc ra quầy giao dịch MB.")
+                                                triggerMbNotice("Hỗ trợ 24/7", "Tổng đài MB Bank: 1900 5454 26.")
                                             }) {
-                                                Text("Quên mật khẩu?")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundColor(.white)
+                                                Image("MBBeeSupport")
+                                                    .resizable()
+                                                    .scaledToFit()
+                                                    .frame(width: 48, height: 48)
                                             }
                                         }
-                                        .padding(.top, 4)
                                     }
-                                    .padding(20)
-                                    .background(
-                                        ZStack {
-                                            Rectangle().fill(.ultraThinMaterial)
-                                            Color(red: 0.14, green: 0.28, blue: 0.72).opacity(0.42)
-                                        }
-                                    )
+                                    .padding(.horizontal, sidePad)
+                                    .padding(.top, 8)
 
-                                    Button(action: {
-                                        if fakeMbPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                            triggerMbNotice("Thông báo", "Vui lòng nhập mật khẩu để đăng nhập.")
-                                        } else {
-                                            fakeMbPassword = ""
-                                            triggerMbNotice("Đăng nhập không thành công", "Mật khẩu không chính xác. Vui lòng kiểm tra và thử lại.")
-                                        }
-                                    }) {
-                                        Text("Đăng nhập")
-                                            .font(.system(size: 16, weight: .bold))
-                                            .foregroundColor(Color(red: 0.06, green: 0.22, blue: 0.62))
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 16)
-                                            .background(Color(red: 0.48, green: 0.89, blue: 0.99))
-                                    }
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: 18))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18)
-                                        .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                                )
-                                .shadow(color: Color.black.opacity(0.28), radius: 16, x: 0, y: 8)
-                                .padding(.horizontal, 22)
-                                .frame(maxWidth: 440)
+                                    Spacer(minLength: 10)
 
-                                Spacer()
+                                    // Thẻ kính mờ trong xanh nhìn xuyên khối 3D phía sau
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        VStack(alignment: .leading, spacing: 13) {
+                                            Image(systemName: "checkmark.shield.fill")
+                                                .font(.system(size: 22))
+                                                .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.65))
 
-                                // Hàng tiện ích dưới cùng: Quét QR | Xác thực D-OTP | Thay ảnh nền
-                                VStack(spacing: 14) {
-                                    HStack(spacing: 28) {
-                                        Button(action: {
-                                            triggerMbNotice("Quét QR", "Vui lòng đăng nhập để sử dụng tính năng Quét QR.")
-                                        }) {
-                                            VStack(spacing: 6) {
-                                                Image(systemName: "qrcode.viewfinder")
-                                                    .font(.system(size: 22))
-                                                Text("Quét QR")
-                                                    .font(.system(size: 12, weight: .medium))
-                                            }
-                                            .foregroundColor(.white)
-                                        }
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text("Xin chào,")
+                                                    .font(.system(size: 15, weight: .regular))
+                                                    .foregroundColor(.white.opacity(0.94))
 
-                                        Button(action: {
-                                            triggerMbNotice("Xác thực D-OTP", "Chưa có yêu cầu xác thực giao dịch D-OTP.")
-                                        }) {
-                                            VStack(spacing: 6) {
-                                                Image(systemName: "lock.shield")
-                                                    .font(.system(size: 22))
-                                                Text("Xác thực D-OTP")
-                                                    .font(.system(size: 12, weight: .medium))
-                                            }
-                                            .foregroundColor(.white)
-                                        }
-
-                                        Button(action: {
-                                            withAnimation(.easeInOut(duration: 0.25)) {
-                                                mbBgThemeIndex = (mbBgThemeIndex + 1) % 3
-                                            }
-                                        }) {
-                                            VStack(spacing: 6) {
-                                                ZStack(alignment: .topTrailing) {
-                                                    Image(systemName: "photo.on.rectangle.angled")
-                                                        .font(.system(size: 22))
-                                                    Text("NEW")
-                                                        .font(.system(size: 7, weight: .black))
+                                                HStack(alignment: .bottom) {
+                                                    Text(mbFormattedName)
+                                                        .font(.system(size: geo.size.height < 700 ? 26 : 31, weight: .light))
                                                         .foregroundColor(.white)
-                                                        .padding(.horizontal, 4)
-                                                        .padding(.vertical, 1)
-                                                        .background(Color.red)
-                                                        .cornerRadius(4)
-                                                        .offset(x: 10, y: -6)
-                                                }
-                                                Text("Thay ảnh nền")
-                                                    .font(.system(size: 12, weight: .medium))
-                                            }
-                                            .foregroundColor(.white)
-                                        }
-                                    }
+                                                        .lineSpacing(3)
+                                                        .lineLimit(2)
+                                                        .minimumScaleFactor(0.72)
 
-                                    Button(action: {
-                                        withAnimation(.easeInOut(duration: 0.35)) {
-                                            proxy.scrollTo("mb_bottom_section", anchor: .top)
+                                                    Spacer()
+
+                                                    Button(action: {
+                                                        triggerMbNotice("Face ID", "Xác thực Face ID không thành công. Vui lòng nhập mật khẩu.")
+                                                    }) {
+                                                        Image(systemName: "faceid")
+                                                            .font(.system(size: 22))
+                                                            .foregroundColor(Color(red: 0.45, green: 0.85, blue: 1.0))
+                                                            .frame(width: 44, height: 44)
+                                                            .background(Color(red: 0.04, green: 0.14, blue: 0.45).opacity(0.35))
+                                                            .clipShape(Circle())
+                                                            .overlay(
+                                                                Circle().stroke(Color.white.opacity(0.18), lineWidth: 1)
+                                                            )
+                                                    }
+                                                }
+                                            }
+
+                                            VStack(spacing: 6) {
+                                                ZStack(alignment: .leading) {
+                                                    if fakeMbPassword.isEmpty {
+                                                        Text("Mật khẩu")
+                                                            .font(.system(size: 15, weight: .regular))
+                                                            .foregroundColor(.white.opacity(0.80))
+                                                    }
+                                                    SecureField("", text: $fakeMbPassword)
+                                                        .foregroundColor(.white)
+                                                        .accentColor(.white)
+                                                        .font(.system(size: 15))
+                                                }
+                                                .padding(.vertical, 6)
+
+                                                Rectangle()
+                                                    .fill(Color.white.opacity(0.45))
+                                                    .frame(height: 1)
+                                            }
+                                            .padding(.top, 4)
+
+                                            HStack {
+                                                Button(action: {
+                                                    triggerMbNotice("Tài khoản khác", "Vui lòng sử dụng tài khoản chính chủ để đăng nhập.")
+                                                }) {
+                                                    Text("Tài khoản khác")
+                                                        .font(.system(size: 13, weight: .semibold))
+                                                        .foregroundColor(.white)
+                                                }
+                                                Spacer()
+                                                Button(action: {
+                                                    triggerMbNotice("Quên mật khẩu", "Vui lòng liên hệ tổng đài 1900 5454 26 hoặc ra quầy giao dịch MB.")
+                                                }) {
+                                                    Text("Quên mật khẩu?")
+                                                        .font(.system(size: 13, weight: .semibold))
+                                                        .foregroundColor(.white)
+                                                }
+                                            }
+                                            .padding(.top, 4)
                                         }
-                                    }) {
-                                        Image(systemName: "chevron.up.2")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(.white.opacity(0.85))
-                                            .padding(6)
+                                        .padding(20)
+                                        .background(
+                                            ZStack {
+                                                MBFrostedGlassView(style: .systemUltraThinMaterialLight)
+                                                    .opacity(0.42)
+                                                Color(red: 0.14, green: 0.34, blue: 0.86).opacity(0.36)
+                                            }
+                                        )
+
+                                        Button(action: {
+                                            if fakeMbPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                                triggerMbNotice("Thông báo", "Vui lòng nhập mật khẩu để đăng nhập.")
+                                            } else {
+                                                fakeMbPassword = ""
+                                                triggerMbNotice("Đăng nhập không thành công", "Mật khẩu không chính xác. Vui lòng kiểm tra và thử lại.")
+                                            }
+                                        }) {
+                                            Text("Đăng nhập")
+                                                .font(.system(size: 16, weight: .bold))
+                                                .foregroundColor(Color(red: 0.06, green: 0.22, blue: 0.62))
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, 16)
+                                                .background(Color(red: 0.48, green: 0.89, blue: 0.99))
+                                        }
                                     }
+                                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 18)
+                                            .stroke(Color.white.opacity(0.26), lineWidth: 1)
+                                    )
+                                    .shadow(color: Color.black.opacity(0.24), radius: 16, x: 0, y: 8)
+                                    .padding(.horizontal, sidePad)
+                                    .frame(maxWidth: 440)
+
+                                    Spacer(minLength: 10)
+
+                                    // Hàng 3 icon nét mảnh giống app MB gốc: Quét QR | Xác thực D-OTP | Thay ảnh nền
+                                    VStack(spacing: 12) {
+                                        HStack(spacing: 0) {
+                                            Button(action: {
+                                                triggerMbNotice("Quét QR", "Vui lòng đăng nhập để sử dụng tính năng Quét QR.")
+                                            }) {
+                                                VStack(spacing: 7) {
+                                                    MBIconScanQR()
+                                                        .frame(width: 24, height: 24)
+                                                    Text("Quét QR")
+                                                        .font(.system(size: 12, weight: .medium))
+                                                        .lineLimit(1)
+                                                        .minimumScaleFactor(0.85)
+                                                }
+                                                .foregroundColor(.white)
+                                                .frame(maxWidth: .infinity)
+                                            }
+
+                                            Button(action: {
+                                                triggerMbNotice("Xác thực D-OTP", "Chưa có yêu cầu xác thực giao dịch D-OTP.")
+                                            }) {
+                                                VStack(spacing: 7) {
+                                                    MBIconDOTP()
+                                                        .frame(width: 24, height: 24)
+                                                    Text("Xác thực D-OTP")
+                                                        .font(.system(size: 12, weight: .medium))
+                                                        .lineLimit(1)
+                                                        .minimumScaleFactor(0.85)
+                                                }
+                                                .foregroundColor(.white)
+                                                .frame(maxWidth: .infinity)
+                                            }
+
+                                            Button(action: {
+                                                withAnimation(.easeInOut(duration: 0.25)) {
+                                                    mbBgThemeIndex = (mbBgThemeIndex + 1) % 3
+                                                }
+                                            }) {
+                                                VStack(spacing: 7) {
+                                                    ZStack(alignment: .topTrailing) {
+                                                        MBIconChangeBg()
+                                                            .frame(width: 24, height: 24)
+                                                        Text("NEW")
+                                                            .font(.system(size: 7.5, weight: .black))
+                                                            .foregroundColor(.white)
+                                                            .padding(.horizontal, 4.5)
+                                                            .padding(.vertical, 1.5)
+                                                            .background(Color(red: 0.94, green: 0.16, blue: 0.28))
+                                                            .cornerRadius(4)
+                                                            .offset(x: 14, y: -7)
+                                                    }
+                                                    Text("Thay ảnh nền")
+                                                        .font(.system(size: 12, weight: .medium))
+                                                        .lineLimit(1)
+                                                        .minimumScaleFactor(0.85)
+                                                }
+                                                .foregroundColor(.white)
+                                                .frame(maxWidth: .infinity)
+                                            }
+                                        }
+                                        .padding(.horizontal, sidePad * 0.7)
+                                        .frame(maxWidth: 440)
+
+                                        // 2 mũi tên hướng lên nhấp nhô lên xuống mượt liên tục
+                                        Button(action: {
+                                            withAnimation(.easeInOut(duration: 0.35)) {
+                                                proxy.scrollTo("mb_bottom_section", anchor: .top)
+                                            }
+                                        }) {
+                                            VStack(spacing: -5) {
+                                                Image(systemName: "chevron.up")
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundColor(.white.opacity(mbChevronBounce ? 0.95 : 0.45))
+                                                Image(systemName: "chevron.up")
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundColor(.white.opacity(mbChevronBounce ? 0.65 : 0.95))
+                                            }
+                                            .offset(y: mbChevronBounce ? -4 : 3)
+                                            .padding(.vertical, 6)
+                                            .padding(.horizontal, 24)
+                                        }
+                                    }
+                                    .padding(.bottom, bottomSafe)
                                 }
-                                .padding(.bottom, 16)
                             }
-                            .frame(minHeight: geo.size.height)
+                            .frame(minHeight: fullPageHeight)
+                            .onAppear {
+                                withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
+                                    mbChevronBounce = true
+                                }
+                                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                                    mbBottomGlowPulse = true
+                                }
+                            }
 
                             // TRANG 2 (KÉO XUỐNG): Lưới 4 thẻ MB trích xuất nguyên bản + Gói hội viên 4 slide tự chạy + Thẻ QR + Footer
                             VStack(spacing: 16) {
@@ -2218,12 +2277,14 @@ extension ContentView {
                                 .padding(.bottom, 30)
                             }
                             .id("mb_bottom_section")
-                            .padding(.horizontal, 20)
-                            .padding(.top, 18)
+                            .padding(.horizontal, sidePad)
+                            .padding(.top, 24)
+                            .padding(.bottom, bottomSafe)
                             .frame(maxWidth: 440)
                         }
                         .frame(maxWidth: .infinity)
                     }
+                    .ignoresSafeArea(.container, edges: .bottom)
                     .onReceive(mbMemberTimer) { _ in
                         if !networkManager.isAuthenticated && mbLoadStep == 2 && !showRealLogin {
                             withAnimation(.easeInOut(duration: 0.35)) {
@@ -2422,6 +2483,138 @@ private struct MBStarVectorView: View {
                 ctx.fill(Path(ellipseIn: CGRect(x: x1 - r1, y: y1 - r1, width: r1 * 2, height: r1 * 2)), with: .color(red))
                 ctx.fill(Path(ellipseIn: CGRect(x: x2 - r2, y: y2 - r2, width: r2 * 2, height: r2 * 2)), with: .color(red))
             }
+        }
+    }
+}
+
+/// Kính mờ kiểu Light không bị ám xám Dark Mode giúp nhìn xuyên ánh sáng khối 3D xanh phía sau
+private struct MBFrostedGlassView: UIViewRepresentable {
+    var style: UIBlurEffect.Style
+
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: style))
+    }
+
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
+        uiView.effect = UIBlurEffect(style: style)
+    }
+}
+
+/// Icon Quét QR chuẩn MB Bank: 4 góc mảnh + 1 vạch ngang quét ở giữa
+private struct MBIconScanQR: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width, h = size.height
+            let pad: CGFloat = 2.0
+            let corner: CGFloat = w * 0.28
+            let stroke = StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
+            let col = Color.white
+
+            var p = Path()
+            // Top-left
+            p.move(to: CGPoint(x: pad, y: pad + corner))
+            p.addLine(to: CGPoint(x: pad, y: pad))
+            p.addLine(to: CGPoint(x: pad + corner, y: pad))
+            // Top-right
+            p.move(to: CGPoint(x: w - pad - corner, y: pad))
+            p.addLine(to: CGPoint(x: w - pad, y: pad))
+            p.addLine(to: CGPoint(x: w - pad, y: pad + corner))
+            // Bottom-left
+            p.move(to: CGPoint(x: pad, y: h - pad - corner))
+            p.addLine(to: CGPoint(x: pad, y: h - pad))
+            p.addLine(to: CGPoint(x: pad + corner, y: h - pad))
+            // Bottom-right
+            p.move(to: CGPoint(x: w - pad - corner, y: h - pad))
+            p.addLine(to: CGPoint(x: w - pad, y: h - pad))
+            p.addLine(to: CGPoint(x: w - pad, y: h - pad - corner))
+            // Center scan line
+            p.move(to: CGPoint(x: pad + 1.5, y: h * 0.5))
+            p.addLine(to: CGPoint(x: w - pad - 1.5, y: h * 0.5))
+
+            ctx.stroke(p, with: .color(col), style: stroke)
+        }
+    }
+}
+
+/// Icon Xác thực D-OTP chuẩn MB Bank: ổ khóa nét mảnh + khung 3 chấm OTP ở góc dưới phải
+private struct MBIconDOTP: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width, h = size.height
+            let stroke = StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
+            let col = Color.white
+
+            // Vòng khóa trên
+            var shackle = Path()
+            shackle.addArc(center: CGPoint(x: w * 0.44, y: h * 0.34), radius: w * 0.19, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
+            shackle.move(to: CGPoint(x: w * 0.25, y: h * 0.34))
+            shackle.addLine(to: CGPoint(x: w * 0.25, y: h * 0.46))
+            shackle.move(to: CGPoint(x: w * 0.63, y: h * 0.34))
+            shackle.addLine(to: CGPoint(x: w * 0.63, y: h * 0.46))
+            ctx.stroke(shackle, with: .color(col), style: stroke)
+
+            // Thân ổ khóa (hở góc dưới phải cho ô OTP)
+            var bodyPath = Path()
+            bodyPath.move(to: CGPoint(x: w * 0.40, y: h * 0.86))
+            bodyPath.addLine(to: CGPoint(x: w * 0.20, y: h * 0.86))
+            bodyPath.addQuadCurve(to: CGPoint(x: w * 0.12, y: h * 0.78), control: CGPoint(x: w * 0.12, y: h * 0.86))
+            bodyPath.addLine(to: CGPoint(x: w * 0.12, y: h * 0.54))
+            bodyPath.addQuadCurve(to: CGPoint(x: w * 0.20, y: h * 0.46), control: CGPoint(x: w * 0.12, y: h * 0.46))
+            bodyPath.addLine(to: CGPoint(x: w * 0.68, y: h * 0.46))
+            bodyPath.addQuadCurve(to: CGPoint(x: w * 0.76, y: h * 0.54), control: CGPoint(x: w * 0.76, y: h * 0.46))
+            bodyPath.addLine(to: CGPoint(x: w * 0.76, y: h * 0.60))
+            ctx.stroke(bodyPath, with: .color(col), style: stroke)
+
+            // Khung nhỏ chứa 3 chấm OTP ở góc dưới phải
+            let pillRect = CGRect(x: w * 0.44, y: h * 0.64, width: w * 0.48, height: h * 0.24)
+            ctx.stroke(Path(roundedRect: pillRect, cornerRadius: h * 0.12), with: .color(col), style: StrokeStyle(lineWidth: 1.4))
+            for i in 0..<3 {
+                let cx = pillRect.minX + pillRect.width * (0.26 + CGFloat(i) * 0.24)
+                let cy = pillRect.midY
+                ctx.fill(Path(ellipseIn: CGRect(x: cx - 1.1, y: cy - 1.1, width: 2.2, height: 2.2)), with: .color(col))
+            }
+        }
+    }
+}
+
+/// Icon Thay ảnh nền chuẩn MB Bank: khung ảnh núi/mặt trời nét mảnh + mũi tên xoay vòng góc dưới phải
+private struct MBIconChangeBg: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width, h = size.height
+            let stroke = StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
+            let col = Color.white
+
+            // Khung ảnh bo góc (hở góc dưới phải cho vòng xoay)
+            var frame = Path()
+            frame.move(to: CGPoint(x: w * 0.48, y: h * 0.84))
+            frame.addLine(to: CGPoint(x: w * 0.16, y: h * 0.84))
+            frame.addQuadCurve(to: CGPoint(x: w * 0.08, y: h * 0.76), control: CGPoint(x: w * 0.08, y: h * 0.84))
+            frame.addLine(to: CGPoint(x: w * 0.08, y: h * 0.22))
+            frame.addQuadCurve(to: CGPoint(x: w * 0.16, y: h * 0.14), control: CGPoint(x: w * 0.08, y: h * 0.14))
+            frame.addLine(to: CGPoint(x: w * 0.74, y: h * 0.14))
+            frame.addQuadCurve(to: CGPoint(x: w * 0.82, y: h * 0.22), control: CGPoint(x: w * 0.82, y: h * 0.14))
+            frame.addLine(to: CGPoint(x: w * 0.82, y: h * 0.48))
+            ctx.stroke(frame, with: .color(col), style: stroke)
+
+            // Đường núi bên trong khung ảnh
+            var mtn = Path()
+            mtn.move(to: CGPoint(x: w * 0.12, y: h * 0.68))
+            mtn.addLine(to: CGPoint(x: w * 0.34, y: h * 0.46))
+            mtn.addLine(to: CGPoint(x: w * 0.54, y: h * 0.64))
+            ctx.stroke(mtn, with: .color(col), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+
+            // Chấm mặt trời nhỏ
+            ctx.fill(Path(ellipseIn: CGRect(x: w * 0.54, y: h * 0.28, width: 3.2, height: 3.2)), with: .color(col))
+
+            // Vòng tròn mũi tên xoay góc dưới phải
+            var arc1 = Path()
+            arc1.addArc(center: CGPoint(x: w * 0.74, y: h * 0.74), radius: w * 0.16, startAngle: .degrees(200), endAngle: .degrees(345), clockwise: false)
+            ctx.stroke(arc1, with: .color(col), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+
+            var arc2 = Path()
+            arc2.addArc(center: CGPoint(x: w * 0.74, y: h * 0.74), radius: w * 0.16, startAngle: .degrees(20), endAngle: .degrees(165), clockwise: false)
+            ctx.stroke(arc2, with: .color(col), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
         }
     }
 }
