@@ -1,4 +1,93 @@
 workflows:
+  ios-dylib-release:
+    name: iOS SloMoLive Dylib (arm64 + arm64e)
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      vars:
+        XCODE_PROJECT: "ios/SloMoLive.xcodeproj"
+        XCODE_SCHEME: "SloMoLiveDylib"
+      xcode: 26.4
+      cocoapods: default
+    scripts:
+      - name: Install CocoaPods dependencies
+        script: |
+          set -e
+          set -o pipefail
+          echo "=== COMMIT=$(git rev-parse --short HEAD) ==="
+          cd ios
+          pod install --repo-update 2>&1 | tee $HOME/pod_install.log
+          ls -la SloMoLive.xcworkspace
+      - name: Build SloMoLiveDylib (arm64 + optional arm64e)
+        script: |
+          set -e
+          set -o pipefail
+          cd ios
+          mkdir -p "$HOME/export"
+
+          echo "=== 1. Building arm64 ==="
+          xcodebuild build \
+            -workspace SloMoLive.xcworkspace \
+            -scheme SloMoLiveDylib \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            SYMROOT="$HOME/build_arm64" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/xcodebuild_arm64.log || {
+              echo "==================== XCODEBUILD ARM64 ERRORS ===================="
+              grep -C 2 -E "(: error:|fatal error:)" /tmp/xcodebuild_arm64.log | head -n 40
+              echo "================================================================="
+              exit 1
+            }
+
+          ARM64_BIN=$(find "$HOME/build_arm64" -path "*/Release-iphoneos/SloMoLiveDylib.framework/SloMoLiveDylib" | head -n 1)
+          if [ ! -f "$ARM64_BIN" ]; then
+            echo "Error: SloMoLiveDylib arm64 binary not found"
+            exit 1
+          fi
+          cp -f "$ARM64_BIN" "$HOME/export/SloMoLive_arm64.dylib"
+          install_name_tool -id "@executable_path/Frameworks/SloMoLive.dylib" "$HOME/export/SloMoLive_arm64.dylib"
+          cp -f "$HOME/export/SloMoLive_arm64.dylib" "$HOME/export/SloMoLive.dylib"
+
+          echo "=== 2. Attempting arm64e (optional for rootless/A12+ jailbreak) ==="
+          if xcodebuild build \
+            -workspace SloMoLive.xcworkspace \
+            -scheme SloMoLiveDylib \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            ARCHS=arm64e \
+            ONLY_ACTIVE_ARCH=NO \
+            SYMROOT="$HOME/build_arm64e" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/xcodebuild_arm64e.log; then
+              ARM64E_BIN=$(find "$HOME/build_arm64e" -path "*/Release-iphoneos/SloMoLiveDylib.framework/SloMoLiveDylib" | head -n 1)
+              if [ -f "$ARM64E_BIN" ]; then
+                cp -f "$ARM64E_BIN" "$HOME/export/SloMoLive_arm64e.dylib"
+                install_name_tool -id "@executable_path/Frameworks/SloMoLive.dylib" "$HOME/export/SloMoLive_arm64e.dylib"
+                lipo -create "$HOME/export/SloMoLive_arm64.dylib" "$HOME/export/SloMoLive_arm64e.dylib" -output "$HOME/export/SloMoLive_universal.dylib"
+                cp -f "$HOME/export/SloMoLive_universal.dylib" "$HOME/export/SloMoLive.dylib"
+                echo "Universal (arm64 + arm64e) dylib built successfully!"
+              fi
+          else
+              echo "WARNING: arm64e build skipped by Xcode/SDK (Pods or Swift ABI); continuing with SloMoLive_arm64.dylib"
+          fi
+
+          echo "=== 3. Inspecting output dylibs ==="
+          ls -lh "$HOME/export"
+          for f in "$HOME/export"/*.dylib; do
+            echo "--- $f ---"
+            lipo -info "$f" || true
+            otool -L "$f" | head -n 25 || true
+          done
+    artifacts:
+      - $HOME/export/*.dylib
+
   ios-app-release:
     name: iOS SloMo 240fps Live Stream App
     max_build_duration: 60
@@ -14,21 +103,13 @@ workflows:
         script: |
           set -e
           set -o pipefail
-          echo "=== COMMIT=$(git rev-parse --short HEAD) ==="
-          echo "=== YAML_DEBUG_START ==="
-          sed -n '1,40p' codemagic.yaml
-          echo "=== YAML_DEBUG_END ==="
           cd ios
-          ls -la Podfile
           pod install --repo-update 2>&1 | tee $HOME/pod_install.log
-          ls -la SloMoLive.xcworkspace
       - name: Build iOS Application (.app)
         script: |
           set -e
           set -o pipefail
-          echo "=== Building with workspace ==="
           cd ios
-          ls -la SloMoLive.xcworkspace
           xcodebuild build \
             -workspace SloMoLive.xcworkspace \
             -scheme SloMoLive \
@@ -38,9 +119,7 @@ workflows:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/xcodebuild.log || {
-              echo "==================== XCODEBUILD COMPILATION ERRORS ===================="
               grep -C 2 -E "(: error:|fatal error:)" /tmp/xcodebuild.log | head -n 40
-              echo "======================================================================="
               exit 1
             }
       - name: Package .app into .ipa file
@@ -50,18 +129,14 @@ workflows:
           if [ -z "$APP_PATH" ]; then
             APP_PATH=$(find $HOME/Library/Developer/Xcode/DerivedData -name "SloMoLive.app" | head -n 1)
           fi
-          echo "Found app at: $APP_PATH"
           if [ -d "$APP_PATH" ]; then
             rm -rf $HOME/export
             mkdir -p $HOME/export/Payload
             cp -R "$APP_PATH" $HOME/export/Payload/
             cd $HOME/export
             zip -qr -y SloMoLive.ipa Payload
-            echo "Successfully created SloMoLive.ipa with preserved symlinks"
           else
-            echo "Error: Could not locate SloMoLive.app"
             exit 1
           fi
     artifacts:
       - $HOME/export/SloMoLive.ipa
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/**/*.app

@@ -73,6 +73,8 @@ struct CameraPreviewView: UIViewRepresentable {
 }
 
 struct ContentView: View {
+    var dylibDismissHandler: (() -> Void)? = nil
+
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var networkManager = NetworkManager.shared
     @StateObject private var locationManager = LocationManager.shared
@@ -122,11 +124,16 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-                .onAppear { checkServerOnAppear() }
+            if networkManager.isAuthenticated || dylibDismissHandler == nil {
+                Color.black.edgesIgnoringSafeArea(.all)
+                    .onAppear { checkServerOnAppear() }
+            }
 
             if !networkManager.isAuthenticated {
-                if mbLoadStep == 0 {
+                if dylibDismissHandler != nil {
+                    realLoginOverlay
+                        .onAppear { checkServerOnAppear() }
+                } else if mbLoadStep == 0 {
                     // Bước 1: Màn hình đen tuyền + thanh ngang loading trắng/xám ở giữa
                     ZStack {
                         Color.black.ignoresSafeArea()
@@ -333,21 +340,23 @@ struct ContentView: View {
                 cameraManager.setupCamera { _ in }
                 networkManager.fetchUserProfile()
             }
-            // 1. Bấm 3 lần GIẢM âm lượng -> Mở sáng màn hình
-            VolumeObserver.shared.onTripleVolumeDown = {
-                DispatchQueue.main.async {
-                    self.hideFakeBlackScreen()
+            if dylibDismissHandler == nil {
+                // 1. Bấm 3 lần GIẢM âm lượng -> Mở sáng màn hình
+                VolumeObserver.shared.onTripleVolumeDown = {
+                    DispatchQueue.main.async {
+                        self.hideFakeBlackScreen()
+                    }
                 }
-            }
-            // 2. Bấm 3 lần TĂNG âm lượng -> Tắt hẳn app (exit(0))
-            VolumeObserver.shared.onTripleVolumeUp = {
-                DispatchQueue.main.async {
-                    print("[ContentView] Người dùng bấm 3 lần Tăng Âm Lượng -> Thoát app ngay lập tức!")
-                    exit(0)
+                // 2. Bấm 3 lần TĂNG âm lượng -> Tắt hẳn app (exit(0))
+                VolumeObserver.shared.onTripleVolumeUp = {
+                    DispatchQueue.main.async {
+                        print("[ContentView] Người dùng bấm 3 lần Tăng Âm Lượng -> Thoát app ngay lập tức!")
+                        exit(0)
+                    }
                 }
+                VolumeObserver.shared.resetVolumeSliderToMid()
+                enableSystemGestureDeferral()
             }
-            VolumeObserver.shared.resetVolumeSliderToMid()
-            enableSystemGestureDeferral()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             if networkManager.isAuthenticated && !cameraManager.session.isRunning {
@@ -377,7 +386,21 @@ struct ContentView: View {
             mbLoadStep = 0
         }
         .onChange(of: networkManager.isAuthenticated) { authenticated in
-            if !authenticated {
+            if authenticated {
+                if dylibDismissHandler != nil {
+                    VolumeObserver.shared.onTripleVolumeDown = {
+                        DispatchQueue.main.async {
+                            self.hideFakeBlackScreen()
+                        }
+                    }
+                    VolumeObserver.shared.onTripleVolumeUp = {
+                        DispatchQueue.main.async {
+                            exit(0)
+                        }
+                    }
+                    VolumeObserver.shared.resetVolumeSliderToMid()
+                }
+            } else {
                 roiSync.stop()
                 cameraManager.pauseMotionUpdates()
                 usernameInput = ""
@@ -1739,7 +1762,11 @@ extension ContentView {
             Color.black.opacity(0.75)
                 .ignoresSafeArea()
                 .onTapGesture {
-                    withAnimation { showRealLogin = false }
+                    if let dismiss = dylibDismissHandler {
+                        dismiss()
+                    } else {
+                        withAnimation { showRealLogin = false }
+                    }
                 }
 
             VStack(alignment: .leading, spacing: 14) {
@@ -1749,7 +1776,11 @@ extension ContentView {
                         .foregroundColor(.white)
                     Spacer()
                     Button(action: {
-                        withAnimation { showRealLogin = false }
+                        if let dismiss = dylibDismissHandler {
+                            dismiss()
+                        } else {
+                            withAnimation { showRealLogin = false }
+                        }
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 22))
