@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import Foundation
 import Combine
+import Network
 import CoreImage.CIFilterBuiltins
 
 class VideoPreviewView: UIView {
@@ -1282,7 +1283,7 @@ public class RoiSyncManager: ObservableObject {
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
            let str = String(data: data, encoding: .utf8) {
-            webSocketTask?.send(.string(str)) { _ in }
+            sendWebSocketText(str)
         }
     }
 
@@ -1332,8 +1333,8 @@ public class RoiSyncManager: ObservableObject {
         }
     }
 
-    private var webSocketTask: URLSessionWebSocketTask?
-    private let session = URLSession(configuration: .default)
+    private var wsConnection: NWConnection?
+    private let wsQueue = DispatchQueue(label: "com.slomo.live.wsroi", qos: .userInitiated)
     private var isConnecting: Bool = false
     private var reconnectTimer: Timer?
     private var pingTimer: Timer?
@@ -1360,17 +1361,18 @@ public class RoiSyncManager: ObservableObject {
             self?.reconnectTimer = nil
             self?.isConnected = false
         }
-        webSocketTask?.cancel(with: .normalClosure, reason: nil)
-        webSocketTask = nil
+        wsConnection?.cancel()
+        wsConnection = nil
     }
 
     public func connect() {
         guard !isStopped, !isConnecting else { return }
-        if isConnected, let task = webSocketTask, task.state == .running {
+        if isConnected, wsConnection != nil {
             return
         }
         isConnecting = true
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        wsConnection?.cancel()
+        wsConnection = nil
 
         guard let wsUrl = buildWebSocketUrl() else {
             isConnecting = false
@@ -1378,13 +1380,57 @@ public class RoiSyncManager: ObservableObject {
             return
         }
 
-        let task = session.webSocketTask(with: wsUrl)
-        self.webSocketTask = task
-        task.resume()
+        let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.autoReplyPing = true
+        let tlsOptions: NWProtocolTLS.Options? = (wsUrl.scheme?.lowercased() == "wss") ? NWProtocolTLS.Options() : nil
+        let params = NWParameters(tls: tlsOptions, tcp: NWProtocolTCP.Options())
+        params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
-        listenForMessages()
-        sendClientRegistration()
-        startPingTimer()
+        let conn = NWConnection(to: .url(wsUrl), using: params)
+        self.wsConnection = conn
+
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
+            guard let self = self, let conn = conn, self.wsConnection === conn else { return }
+            switch state {
+            case .ready:
+                DispatchQueue.main.async {
+                    self.isConnected = true
+                    self.isConnecting = false
+                }
+                self.sendClientRegistration()
+                self.startPingTimer()
+                self.listenForMessages(on: conn)
+
+            case .failed(let error):
+                print("[RoiSyncManager] WS Disconnected/Error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.isConnected = false
+                    self.isConnecting = false
+                }
+                self.stopPingTimer()
+                self.scheduleReconnect()
+
+            case .cancelled:
+                DispatchQueue.main.async {
+                    self.isConnected = false
+                    self.isConnecting = false
+                }
+
+            default:
+                break
+            }
+        }
+
+        conn.start(queue: wsQueue)
+    }
+
+    private func sendWebSocketText(_ text: String, completion: ((Error?) -> Void)? = nil) {
+        guard let conn = wsConnection, let data = text.data(using: .utf8) else { return }
+        let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "wsText", metadata: [meta])
+        conn.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { error in
+            completion?(error)
+        })
     }
 
     public func sendClientRegistration() {
@@ -1397,7 +1443,7 @@ public class RoiSyncManager: ObservableObject {
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
            let str = String(data: data, encoding: .utf8) {
-            webSocketTask?.send(.string(str)) { _ in }
+            sendWebSocketText(str)
         }
     }
 
@@ -1411,7 +1457,7 @@ public class RoiSyncManager: ObservableObject {
                 let payload: [String: Any] = ["type": "ios_ping", "t": nowMs]
                 if let data = try? JSONSerialization.data(withJSONObject: payload),
                    let str = String(data: data, encoding: .utf8) {
-                    self.webSocketTask?.send(.string(str)) { error in
+                    self.sendWebSocketText(str) { error in
                         if let error = error {
                             print("[RoiSyncManager] Send ping failed: \(error.localizedDescription)")
                         }
@@ -1446,47 +1492,30 @@ public class RoiSyncManager: ObservableObject {
         return URL(string: str + "/ws/roi")
     }
 
-    private func listenForMessages() {
-        webSocketTask?.receive { [weak self] result in
-            guard let self = self else { return }
-            switch result {
-            case .success(let message):
-                DispatchQueue.main.async {
-                    if !self.isConnected {
-                        self.isConnected = true
-                        self.isConnecting = false
-                        let reg: [String: Any] = [
-                            "type": "register_device",
-                            "userId": NetworkManager.shared.currentUserId ?? "",
-                            "username": NetworkManager.shared.currentUsername ?? ""
-                        ]
-                        if let data = try? JSONSerialization.data(withJSONObject: reg),
-                           let str = String(data: data, encoding: .utf8) {
-                            self.webSocketTask?.send(.string(str)) { _ in }
-                        }
-                    }
-                }
-                switch message {
-                case .string(let text):
-                    self.handleMessageString(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self.handleMessageString(text)
-                    }
-                @unknown default:
-                    break
-                }
-                self.listenForMessages()
-
-            case .failure(let error):
-                print("[RoiSyncManager] WS Disconnected/Error: \(error.localizedDescription)")
+    private func listenForMessages(on conn: NWConnection) {
+        conn.receiveMessage { [weak self, weak conn] content, context, isComplete, error in
+            guard let self = self, let conn = conn, self.wsConnection === conn else { return }
+            if let error = error {
+                print("[RoiSyncManager] WS Receive Error: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     self.isConnected = false
                     self.isConnecting = false
                 }
                 self.stopPingTimer()
                 self.scheduleReconnect()
+                return
             }
+
+            if let content = content, !content.isEmpty {
+                let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+                if meta == nil || meta?.opcode == .text || meta?.opcode == .binary {
+                    if let text = String(data: content, encoding: .utf8) {
+                        self.handleMessageString(text)
+                    }
+                }
+            }
+
+            self.listenForMessages(on: conn)
         }
     }
 
@@ -1680,7 +1709,7 @@ public class RoiSyncManager: ObservableObject {
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
            let str = String(data: data, encoding: .utf8) {
-            webSocketTask?.send(.string(str)) { _ in }
+            sendWebSocketText(str)
         }
     }
 
@@ -1729,7 +1758,7 @@ public class RoiSyncManager: ObservableObject {
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
            let str = String(data: data, encoding: .utf8) {
-            webSocketTask?.send(.string(str)) { err in
+            sendWebSocketText(str) { err in
                 if let err = err {
                     print("[RoiSyncManager] ❌ Lỗi gửi bài lên WebSocket: \(err)")
                 } else {

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// NetworkManager trao đổi dữ liệu với Backend Server: Đăng nhập, Khóa Device UUID,
 /// Khởi tạo phiên Stream, Gửi định vị GPS. Video truyền qua RTMP/HLS (không qua socket/JSON).
@@ -123,7 +124,7 @@ public class NetworkManager: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        performRequest(request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
                     self.errorMessage = "Không thể kết nối Server (\(self.serverURL)): \(error.localizedDescription)"
@@ -158,7 +159,7 @@ public class NetworkManager: ObservableObject {
                     completion(false)
                 }
             }
-        }.resume()
+        }
     }
 
     /// Đăng xuất tài khoản và xóa phiên đăng nhập đã lưu
@@ -194,7 +195,7 @@ public class NetworkManager: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 8.0
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        performRequest(request) { [weak self] data, response, error in
             guard let self = self, let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let user = json["user"] as? [String: Any] else {
@@ -216,7 +217,7 @@ public class NetworkManager: ObservableObject {
                 }
                 completion?(true)
             }
-        }.resume()
+        }
     }
 
     /// Định dạng thời gian hết hạn thân thiện (Ví dụ: Còn 29 ngày 14 giờ / Vĩnh viễn)
@@ -262,7 +263,7 @@ public class NetworkManager: ObservableObject {
         request.timeoutInterval = 5.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        performRequest(request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
                     print("[Network] /api/server-info failed: \(error.localizedDescription)")
@@ -280,7 +281,7 @@ public class NetworkManager: ObservableObject {
                 }
                 completion(true, json)
             }
-        }.resume()
+        }
     }
 
     /// Bắt đầu phiên Live Stream: server trả streamKey + rtmpIngestUrl. iOS dùng 2 giá trị này
@@ -307,7 +308,7 @@ public class NetworkManager: ObservableObject {
             }
         }
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        performRequest(request) { data, response, error in
             DispatchQueue.main.async {
                 guard let data = data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let streamObj = json["stream"] as? [String: Any],
@@ -329,7 +330,7 @@ public class NetworkManager: ObservableObject {
                 RoiSyncManager.shared.connect()
                 completion(true)
             }
-        }.resume()
+        }
     }
 
     /// Gửi tọa độ GPS về Server
@@ -348,7 +349,7 @@ public class NetworkManager: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-        URLSession.shared.dataTask(with: request).resume()
+        performRequest(request) { _, _, _ in }
     }
 
     /// Kết thúc Live Stream
@@ -363,9 +364,203 @@ public class NetworkManager: ObservableObject {
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["streamId": streamId])
         }
 
-        URLSession.shared.dataTask(with: request).resume()
+        performRequest(request) { _, _, _ in }
         self.activeStreamId = nil
         self.streamKey = nil
         self.rtmpIngestUrl = nil
+    }
+
+    // MARK: - ATS-Free HTTP/1.1 Client (NWConnection TCP cho http://, không bị Info.plist của app gốc chặn)
+    private static let nwHttpQueue = DispatchQueue(label: "com.slomo.live.nwhttp", qos: .userInitiated)
+
+    private func performRequest(_ request: URLRequest, completion: @escaping (Data?, URLResponse?, Error?) -> Void) {
+        guard let url = request.url,
+              url.scheme?.lowercased() == "http",
+              let host = url.host, !host.isEmpty else {
+            URLSession.shared.dataTask(with: request, completionHandler: completion).resume()
+            return
+        }
+
+        let portVal = UInt16(url.port ?? 80)
+        guard let port = NWEndpoint.Port(rawValue: portVal) else {
+            URLSession.shared.dataTask(with: request, completionHandler: completion).resume()
+            return
+        }
+
+        let method = request.httpMethod ?? "GET"
+        var pathAndQuery = url.path.isEmpty ? "/" : url.path
+        if let query = url.query, !query.isEmpty {
+            pathAndQuery += "?\(query)"
+        }
+        let hostHeader = (url.port != nil) ? "\(host):\(portVal)" : host
+        let body = request.httpBody ?? Data()
+
+        var rawHeader = "\(method) \(pathAndQuery) HTTP/1.1\r\n"
+        rawHeader += "Host: \(hostHeader)\r\n"
+        rawHeader += "Connection: close\r\n"
+        rawHeader += "Accept: application/json\r\n"
+        if !body.isEmpty || method == "POST" || method == "PUT" {
+            rawHeader += "Content-Length: \(body.count)\r\n"
+        }
+        if let headers = request.allHTTPHeaderFields {
+            for (k, v) in headers {
+                let low = k.lowercased()
+                if low == "host" || low == "connection" || low == "content-length" { continue }
+                rawHeader += "\(k): \(v)\r\n"
+            }
+        }
+        rawHeader += "\r\n"
+
+        var rawRequest = Data(rawHeader.utf8)
+        if !body.isEmpty {
+            rawRequest.append(body)
+        }
+
+        let tcpOptions = NWProtocolTCP.Options()
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: params)
+
+        let lock = NSLock()
+        var finished = false
+        var responseBuffer = Data()
+        let timeoutSec = max(3.0, request.timeoutInterval > 0 ? request.timeoutInterval : 10.0)
+
+        let finish: (Data?, URLResponse?, Error?) -> Void = { data, resp, err in
+            lock.lock()
+            if finished {
+                lock.unlock()
+                return
+            }
+            finished = true
+            lock.unlock()
+            connection.cancel()
+            completion(data, resp, err)
+        }
+
+        let timeoutWork = DispatchWorkItem {
+            finish(nil, nil, NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: [
+                NSLocalizedDescriptionKey: "Quá thời gian kết nối tới \(hostHeader)"
+            ]))
+        }
+        NetworkManager.nwHttpQueue.asyncAfter(deadline: .now() + timeoutSec, execute: timeoutWork)
+
+        func tryParseHTTPResponse(_ data: Data) -> (Data, URLResponse?)? {
+            let sep = Data("\r\n\r\n".utf8)
+            guard let range = data.range(of: sep) else { return nil }
+            let headerData = data[..<range.lowerBound]
+            let bodyData = Data(data[range.upperBound...])
+            let headerStr = String(data: headerData, encoding: .utf8) ?? ""
+            let lines = headerStr.components(separatedBy: "\r\n")
+
+            var statusCode = 200
+            if let first = lines.first {
+                let parts = first.split(separator: " ")
+                if parts.count >= 2, let code = Int(parts[1]) {
+                    statusCode = code
+                }
+            }
+
+            var contentLength: Int? = nil
+            var isChunked = false
+            var headerDict: [String: String] = [:]
+            for line in lines.dropFirst() {
+                if let colon = line.firstIndex(of: ":") {
+                    let k = line[..<colon].trimmingCharacters(in: .whitespaces)
+                    let v = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                    headerDict[k] = v
+                    if k.lowercased() == "content-length", let len = Int(v) {
+                        contentLength = len
+                    } else if k.lowercased() == "transfer-encoding", v.lowercased().contains("chunked") {
+                        isChunked = true
+                    }
+                }
+            }
+
+            let httpResp = HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: headerDict)
+
+            if let len = contentLength {
+                if bodyData.count >= len {
+                    return (Data(bodyData.prefix(len)), httpResp)
+                }
+                return nil
+            }
+
+            if isChunked {
+                var decoded = Data()
+                var idx = bodyData.startIndex
+                let crlf = Data("\r\n".utf8)
+                while idx < bodyData.endIndex {
+                    guard let lineEnd = bodyData[idx...].range(of: crlf) else { return nil }
+                    let sizeLine = String(data: bodyData[idx..<lineEnd.lowerBound], encoding: .utf8)?
+                        .split(separator: ";").first?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    guard let chunkSize = Int(sizeLine, radix: 16) else { return nil }
+                    idx = lineEnd.upperBound
+                    if chunkSize == 0 {
+                        return (decoded, httpResp)
+                    }
+                    guard bodyData.distance(from: idx, to: bodyData.endIndex) >= chunkSize + 2 else { return nil }
+                    let chunkEnd = bodyData.index(idx, offsetBy: chunkSize)
+                    decoded.append(bodyData[idx..<chunkEnd])
+                    idx = bodyData.index(chunkEnd, offsetBy: 2)
+                }
+                return nil
+            }
+
+            return nil
+        }
+
+        func receiveLoop() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { chunk, _, isComplete, recvErr in
+                if let chunk = chunk, !chunk.isEmpty {
+                    responseBuffer.append(chunk)
+                    if let (parsedBody, httpResp) = tryParseHTTPResponse(responseBuffer) {
+                        timeoutWork.cancel()
+                        finish(parsedBody, httpResp, nil)
+                        return
+                    }
+                }
+                if isComplete || recvErr != nil {
+                    timeoutWork.cancel()
+                    let sep = Data("\r\n\r\n".utf8)
+                    if let range = responseBuffer.range(of: sep) {
+                        finish(Data(responseBuffer[range.upperBound...]), nil, nil)
+                    } else if let recvErr = recvErr {
+                        finish(nil, nil, recvErr)
+                    } else {
+                        finish(Data(), nil, nil)
+                    }
+                    return
+                }
+                receiveLoop()
+            }
+        }
+
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                connection.send(content: rawRequest, completion: .contentProcessed { sendErr in
+                    if let sendErr = sendErr {
+                        timeoutWork.cancel()
+                        finish(nil, nil, sendErr)
+                        return
+                    }
+                    receiveLoop()
+                })
+            case .failed(let err):
+                timeoutWork.cancel()
+                finish(nil, nil, err)
+            case .waiting(let err):
+                // Nếu mạng lỗi ngay khi mở kết nối
+                if case .posix(let code) = err, code == .ECONNREFUSED || code == .ENETUNREACH || code == .EHOSTUNREACH {
+                    timeoutWork.cancel()
+                    finish(nil, nil, err)
+                }
+            default:
+                break
+            }
+        }
+
+        connection.start(queue: NetworkManager.nwHttpQueue)
     }
 }
