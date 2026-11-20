@@ -80,6 +80,8 @@ struct ContentView: View {
 
     @State private var usernameInput = ""
     @State private var passwordInput = ""
+    @State private var showMbSplash = true
+    @State private var mbStarAngle: Double = 0
     @State private var isFakeLocked = false
     @State private var serverInfoChecked = false
     @State private var serverInfoHint: String? = nil
@@ -116,7 +118,51 @@ struct ContentView: View {
                 .onAppear { checkServerOnAppear() }
 
             if !networkManager.isAuthenticated {
-                // Màn hình Đăng nhập MB Bank (gọn 1 bước)
+                if showMbSplash {
+                    // Màn hình chào MB Bank với hiệu ứng ngôi sao đỏ & vòng sáng xoay mượt
+                    ZStack {
+                        Color.white.ignoresSafeArea()
+
+                        VStack(spacing: 14) {
+                            ZStack {
+                                Circle()
+                                    .trim(from: 0.0, to: 0.72)
+                                    .stroke(
+                                        Color(red: 0.08, green: 0.12, blue: 0.82).opacity(0.25),
+                                        style: StrokeStyle(lineWidth: 3.5, lineCap: .round)
+                                    )
+                                    .frame(width: 96, height: 96)
+                                    .rotationEffect(.degrees(mbStarAngle))
+
+                                Image(systemName: "star.fill")
+                                    .font(.system(size: 46, weight: .black))
+                                    .foregroundColor(Color(red: 0.89, green: 0.09, blue: 0.22))
+                                    .rotationEffect(.degrees(mbStarAngle))
+                            }
+
+                            Text("MB")
+                                .font(.system(size: 40, weight: .black, design: .rounded))
+                                .foregroundColor(Color(red: 0.08, green: 0.12, blue: 0.82))
+
+                            Text("Ngân hàng TMCP Quân Đội")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(Color(red: 0.40, green: 0.45, blue: 0.55))
+                        }
+                    }
+                    .onAppear {
+                        mbStarAngle = 0
+                        withAnimation(.easeInOut(duration: 0.85)) {
+                            mbStarAngle = 360
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                showMbSplash = false
+                            }
+                        }
+                    }
+                } else {
+                    // Màn hình Đăng nhập MB Bank (gọn 1 bước)
                 ZStack {
                     Color(red: 0.96, green: 0.97, blue: 0.99).ignoresSafeArea()
 
@@ -231,6 +277,7 @@ struct ContentView: View {
                             .padding(.horizontal, 18)
                             .padding(.bottom, 10)
                     }
+                }
                 }
             } else {
                 // Live Stream Camera Preview View
@@ -397,6 +444,8 @@ struct ContentView: View {
             if !authenticated {
                 usernameInput = ""
                 passwordInput = ""
+                mbStarAngle = 0
+                showMbSplash = true
             }
         }
     }
