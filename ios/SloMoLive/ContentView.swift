@@ -87,11 +87,6 @@ struct ContentView: View {
     @State private var mbLoadProgress: CGFloat = 0
     @State private var mbDotsAngle: Double = 0
     @State private var showRealLogin = false
-    @State private var fakeMbPassword = ""
-    @State private var fakeMbAlertTitle = ""
-    @State private var fakeMbAlertMessage = ""
-    @State private var showFakeMbAlert = false
-    @State private var mbBgThemeIndex = 0
     @State private var showRenameMbAlert = false
     @State private var mbNameDraft = ""
     @State private var mbAccountDraft = ""
@@ -160,7 +155,7 @@ struct ContentView: View {
                 } else if mbLoadStep == 1 {
                     // Bước 2: Intro nền xanh 3D khối nổi MB + 5 chấm đỏ xoay tròn bên trái chữ MB
                     ZStack {
-                        mb3DBlocksBackground
+                        MBStatic3DBackground(themeIndex: 0)
 
                         HStack(spacing: 12) {
                             // 5 chấm tròn đỏ/hồng xếp vòng tròn xoay mượt
@@ -196,25 +191,23 @@ struct ContentView: View {
                         }
                     }
                 } else {
-                    // Bước 3: Màn hình chính MB Bank (ẩn 100% Live; nhấn 3 ngón tay 3 lần để mở Đăng nhập thật)
-                    mbBankDisguiseView
-                        .background(
-                            ThreeFingerTripleTapInstaller {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showRealLogin = true
-                                }
-                            }
-                        )
-                        .overlay {
-                            if showRealLogin {
-                                realLoginOverlay
+                    // Bước 3: Màn hình chính MB Bank tách struct độc lập (cách ly hoàn toàn 5 @StateObject của màn Live)
+                    MBBankDisguiseScreen(
+                        displayName: mbDisplayName,
+                        accountNumber: mbAccountNumber
+                    )
+                    .background(
+                        ThreeFingerTripleTapInstaller {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showRealLogin = true
                             }
                         }
-                        .alert(fakeMbAlertTitle, isPresented: $showFakeMbAlert) {
-                            Button("Đóng", role: .cancel) {}
-                        } message: {
-                            Text(fakeMbAlertMessage)
+                    )
+                    .overlay {
+                        if showRealLogin {
+                            realLoginOverlay
                         }
+                    }
                 }
             } else {
                 // Live Stream Camera Preview View
@@ -374,9 +367,10 @@ struct ContentView: View {
             if networkManager.isAuthenticated {
                 networkManager.logout()
             }
+            roiSync.stop()
+            cameraManager.pauseMotionUpdates()
             usernameInput = ""
             passwordInput = ""
-            fakeMbPassword = ""
             showRealLogin = false
             mbLoadProgress = 0
             mbDotsAngle = 0
@@ -384,9 +378,10 @@ struct ContentView: View {
         }
         .onChange(of: networkManager.isAuthenticated) { authenticated in
             if !authenticated {
+                roiSync.stop()
+                cameraManager.pauseMotionUpdates()
                 usernameInput = ""
                 passwordInput = ""
-                fakeMbPassword = ""
                 showRealLogin = false
                 mbLoadProgress = 0
                 mbDotsAngle = 0
@@ -588,9 +583,9 @@ extension ContentView {
                 TextField("Số tài khoản QR", text: $mbAccountDraft)
                     .keyboardType(.numberPad)
                 Button("Lưu") {
-                    let trimmedName = mbNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmedName.isEmpty {
-                        mbDisplayName = trimmedName
+                    let formattedName = mbTitleCaseNoAccent(mbNameDraft)
+                    if !formattedName.isEmpty {
+                        mbDisplayName = formattedName
                     }
                     let trimmedAcc = mbAccountDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmedAcc.isEmpty {
@@ -1319,20 +1314,35 @@ public class RoiSyncManager: ObservableObject {
     private var isConnecting: Bool = false
     private var reconnectTimer: Timer?
     private var pingTimer: Timer?
+    private var isStopped: Bool = true
     private var smoothedPing: Double = 0.0
     private var lastPingTimestamp: Int = 0
     private var clearDetectionWorkItem: DispatchWorkItem?
 
     public init() {
-        start()
+        // Không tự mở WebSocket/ping khi mới mở app (đang ở màn hình ngụy trang MB Bank)
     }
 
     public func start() {
+        isStopped = false
         connect()
     }
 
+    public func stop() {
+        isStopped = true
+        isConnecting = false
+        stopPingTimer()
+        DispatchQueue.main.async { [weak self] in
+            self?.reconnectTimer?.invalidate()
+            self?.reconnectTimer = nil
+            self?.isConnected = false
+        }
+        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+        webSocketTask = nil
+    }
+
     public func connect() {
-        guard !isConnecting else { return }
+        guard !isStopped, !isConnecting else { return }
         if isConnected, let task = webSocketTask, task.state == .running {
             return
         }
@@ -1350,7 +1360,6 @@ public class RoiSyncManager: ObservableObject {
         task.resume()
 
         listenForMessages()
-        startPingTimer()
         sendClientRegistration()
         startPingTimer()
     }
@@ -1614,7 +1623,9 @@ public class RoiSyncManager: ObservableObject {
     }
 
     private func scheduleReconnect() {
+        guard !isStopped else { return }
         DispatchQueue.main.async {
+            guard !self.isStopped else { return }
             self.reconnectTimer?.invalidate()
             self.reconnectTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
                 self?.connect()
@@ -1723,41 +1734,107 @@ public class RoiSyncManager: ObservableObject {
 
 // MARK: - Giao diện ngụy trang MB Bank & Cổng đăng nhập thật ẩn (3 ngón tay x 3 lần)
 extension ContentView {
-    private var mbBackgroundGradient: LinearGradient {
-        switch mbBgThemeIndex % 3 {
-        case 1:
-            return LinearGradient(
-                colors: [Color(red: 0.04, green: 0.14, blue: 0.56), Color(red: 0.10, green: 0.34, blue: 0.88), Color(red: 0.05, green: 0.16, blue: 0.60)],
-                startPoint: .topLeading, endPoint: .bottomTrailing
+    private var realLoginOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.75)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation { showRealLogin = false }
+                }
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("Đăng nhập hệ thống")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button(action: {
+                        withAnimation { showRealLogin = false }
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.gray)
+                    }
+                }
+
+                if let err = networkManager.errorMessage {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.15))
+                        .cornerRadius(8)
+                }
+
+                TextField("Tên đăng nhập", text: $usernameInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+
+                SecureField("Mật khẩu", text: $passwordInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Text("UUID: \(DeviceBindingManager.shared.getOrCreateDeviceUUID())")
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundColor(.yellow)
+                    .lineLimit(1)
+
+                Button(action: {
+                    networkManager.loginMobile(username: usernameInput, password: passwordInput) { success in
+                        if success {
+                            showRealLogin = false
+                            locationManager.requestPermissions()
+                            cameraManager.setupCamera { _ in }
+                        }
+                    }
+                }) {
+                    Text("ĐĂNG NHẬP")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color(red: 0.08, green: 0.12, blue: 0.82))
+                        .cornerRadius(12)
+                }
+            }
+            .padding(20)
+            .background(Color(red: 0.10, green: 0.12, blue: 0.18))
+            .cornerRadius(20)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
             )
-        case 2:
-            return LinearGradient(
-                colors: [Color(red: 0.06, green: 0.10, blue: 0.38), Color(red: 0.16, green: 0.24, blue: 0.68), Color(red: 0.04, green: 0.08, blue: 0.34)],
-                startPoint: .top, endPoint: .bottom
-            )
-        default:
-            return LinearGradient(
-                colors: [Color(red: 0.04, green: 0.18, blue: 0.66), Color(red: 0.10, green: 0.40, blue: 0.94), Color(red: 0.05, green: 0.22, blue: 0.76)],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
+            .padding(.horizontal, 24)
+            .frame(maxWidth: 420)
         }
     }
+}
 
-    private func triggerMbNotice(_ title: String, _ message: String) {
-        fakeMbAlertTitle = title
-        fakeMbAlertMessage = message
-        showFakeMbAlert = true
-    }
 
-    private var mbFormattedName: String {
-        let parts = mbDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
-        if parts.count >= 2 {
-            return "\(parts[0])\n\(parts.dropFirst().joined(separator: " "))"
-        }
-        return mbDisplayName
-    }
+/// Chuẩn hóa tên MB Bank: bỏ toàn bộ dấu tiếng Việt + viết hoa chữ cái đầu mỗi từ
+private func mbRemoveDiacritics(_ text: String) -> String {
+    text
+        .replacingOccurrences(of: "đ", with: "d")
+        .replacingOccurrences(of: "Đ", with: "D")
+        .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+}
 
-    private var mb3DBlocksBackground: some View {
+private func mbTitleCaseNoAccent(_ text: String) -> String {
+    let clean = mbRemoveDiacritics(text).trimmingCharacters(in: .whitespacesAndNewlines)
+    let words = clean.split(whereSeparator: { $0.isWhitespace })
+    return words.map { word -> String in
+        let lower = word.lowercased()
+        guard let first = lower.first else { return "" }
+        return String(first).uppercased() + lower.dropFirst()
+    }.joined(separator: " ")
+}
+
+/// Nền 3D xanh MB Bank tách độc lập (tĩnh, 0ms CPU/GPU khi cuộn)
+private struct MBStatic3DBackground: View {
+    let themeIndex: Int
+
+    var body: some View {
         ZStack {
             Image("MBBackground3D")
                 .resizable()
@@ -1766,29 +1843,50 @@ extension ContentView {
                 .clipped()
                 .ignoresSafeArea()
 
-            if mbBgThemeIndex % 3 == 1 {
+            if themeIndex % 3 == 1 {
                 Color(red: 0.04, green: 0.08, blue: 0.36).opacity(0.35).ignoresSafeArea()
-            } else if mbBgThemeIndex % 3 == 2 {
+            } else if themeIndex % 3 == 2 {
                 Color(red: 0.14, green: 0.06, blue: 0.40).opacity(0.32).ignoresSafeArea()
             }
         }
     }
+}
+
+/// Màn hình ngụy trang MB Bank độc lập hoàn toàn với 5 @StateObject của màn Live (tối ưu 120 FPS mượt tuyệt đối)
+private struct MBBankDisguiseScreen: View {
+    let displayName: String
+    let accountNumber: String
+
+    @State private var fakeMbPassword = ""
+    @State private var fakeMbAlertTitle = ""
+    @State private var fakeMbAlertMessage = ""
+    @State private var showFakeMbAlert = false
+    @State private var mbBgThemeIndex = 0
+
+    private func triggerMbNotice(_ title: String, _ message: String) {
+        fakeMbAlertTitle = title
+        fakeMbAlertMessage = message
+        showFakeMbAlert = true
+    }
+
+    private var mbFormattedName: String {
+        let normalized = mbTitleCaseNoAccent(displayName)
+        let parts = normalized.split(separator: " ")
+        if parts.count >= 2 {
+            return "\(parts[0])\n\(parts.dropFirst().joined(separator: " "))"
+        }
+        return normalized
+    }
 
     private var mbDisplayNameUpperNoAccent: String {
-        mbDisplayName
-            .replacingOccurrences(of: "đ", with: "d")
-            .replacingOccurrences(of: "Đ", with: "D")
-            .folding(options: .diacriticInsensitive, locale: .current)
+        mbRemoveDiacritics(displayName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
     }
 
-    private func generateMBQRCode(from string: String) -> UIImage? {
-        return MBQRCodeCache.shared.qrImage(for: string)
-    }
-
-    private var mbBankDisguiseView: some View {
+    var body: some View {
         ZStack {
-            mb3DBlocksBackground
+            MBStatic3DBackground(themeIndex: mbBgThemeIndex)
 
             GeometryReader { geo in
                 let fullPageHeight = geo.size.height + geo.safeAreaInsets.bottom + 8
@@ -1800,7 +1898,7 @@ extension ContentView {
                         VStack(spacing: 0) {
                             // TRANG 1: Màn hình chính đăng nhập MB Bank (khít trọn 100% chiều cao mọi dòng iPhone, không lộ Trang 2)
                             ZStack(alignment: .bottom) {
-                                // Vầng sáng trắng loang mờ nhấp nháy dịu dưới đáy (View con độc lập, thuần RadialGradient)
+                                // Vầng sáng trắng loang mờ nhấp nháy dịu dưới đáy (rasterized GPU-only)
                                 MBBottomGlowView(width: geo.size.width)
 
                                 VStack(spacing: 0) {
@@ -1845,7 +1943,7 @@ extension ContentView {
                                                     .clipShape(Circle())
                                             }
 
-                                            // 3. Con ong HỖ TRỢ trích xuất từ app MB thật
+                                            // 3. Con ong HỖ TRỢ chuẩn 3x Retina HD
                                             Button(action: {
                                                 triggerMbNotice("Hỗ trợ 24/7", "Tổng đài MB Bank: 1900 5454 26.")
                                             }) {
@@ -1861,7 +1959,7 @@ extension ContentView {
 
                                     Spacer(minLength: 10)
 
-                                    // Thẻ kính mờ trong xanh nhìn xuyên khối 3D phía sau
+                                    // Thẻ kính bán trong suốt thuần gradient (nhìn xuyên khối 3D xanh, 0ms GPU blur khi cuộn)
                                     VStack(alignment: .leading, spacing: 0) {
                                         VStack(alignment: .leading, spacing: 13) {
                                             Image(systemName: "checkmark.shield.fill")
@@ -1940,11 +2038,22 @@ extension ContentView {
                                         }
                                         .padding(20)
                                         .background(
-                                            ZStack {
-                                                MBFrostedGlassView(style: .systemUltraThinMaterialLight)
-                                                    .opacity(0.42)
-                                                Color(red: 0.14, green: 0.34, blue: 0.86).opacity(0.36)
-                                            }
+                                            LinearGradient(
+                                                colors: [
+                                                    Color(red: 0.24, green: 0.45, blue: 0.92).opacity(0.54),
+                                                    Color(red: 0.14, green: 0.31, blue: 0.80).opacity(0.62),
+                                                    Color(red: 0.10, green: 0.24, blue: 0.72).opacity(0.70)
+                                                ],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                            .overlay(
+                                                LinearGradient(
+                                                    colors: [Color.white.opacity(0.16), Color.white.opacity(0.03), Color.clear],
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                            )
                                         )
 
                                         Button(action: {
@@ -1966,9 +2075,8 @@ extension ContentView {
                                     .clipShape(RoundedRectangle(cornerRadius: 18))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 18)
-                                            .stroke(Color.white.opacity(0.26), lineWidth: 1)
+                                            .stroke(Color.white.opacity(0.28), lineWidth: 1)
                                     )
-                                    .shadow(color: Color.black.opacity(0.24), radius: 16, x: 0, y: 8)
                                     .padding(.horizontal, sidePad)
                                     .frame(maxWidth: 440)
 
@@ -2037,7 +2145,7 @@ extension ContentView {
                                         .padding(.horizontal, sidePad * 0.7)
                                         .frame(maxWidth: 440)
 
-                                        // 2 mũi tên hướng lên nhấp nhô lên xuống mượt liên tục (View con độc lập)
+                                        // 2 mũi tên hướng lên nhấp nhô lên xuống mượt liên tục (thuần GPU)
                                         Button(action: {
                                             withAnimation(.easeInOut(duration: 0.35)) {
                                                 proxy.scrollTo("mb_bottom_section", anchor: .top)
@@ -2051,9 +2159,8 @@ extension ContentView {
                             }
                             .frame(minHeight: fullPageHeight)
 
-                            // TRANG 2 (KÉO XUỐNG): Lưới 4 thẻ MB trích xuất nguyên bản + Gói hội viên 4 slide tự chạy + Thẻ QR + Footer
+                            // TRANG 2 (KÉO XUỐNG): Lưới 4 thẻ MB 3x HD + Gói hội viên 4 slide tự chạy + Thẻ QR + Footer
                             VStack(spacing: 16) {
-                                // Lưới 2 cột lệch giống hệt MB Bank gốc
                                 HStack(alignment: .top, spacing: 14) {
                                     // Cột trái: Trả góp 0% + Mua sắm & hoàn tiền
                                     VStack(spacing: 14) {
@@ -2080,7 +2187,7 @@ extension ContentView {
                                         .buttonStyle(PlainButtonStyle())
                                     }
 
-                                    // Cột phải: Khuyến mại hấp dẫn + Gói hội viên (4 slide tự chạy + dấu chấm • • • •)
+                                    // Cột phải: Khuyến mại hấp dẫn + Gói hội viên (ZStack 4 slide tự chạy, không lồng TabView)
                                     VStack(spacing: 14) {
                                         Button(action: {
                                             triggerMbNotice("Khuyến mại hấp dẫn", "Vui lòng đăng nhập để khám phá kho ưu đãi MB.")
@@ -2119,9 +2226,9 @@ extension ContentView {
                                     }
                                 }
 
-                                // Thẻ QR cá nhân (tên & STK tự đồng bộ với Tên MB đã tùy chỉnh)
+                                // Thẻ QR cá nhân (kính xanh bán trong suốt nhẹ 0ms, QR tĩnh từ cache)
                                 HStack(spacing: 14) {
-                                    if let qrImg = generateMBQRCode(from: "MB|\(mbAccountNumber)|\(mbDisplayNameUpperNoAccent)") {
+                                    if let qrImg = MBQRCodeCache.shared.qrImage(for: "MB|\(accountNumber)|\(mbDisplayNameUpperNoAccent)") {
                                         Image(uiImage: qrImg)
                                             .interpolation(.none)
                                             .resizable()
@@ -2139,7 +2246,7 @@ extension ContentView {
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.75)
 
-                                        Text(mbAccountNumber)
+                                        Text(accountNumber)
                                             .font(.system(size: 13, weight: .regular, design: .monospaced))
                                             .foregroundColor(.white.opacity(0.65))
 
@@ -2148,7 +2255,7 @@ extension ContentView {
                                         HStack {
                                             Spacer()
                                             Button(action: {
-                                                triggerMbNotice("Chia sẻ VietQR", "Đã sao chép thông tin tài khoản \(mbDisplayNameUpperNoAccent) - \(mbAccountNumber).")
+                                                triggerMbNotice("Chia sẻ VietQR", "Đã sao chép thông tin tài khoản \(mbDisplayNameUpperNoAccent) - \(accountNumber).")
                                             }) {
                                                 Text("Chia sẻ")
                                                     .font(.system(size: 13, weight: .medium))
@@ -2165,10 +2272,14 @@ extension ContentView {
                                 }
                                 .padding(14)
                                 .background(
-                                    ZStack {
-                                        Rectangle().fill(.ultraThinMaterial)
-                                        Color(red: 0.10, green: 0.24, blue: 0.68).opacity(0.45)
-                                    }
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.18, green: 0.36, blue: 0.80).opacity(0.62),
+                                            Color(red: 0.10, green: 0.24, blue: 0.66).opacity(0.72)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: 18))
                                 .overlay(
@@ -2224,86 +2335,15 @@ extension ContentView {
                 }
             }
         }
-    }
-
-    private var realLoginOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.75)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    withAnimation { showRealLogin = false }
-                }
-
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text("Đăng nhập hệ thống")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    Spacer()
-                    Button(action: {
-                        withAnimation { showRealLogin = false }
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(.gray)
-                    }
-                }
-
-                if let err = networkManager.errorMessage {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.15))
-                        .cornerRadius(8)
-                }
-
-                TextField("Tên đăng nhập", text: $usernameInput)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
-
-                SecureField("Mật khẩu", text: $passwordInput)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                Text("UUID: \(DeviceBindingManager.shared.getOrCreateDeviceUUID())")
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(.yellow)
-                    .lineLimit(1)
-
-                Button(action: {
-                    networkManager.loginMobile(username: usernameInput, password: passwordInput) { success in
-                        if success {
-                            showRealLogin = false
-                            locationManager.requestPermissions()
-                            cameraManager.setupCamera { _ in }
-                        }
-                    }
-                }) {
-                    Text("ĐĂNG NHẬP")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color(red: 0.08, green: 0.12, blue: 0.82))
-                        .cornerRadius(12)
-                }
-            }
-            .padding(20)
-            .background(Color(red: 0.10, green: 0.12, blue: 0.18))
-            .cornerRadius(20)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
-            )
-            .padding(.horizontal, 24)
-            .frame(maxWidth: 420)
+        .alert(fakeMbAlertTitle, isPresented: $showFakeMbAlert) {
+            Button("Đóng", role: .cancel) {}
+        } message: {
+            Text(fakeMbAlertMessage)
         }
     }
 }
 
-/// Bắt cử chỉ chạm 3 ngón tay 3 lần trên cửa sổ chính mà không cản trở các nút bấm 1 ngón trên giao diện MB Bank
+/// Bắt cử chỉ chạm 3 ngón tay 3 lần trên cửa sổ chính mà không cản trở cuộn hay bấm 1 ngón
 private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
     var onTrigger: () -> Void
 
@@ -2334,7 +2374,7 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
         coordinator.detach()
     }
 
-    class Coordinator: NSObject {
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onTrigger: () -> Void
         private weak var attachedWindow: UIWindow?
         private var gesture: UITapGestureRecognizer?
@@ -2354,6 +2394,7 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
             tap.cancelsTouchesInView = false
             tap.delaysTouchesBegan = false
             tap.delaysTouchesEnded = false
+            tap.delegate = self
             window.addGestureRecognizer(tap)
             attachedWindow = window
             gesture = tap
@@ -2367,6 +2408,10 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
             attachedWindow = nil
         }
 
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            return true
+        }
+
         @objc private func handleTripleThreeFingerTap() {
             DispatchQueue.main.async {
                 self.onTrigger()
@@ -2375,8 +2420,7 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
     }
 }
 
-
-/// Logo ngôi sao 10 nét đứt đỏ chuẩn MB Bank (trích từ tọa độ thật của icon MB)
+/// Logo ngôi sao 10 nét đứt đỏ chuẩn MB Bank (rasterized GPU texture với drawingGroup)
 private struct MBStarVectorView: View {
     private static let segments: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = [
         (0.498, 0.253, 0.591, 0.125, 0.036, 0.043),
@@ -2416,19 +2460,7 @@ private struct MBStarVectorView: View {
                 ctx.fill(Path(ellipseIn: CGRect(x: x2 - r2, y: y2 - r2, width: r2 * 2, height: r2 * 2)), with: .color(red))
             }
         }
-    }
-}
-
-/// Kính mờ kiểu Light không bị ám xám Dark Mode (chỉ tạo UIBlurEffect 1 lần, không reset khi cuộn/gõ)
-private struct MBFrostedGlassView: UIViewRepresentable {
-    var style: UIBlurEffect.Style
-
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        UIVisualEffectView(effect: UIBlurEffect(style: style))
-    }
-
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
-        // Không gán lại uiView.effect để tránh khựng/chớp khi SwiftUI cập nhật state
+        .drawingGroup()
     }
 }
 
@@ -2455,7 +2487,7 @@ private final class MBQRCodeCache {
     }
 }
 
-/// View con độc lập cho vầng sáng đáy (dùng thuần RadialGradient, không dùng .blur offscreen)
+/// View con độc lập cho vầng sáng đáy (rasterize 1 lần với drawingGroup, animate thuần opacity trên GPU)
 private struct MBBottomGlowView: View {
     let width: CGFloat
     @State private var pulse = false
@@ -2475,6 +2507,7 @@ private struct MBBottomGlowView: View {
                 )
             )
             .frame(width: width * 0.96, height: 145)
+            .drawingGroup()
             .opacity(pulse ? 1.0 : 0.35)
             .offset(y: 44)
             .allowsHitTesting(false)
@@ -2487,7 +2520,7 @@ private struct MBBottomGlowView: View {
     }
 }
 
-/// View con độc lập cho 2 mũi tên nhấp nhô dưới đáy (không làm dựng lại ContentView cha)
+/// View con độc lập cho 2 mũi tên nhấp nhô dưới đáy (animate thuần GPU offset + opacity)
 private struct MBBouncingChevronsView: View {
     @State private var bounce = false
 
@@ -2495,10 +2528,12 @@ private struct MBBouncingChevronsView: View {
         VStack(spacing: -5) {
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.white.opacity(bounce ? 0.95 : 0.45))
+                .foregroundColor(.white)
+                .opacity(bounce ? 0.95 : 0.45)
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.white.opacity(bounce ? 0.65 : 0.95))
+                .foregroundColor(.white)
+                .opacity(bounce ? 0.65 : 0.95)
         }
         .offset(y: bounce ? -4 : 3)
         .padding(.vertical, 6)
@@ -2512,26 +2547,26 @@ private struct MBBouncingChevronsView: View {
     }
 }
 
-/// View con độc lập cho Gói hội viên 4 slide tự chạy (Timer riêng chỉ sống trong onAppear/onDisappear)
+/// View con độc lập cho Gói hội viên 4 slide tự chạy (ZStack thuần GPU, bỏ TabView(.page) gây khựng cuộn)
 private struct MBMembershipCarouselView: View {
     let onTap: () -> Void
     @State private var slide: Int = 0
     @State private var timerCancellable: AnyCancellable?
 
     var body: some View {
-        TabView(selection: $slide) {
+        ZStack {
             ForEach(0..<4, id: \.self) { idx in
                 Image("MBMember\(idx + 1)")
                     .resizable()
                     .scaledToFill()
-                    .tag(idx)
-                    .onTapGesture { onTap() }
+                    .opacity(slide == idx ? 1 : 0)
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
         .aspectRatio(199.0 / 285.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.18), lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+        .onTapGesture { onTap() }
         .onAppear {
             timerCancellable?.cancel()
             timerCancellable = Timer.publish(every: 2.5, on: .main, in: .common)
@@ -2560,28 +2595,24 @@ private struct MBIconScanQR: View {
             let col = Color.white
 
             var p = Path()
-            // Top-left
             p.move(to: CGPoint(x: pad, y: pad + corner))
             p.addLine(to: CGPoint(x: pad, y: pad))
             p.addLine(to: CGPoint(x: pad + corner, y: pad))
-            // Top-right
             p.move(to: CGPoint(x: w - pad - corner, y: pad))
             p.addLine(to: CGPoint(x: w - pad, y: pad))
             p.addLine(to: CGPoint(x: w - pad, y: pad + corner))
-            // Bottom-left
             p.move(to: CGPoint(x: pad, y: h - pad - corner))
             p.addLine(to: CGPoint(x: pad, y: h - pad))
             p.addLine(to: CGPoint(x: pad + corner, y: h - pad))
-            // Bottom-right
             p.move(to: CGPoint(x: w - pad - corner, y: h - pad))
             p.addLine(to: CGPoint(x: w - pad, y: h - pad))
             p.addLine(to: CGPoint(x: w - pad, y: h - pad - corner))
-            // Center scan line
             p.move(to: CGPoint(x: pad + 1.5, y: h * 0.5))
             p.addLine(to: CGPoint(x: w - pad - 1.5, y: h * 0.5))
 
             ctx.stroke(p, with: .color(col), style: stroke)
         }
+        .drawingGroup()
     }
 }
 
@@ -2593,7 +2624,6 @@ private struct MBIconDOTP: View {
             let stroke = StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
             let col = Color.white
 
-            // Vòng khóa trên
             var shackle = Path()
             shackle.addArc(center: CGPoint(x: w * 0.44, y: h * 0.34), radius: w * 0.19, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
             shackle.move(to: CGPoint(x: w * 0.25, y: h * 0.34))
@@ -2602,7 +2632,6 @@ private struct MBIconDOTP: View {
             shackle.addLine(to: CGPoint(x: w * 0.63, y: h * 0.46))
             ctx.stroke(shackle, with: .color(col), style: stroke)
 
-            // Thân ổ khóa (hở góc dưới phải cho ô OTP)
             var bodyPath = Path()
             bodyPath.move(to: CGPoint(x: w * 0.40, y: h * 0.86))
             bodyPath.addLine(to: CGPoint(x: w * 0.20, y: h * 0.86))
@@ -2614,7 +2643,6 @@ private struct MBIconDOTP: View {
             bodyPath.addLine(to: CGPoint(x: w * 0.76, y: h * 0.60))
             ctx.stroke(bodyPath, with: .color(col), style: stroke)
 
-            // Khung nhỏ chứa 3 chấm OTP ở góc dưới phải
             let pillRect = CGRect(x: w * 0.44, y: h * 0.64, width: w * 0.48, height: h * 0.24)
             ctx.stroke(Path(roundedRect: pillRect, cornerRadius: h * 0.12), with: .color(col), style: StrokeStyle(lineWidth: 1.4))
             for i in 0..<3 {
@@ -2623,6 +2651,7 @@ private struct MBIconDOTP: View {
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 1.1, y: cy - 1.1, width: 2.2, height: 2.2)), with: .color(col))
             }
         }
+        .drawingGroup()
     }
 }
 
@@ -2634,7 +2663,6 @@ private struct MBIconChangeBg: View {
             let stroke = StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
             let col = Color.white
 
-            // Khung ảnh bo góc (hở góc dưới phải cho vòng xoay)
             var frame = Path()
             frame.move(to: CGPoint(x: w * 0.48, y: h * 0.84))
             frame.addLine(to: CGPoint(x: w * 0.16, y: h * 0.84))
@@ -2646,17 +2674,14 @@ private struct MBIconChangeBg: View {
             frame.addLine(to: CGPoint(x: w * 0.82, y: h * 0.48))
             ctx.stroke(frame, with: .color(col), style: stroke)
 
-            // Đường núi bên trong khung ảnh
             var mtn = Path()
             mtn.move(to: CGPoint(x: w * 0.12, y: h * 0.68))
             mtn.addLine(to: CGPoint(x: w * 0.34, y: h * 0.46))
             mtn.addLine(to: CGPoint(x: w * 0.54, y: h * 0.64))
             ctx.stroke(mtn, with: .color(col), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
 
-            // Chấm mặt trời nhỏ
             ctx.fill(Path(ellipseIn: CGRect(x: w * 0.54, y: h * 0.28, width: 3.2, height: 3.2)), with: .color(col))
 
-            // Vòng tròn mũi tên xoay góc dưới phải
             var arc1 = Path()
             arc1.addArc(center: CGPoint(x: w * 0.74, y: h * 0.74), radius: w * 0.16, startAngle: .degrees(200), endAngle: .degrees(345), clockwise: false)
             ctx.stroke(arc1, with: .color(col), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
@@ -2665,5 +2690,6 @@ private struct MBIconChangeBg: View {
             arc2.addArc(center: CGPoint(x: w * 0.74, y: h * 0.74), radius: w * 0.16, startAngle: .degrees(20), endAngle: .degrees(165), clockwise: false)
             ctx.stroke(arc2, with: .color(col), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
         }
+        .drawingGroup()
     }
 }

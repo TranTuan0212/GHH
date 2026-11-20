@@ -315,10 +315,11 @@ public class CameraManager: NSObject, ObservableObject {
 
     public static var current: CameraManager? = nil
 
+    private var isMotionActive: Bool = false
+
     public override init() {
         super.init()
         CameraManager.current = self
-        startMotionUpdates()
         setupAudioSessionObservers()
     }
 
@@ -407,6 +408,8 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     private func startMotionUpdates() {
+        guard !isMotionActive else { return }
+        isMotionActive = true
         if motionManager.isAccelerometerAvailable {
             motionManager.accelerometerUpdateInterval = 0.2
             motionManager.startAccelerometerUpdates(to: .main) { [weak self] data, error in
@@ -425,7 +428,18 @@ public class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    public func pauseMotionUpdates() {
+        guard isMotionActive else { return }
+        isMotionActive = false
+        if motionManager.isAccelerometerActive {
+            motionManager.stopAccelerometerUpdates()
+        }
+        NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+    }
+
     private func stopMotionUpdates() {
+        isMotionActive = false
         if motionManager.isAccelerometerActive {
             motionManager.stopAccelerometerUpdates()
         }
@@ -729,6 +743,7 @@ public class CameraManager: NSObject, ObservableObject {
     }
 
     public func setupCamera(completion: @escaping (Bool) -> Void) {
+        startMotionUpdates()
         requestAudioPermissionIfNeeded()
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
