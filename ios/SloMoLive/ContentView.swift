@@ -86,9 +86,6 @@ struct ContentView: View {
     @State private var mbLoadStep: Int = 0
     @State private var mbLoadProgress: CGFloat = 0
     @State private var mbDotsAngle: Double = 0
-    @State private var mbMemberSlide: Int = 0
-    @State private var mbChevronBounce = false
-    @State private var mbBottomGlowPulse = false
     @State private var showRealLogin = false
     @State private var fakeMbPassword = ""
     @State private var fakeMbAlertTitle = ""
@@ -98,7 +95,6 @@ struct ContentView: View {
     @State private var showRenameMbAlert = false
     @State private var mbNameDraft = ""
     @State private var mbAccountDraft = ""
-    private let mbMemberTimer = Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()
     @State private var isFakeLocked = false
     @State private var serverInfoChecked = false
     @State private var serverInfoHint: String? = nil
@@ -384,8 +380,6 @@ struct ContentView: View {
             showRealLogin = false
             mbLoadProgress = 0
             mbDotsAngle = 0
-            mbChevronBounce = false
-            mbBottomGlowPulse = false
             mbLoadStep = 0
         }
         .onChange(of: networkManager.isAuthenticated) { authenticated in
@@ -396,8 +390,6 @@ struct ContentView: View {
                 showRealLogin = false
                 mbLoadProgress = 0
                 mbDotsAngle = 0
-                mbChevronBounce = false
-                mbBottomGlowPulse = false
                 mbLoadStep = 0
             }
         }
@@ -1791,17 +1783,7 @@ extension ContentView {
     }
 
     private func generateMBQRCode(from string: String) -> UIImage? {
-        let context = CIContext()
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        filter.correctionLevel = "M"
-        if let outputImage = filter.outputImage {
-            let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-            if let cgimg = context.createCGImage(scaled, from: scaled.extent) {
-                return UIImage(cgImage: cgimg)
-            }
-        }
-        return nil
+        return MBQRCodeCache.shared.qrImage(for: string)
     }
 
     private var mbBankDisguiseView: some View {
@@ -1818,24 +1800,8 @@ extension ContentView {
                         VStack(spacing: 0) {
                             // TRANG 1: Màn hình chính đăng nhập MB Bank (khít trọn 100% chiều cao mọi dòng iPhone, không lộ Trang 2)
                             ZStack(alignment: .bottom) {
-                                // Vầng sáng trắng loang mờ nhấp nháy dịu dưới đáy giống app MB gốc
-                                Ellipse()
-                                    .fill(
-                                        RadialGradient(
-                                            colors: [
-                                                Color.white.opacity(mbBottomGlowPulse ? 0.34 : 0.12),
-                                                Color(red: 0.45, green: 0.78, blue: 1.0).opacity(mbBottomGlowPulse ? 0.18 : 0.05),
-                                                Color.clear
-                                            ],
-                                            center: .center,
-                                            startRadius: 4,
-                                            endRadius: geo.size.width * 0.48
-                                        )
-                                    )
-                                    .frame(width: geo.size.width * 0.92, height: 130)
-                                    .blur(radius: 18)
-                                    .offset(y: 42)
-                                    .allowsHitTesting(false)
+                                // Vầng sáng trắng loang mờ nhấp nháy dịu dưới đáy (View con độc lập, thuần RadialGradient)
+                                MBBottomGlowView(width: geo.size.width)
 
                                 VStack(spacing: 0) {
                                     // Header trên cùng: Logo sao 10 nét đỏ MB (trái) + Cột dọc Cờ / Chuông / Con ong Hỗ trợ (phải)
@@ -2071,37 +2037,19 @@ extension ContentView {
                                         .padding(.horizontal, sidePad * 0.7)
                                         .frame(maxWidth: 440)
 
-                                        // 2 mũi tên hướng lên nhấp nhô lên xuống mượt liên tục
+                                        // 2 mũi tên hướng lên nhấp nhô lên xuống mượt liên tục (View con độc lập)
                                         Button(action: {
                                             withAnimation(.easeInOut(duration: 0.35)) {
                                                 proxy.scrollTo("mb_bottom_section", anchor: .top)
                                             }
                                         }) {
-                                            VStack(spacing: -5) {
-                                                Image(systemName: "chevron.up")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundColor(.white.opacity(mbChevronBounce ? 0.95 : 0.45))
-                                                Image(systemName: "chevron.up")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundColor(.white.opacity(mbChevronBounce ? 0.65 : 0.95))
-                                            }
-                                            .offset(y: mbChevronBounce ? -4 : 3)
-                                            .padding(.vertical, 6)
-                                            .padding(.horizontal, 24)
+                                            MBBouncingChevronsView()
                                         }
                                     }
                                     .padding(.bottom, bottomSafe)
                                 }
                             }
                             .frame(minHeight: fullPageHeight)
-                            .onAppear {
-                                withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
-                                    mbChevronBounce = true
-                                }
-                                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                                    mbBottomGlowPulse = true
-                                }
-                            }
 
                             // TRANG 2 (KÉO XUỐNG): Lưới 4 thẻ MB trích xuất nguyên bản + Gói hội viên 4 slide tự chạy + Thẻ QR + Footer
                             VStack(spacing: 16) {
@@ -2145,21 +2093,9 @@ extension ContentView {
                                         }
                                         .buttonStyle(PlainButtonStyle())
 
-                                        TabView(selection: $mbMemberSlide) {
-                                            ForEach(0..<4, id: \.self) { idx in
-                                                Image("MBMember\(idx + 1)")
-                                                    .resizable()
-                                                    .scaledToFill()
-                                                    .tag(idx)
-                                                    .onTapGesture {
-                                                        triggerMbNotice("Gói hội viên MB", "Vui lòng đăng nhập để đăng ký Gói hội viên.")
-                                                    }
-                                            }
+                                        MBMembershipCarouselView {
+                                            triggerMbNotice("Gói hội viên MB", "Vui lòng đăng nhập để đăng ký Gói hội viên.")
                                         }
-                                        .tabViewStyle(.page(indexDisplayMode: .never))
-                                        .aspectRatio(199.0 / 285.0, contentMode: .fit)
-                                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.18), lineWidth: 1))
                                     }
                                 }
 
@@ -2285,13 +2221,6 @@ extension ContentView {
                         .frame(maxWidth: .infinity)
                     }
                     .ignoresSafeArea(.container, edges: .bottom)
-                    .onReceive(mbMemberTimer) { _ in
-                        if !networkManager.isAuthenticated && mbLoadStep == 2 && !showRealLogin {
-                            withAnimation(.easeInOut(duration: 0.35)) {
-                                mbMemberSlide = (mbMemberSlide + 1) % 4
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -2394,8 +2323,10 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.onTrigger = onTrigger
-        DispatchQueue.main.async {
-            context.coordinator.attachIfNeeded(from: uiView)
+        if !context.coordinator.isAttached {
+            DispatchQueue.main.async {
+                context.coordinator.attachIfNeeded(from: uiView)
+            }
         }
     }
 
@@ -2407,6 +2338,7 @@ private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
         var onTrigger: () -> Void
         private weak var attachedWindow: UIWindow?
         private var gesture: UITapGestureRecognizer?
+        var isAttached: Bool { gesture != nil && attachedWindow != nil }
 
         init(onTrigger: @escaping () -> Void) {
             self.onTrigger = onTrigger
@@ -2487,7 +2419,7 @@ private struct MBStarVectorView: View {
     }
 }
 
-/// Kính mờ kiểu Light không bị ám xám Dark Mode giúp nhìn xuyên ánh sáng khối 3D xanh phía sau
+/// Kính mờ kiểu Light không bị ám xám Dark Mode (chỉ tạo UIBlurEffect 1 lần, không reset khi cuộn/gõ)
 private struct MBFrostedGlassView: UIViewRepresentable {
     var style: UIBlurEffect.Style
 
@@ -2496,7 +2428,124 @@ private struct MBFrostedGlassView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
-        uiView.effect = UIBlurEffect(style: style)
+        // Không gán lại uiView.effect để tránh khựng/chớp khi SwiftUI cập nhật state
+    }
+}
+
+/// Cache mã QR tĩnh (1 CIContext duy nhất, không bao giờ khởi tạo lại trong SwiftUI body)
+private final class MBQRCodeCache {
+    static let shared = MBQRCodeCache()
+    private let context = CIContext(options: [.useSoftwareRenderer: false])
+    private var cache: [String: UIImage] = [:]
+
+    private init() {}
+
+    func qrImage(for text: String) -> UIImage? {
+        if let existing = cache[text] { return existing }
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        guard let cgimg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        let img = UIImage(cgImage: cgimg)
+        if cache.count > 8 { cache.removeAll() }
+        cache[text] = img
+        return img
+    }
+}
+
+/// View con độc lập cho vầng sáng đáy (dùng thuần RadialGradient, không dùng .blur offscreen)
+private struct MBBottomGlowView: View {
+    let width: CGFloat
+    @State private var pulse = false
+
+    var body: some View {
+        Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: [
+                        Color.white.opacity(0.32),
+                        Color(red: 0.45, green: 0.78, blue: 1.0).opacity(0.14),
+                        Color.clear
+                    ],
+                    center: .center,
+                    startRadius: 2,
+                    endRadius: width * 0.46
+                )
+            )
+            .frame(width: width * 0.96, height: 145)
+            .opacity(pulse ? 1.0 : 0.35)
+            .offset(y: 44)
+            .allowsHitTesting(false)
+            .onAppear {
+                guard !pulse else { return }
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                    pulse = true
+                }
+            }
+    }
+}
+
+/// View con độc lập cho 2 mũi tên nhấp nhô dưới đáy (không làm dựng lại ContentView cha)
+private struct MBBouncingChevronsView: View {
+    @State private var bounce = false
+
+    var body: some View {
+        VStack(spacing: -5) {
+            Image(systemName: "chevron.up")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(bounce ? 0.95 : 0.45))
+            Image(systemName: "chevron.up")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(bounce ? 0.65 : 0.95))
+        }
+        .offset(y: bounce ? -4 : 3)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 24)
+        .onAppear {
+            guard !bounce else { return }
+            withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
+                bounce = true
+            }
+        }
+    }
+}
+
+/// View con độc lập cho Gói hội viên 4 slide tự chạy (Timer riêng chỉ sống trong onAppear/onDisappear)
+private struct MBMembershipCarouselView: View {
+    let onTap: () -> Void
+    @State private var slide: Int = 0
+    @State private var timerCancellable: AnyCancellable?
+
+    var body: some View {
+        TabView(selection: $slide) {
+            ForEach(0..<4, id: \.self) { idx in
+                Image("MBMember\(idx + 1)")
+                    .resizable()
+                    .scaledToFill()
+                    .tag(idx)
+                    .onTapGesture { onTap() }
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .aspectRatio(199.0 / 285.0, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.18), lineWidth: 1))
+        .onAppear {
+            timerCancellable?.cancel()
+            timerCancellable = Timer.publish(every: 2.5, on: .main, in: .common)
+                .autoconnect()
+                .sink { _ in
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        slide = (slide + 1) % 4
+                    }
+                }
+        }
+        .onDisappear {
+            timerCancellable?.cancel()
+            timerCancellable = nil
+        }
     }
 }
 
