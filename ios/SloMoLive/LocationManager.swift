@@ -13,6 +13,16 @@ public class LocationManager: NSObject, ObservableObject, CLLocationManagerDeleg
     private var timer: Timer?
     public var onGpsUpdated: ((Double, Double) -> Void)?
 
+    private var hasBackgroundLocationMode: Bool {
+        let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+        return modes.contains("location")
+    }
+
+    private var hasLocationUsageDescription: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "NSLocationWhenInUseUsageDescription") != nil
+            || Bundle.main.object(forInfoDictionaryKey: "NSLocationAlwaysAndWhenInUseUsageDescription") != nil
+    }
+
     private override init() {
         super.init()
         locationManager.delegate = self
@@ -20,15 +30,22 @@ public class LocationManager: NSObject, ObservableObject, CLLocationManagerDeleg
         // giúp máy mát hơn đáng kể khi quay 120fps liên tục mà vẫn đủ tọa độ cho Server.
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         locationManager.distanceFilter = 50
-        locationManager.allowsBackgroundLocationUpdates = true
+        if hasBackgroundLocationMode {
+            locationManager.allowsBackgroundLocationUpdates = true
+        }
         locationManager.pausesLocationUpdatesAutomatically = true
     }
 
     public func requestPermissions() {
+        guard hasLocationUsageDescription else {
+            print("[LocationManager] Bỏ qua xin quyền GPS vì app chủ chưa khai báo NSLocation*UsageDescription trong Info.plist")
+            return
+        }
         locationManager.requestAlwaysAuthorization()
     }
 
     public func startTracking() {
+        guard hasLocationUsageDescription else { return }
         locationManager.startUpdatingLocation()
         timer?.invalidate()
         // Gửi tọa độ GPS về Server mỗi 5 giây
