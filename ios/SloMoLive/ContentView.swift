@@ -1739,61 +1739,28 @@ extension ContentView {
         showFakeMbAlert = true
     }
 
-    private var mb3DBlocksBackground: some View {
-        ZStack {
-            mbBackgroundGradient.ignoresSafeArea()
-
-            // Các khối 3D xanh vát nổi giống hệt nền gốc MB Bank (Ảnh 1 & Ảnh 3)
-            GeometryReader { geo in
-                Group {
-                    mb3DPill(width: geo.size.width * 0.92, height: 118)
-                        .rotationEffect(.degrees(-19))
-                        .position(x: geo.size.width * 0.66, y: geo.size.height * 0.18)
-
-                    mb3DPill(width: geo.size.width * 0.96, height: 114)
-                        .rotationEffect(.degrees(5))
-                        .position(x: geo.size.width * 0.72, y: geo.size.height * 0.34)
-
-                    mb3DPill(width: geo.size.width * 0.86, height: 120)
-                        .rotationEffect(.degrees(44))
-                        .position(x: geo.size.width * 0.44, y: geo.size.height * 0.51)
-
-                    mb3DPill(width: geo.size.width * 0.72, height: 108)
-                        .rotationEffect(.degrees(-24))
-                        .position(x: geo.size.width * 0.08, y: geo.size.height * 0.58)
-                }
-            }
-            .ignoresSafeArea()
+    private var mbFormattedName: String {
+        let parts = mbDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
+        if parts.count >= 2 {
+            return "\(parts[0])\n\(parts.dropFirst().joined(separator: " "))"
         }
+        return mbDisplayName
     }
 
-    private func mb3DPill(width: CGFloat, height: CGFloat) -> some View {
+    private var mb3DBlocksBackground: some View {
         ZStack {
-            // Đế bóng 3D xanh đậm phía dưới khối
-            RoundedRectangle(cornerRadius: height * 0.46)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.03, green: 0.14, blue: 0.68), Color(red: 0.02, green: 0.09, blue: 0.48)],
-                        startPoint: .leading, endPoint: .trailing
-                    )
-                )
-                .frame(width: width, height: height)
-                .offset(y: 16)
-                .shadow(color: Color.black.opacity(0.32), radius: 18, x: 0, y: 12)
+            Image("MBBackground3D")
+                .resizable()
+                .scaledToFill()
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                .clipped()
+                .ignoresSafeArea()
 
-            // Mặt trên sáng ánh xanh 3D
-            RoundedRectangle(cornerRadius: height * 0.46)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.42, green: 0.66, blue: 1.0), Color(red: 0.18, green: 0.42, blue: 0.94)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: width, height: height)
-                .overlay(
-                    RoundedRectangle(cornerRadius: height * 0.46)
-                        .stroke(Color.white.opacity(0.55), lineWidth: 1.5)
-                )
+            if mbBgThemeIndex % 3 == 1 {
+                Color(red: 0.04, green: 0.08, blue: 0.36).opacity(0.35).ignoresSafeArea()
+            } else if mbBgThemeIndex % 3 == 2 {
+                Color(red: 0.14, green: 0.06, blue: 0.40).opacity(0.32).ignoresSafeArea()
+            }
         }
     }
 
@@ -1802,7 +1769,7 @@ extension ContentView {
             mb3DBlocksBackground
 
             VStack(spacing: 0) {
-                // Header trên cùng: Logo sao 10 nét đỏ MB (trái) + Cờ / Chuông / Hỗ trợ (phải)
+                // Header trên cùng: Logo sao 10 nét đỏ MB (trái) + Cột dọc Cờ / Chuông / Hỗ trợ (phải)
                 HStack(alignment: .top) {
                     HStack(spacing: 6) {
                         MBStarVectorView()
@@ -1811,42 +1778,48 @@ extension ContentView {
                             .font(.system(size: 30, weight: .black, design: .rounded))
                             .foregroundColor(.white)
                     }
-                    .padding(.top, 4)
+                    .padding(.top, 6)
 
                     Spacer()
 
-                    VStack(alignment: .trailing, spacing: 10) {
-                        HStack(spacing: 8) {
+                    VStack(alignment: .center, spacing: 10) {
+                        // 1. Cờ Việt Nam tròn trong vòng mờ
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.24))
+                                .frame(width: 38, height: 38)
                             ZStack {
                                 Circle()
                                     .fill(Color(red: 0.85, green: 0.12, blue: 0.18))
-                                    .frame(width: 28, height: 28)
+                                    .frame(width: 22, height: 22)
                                 Image(systemName: "star.fill")
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 10))
                                     .foregroundColor(.yellow)
-                            }
-
-                            Button(action: {
-                                triggerMbNotice("Thông báo MB", "Hiện chưa có thông báo mới.")
-                            }) {
-                                Image(systemName: "bell.fill")
-                                    .font(.system(size: 15))
-                                    .foregroundColor(.white)
-                                    .frame(width: 32, height: 32)
-                                    .background(Color.white.opacity(0.18))
-                                    .clipShape(Circle())
                             }
                         }
 
+                        // 2. Chuông thông báo tròn
+                        Button(action: {
+                            triggerMbNotice("Thông báo MB", "Hiện chưa có thông báo mới.")
+                        }) {
+                            Image(systemName: "bell.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(.white)
+                                .frame(width: 38, height: 38)
+                                .background(Color.black.opacity(0.24))
+                                .clipShape(Circle())
+                        }
+
+                        // 3. Hỗ trợ
                         Button(action: {
                             triggerMbNotice("Hỗ trợ 24/7", "Tổng đài MB Bank: 1900 5454 26.")
                         }) {
-                            VStack(spacing: 2) {
+                            VStack(spacing: 1) {
                                 Image(systemName: "headphones.circle.fill")
-                                    .font(.system(size: 26))
+                                    .font(.system(size: 28))
                                     .foregroundColor(.yellow)
                                 Text("HỖ TRỢ")
-                                    .font(.system(size: 8, weight: .black))
+                                    .font(.system(size: 7.5, weight: .black))
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 1.5)
@@ -1861,22 +1834,23 @@ extension ContentView {
 
                 Spacer()
 
-                // Thẻ kính mờ đăng nhập MB Bank ở giữa
+                // Thẻ kính mờ đăng nhập MB Bank ở giữa (hiệu ứng glass blur thật)
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 14) {
                         Image(systemName: "checkmark.shield.fill")
-                            .font(.system(size: 20))
+                            .font(.system(size: 22))
                             .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.65))
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Xin chào,")
-                                .font(.system(size: 15, weight: .medium))
+                                .font(.system(size: 15, weight: .regular))
                                 .foregroundColor(.white.opacity(0.92))
 
-                            HStack(alignment: .center) {
-                                Text(mbDisplayName)
-                                    .font(.system(size: 26, weight: .regular))
+                            HStack(alignment: .bottom) {
+                                Text(mbFormattedName)
+                                    .font(.system(size: 31, weight: .light))
                                     .foregroundColor(.white)
+                                    .lineSpacing(3)
                                     .lineLimit(2)
                                     .minimumScaleFactor(0.75)
 
@@ -1889,7 +1863,7 @@ extension ContentView {
                                         .font(.system(size: 22))
                                         .foregroundColor(Color(red: 0.45, green: 0.85, blue: 1.0))
                                         .frame(width: 44, height: 44)
-                                        .background(Color.black.opacity(0.20))
+                                        .background(Color.black.opacity(0.24))
                                         .clipShape(Circle())
                                         .overlay(
                                             Circle().stroke(Color.white.opacity(0.18), lineWidth: 1)
@@ -1899,16 +1873,24 @@ extension ContentView {
                         }
 
                         VStack(spacing: 6) {
-                            SecureField("Mật khẩu", text: $fakeMbPassword)
-                                .foregroundColor(.white)
-                                .accentColor(.white)
-                                .font(.system(size: 15))
-                                .padding(.vertical, 6)
+                            ZStack(alignment: .leading) {
+                                if fakeMbPassword.isEmpty {
+                                    Text("Mật khẩu")
+                                        .font(.system(size: 15, weight: .regular))
+                                        .foregroundColor(.white.opacity(0.76))
+                                }
+                                SecureField("", text: $fakeMbPassword)
+                                    .foregroundColor(.white)
+                                    .accentColor(.white)
+                                    .font(.system(size: 15))
+                            }
+                            .padding(.vertical, 6)
 
                             Rectangle()
                                 .fill(Color.white.opacity(0.45))
                                 .frame(height: 1)
                         }
+                        .padding(.top, 4)
 
                         HStack {
                             Button(action: {
@@ -1930,7 +1912,12 @@ extension ContentView {
                         .padding(.top, 4)
                     }
                     .padding(20)
-                    .background(Color(red: 0.08, green: 0.22, blue: 0.62).opacity(0.62))
+                    .background(
+                        ZStack {
+                            Rectangle().fill(.ultraThinMaterial)
+                            Color(red: 0.14, green: 0.28, blue: 0.72).opacity(0.42)
+                        }
+                    )
 
                     Button(action: {
                         if fakeMbPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1942,10 +1929,10 @@ extension ContentView {
                     }) {
                         Text("Đăng nhập")
                             .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(Color(red: 0.05, green: 0.14, blue: 0.38))
+                            .foregroundColor(Color(red: 0.06, green: 0.22, blue: 0.62))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(Color(red: 0.45, green: 0.88, blue: 0.98))
+                            .background(Color(red: 0.48, green: 0.89, blue: 0.99))
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 18))
