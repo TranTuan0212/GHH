@@ -78,8 +78,8 @@ struct ContentView: View {
     @StateObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var roiSync = RoiSyncManager.shared
 
-    @State private var usernameInput = "demouser"
-    @State private var passwordInput = "user123"
+    @State private var usernameInput = ""
+    @State private var passwordInput = ""
     @State private var isFakeLocked = false
     @State private var serverInfoChecked = false
     @State private var serverInfoHint: String? = nil
@@ -362,6 +362,14 @@ struct ContentView: View {
             }
             if networkManager.isAuthenticated {
                 networkManager.logout()
+            }
+            usernameInput = ""
+            passwordInput = ""
+        }
+        .onChange(of: networkManager.isAuthenticated) { authenticated in
+            if !authenticated {
+                usernameInput = ""
+                passwordInput = ""
             }
         }
     }
