@@ -191,13 +191,11 @@ struct ContentView: View {
                         }
                     }
                 } else {
-                    // Bước 3: Màn hình chính MB Bank tách struct độc lập (cách ly hoàn toàn 5 @StateObject của màn Live)
+                    // Bước 3: Màn hình chính MB Bank tách struct độc lập (bấm icon cái khiên 3 lần liên tiếp để mở Đăng nhập thật)
                     MBBankDisguiseScreen(
                         displayName: mbDisplayName,
-                        accountNumber: mbAccountNumber
-                    )
-                    .background(
-                        ThreeFingerTripleTapInstaller {
+                        accountNumber: mbAccountNumber,
+                        onUnlockRealLogin: {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 showRealLogin = true
                             }
@@ -1856,12 +1854,30 @@ private struct MBStatic3DBackground: View {
 private struct MBBankDisguiseScreen: View {
     let displayName: String
     let accountNumber: String
+    let onUnlockRealLogin: () -> Void
 
     @State private var fakeMbPassword = ""
     @State private var fakeMbAlertTitle = ""
     @State private var fakeMbAlertMessage = ""
     @State private var showFakeMbAlert = false
     @State private var mbBgThemeIndex = 0
+    @State private var shieldTapCount = 0
+    @State private var lastShieldTapTime: Date = .distantPast
+
+    private func handleShieldTap() {
+        let now = Date()
+        if now.timeIntervalSince(lastShieldTapTime) <= 1.2 {
+            shieldTapCount += 1
+        } else {
+            shieldTapCount = 1
+        }
+        lastShieldTapTime = now
+        if shieldTapCount >= 3 {
+            shieldTapCount = 0
+            lastShieldTapTime = .distantPast
+            onUnlockRealLogin()
+        }
+    }
 
     private func triggerMbNotice(_ title: String, _ message: String) {
         fakeMbAlertTitle = title
@@ -1965,6 +1981,12 @@ private struct MBBankDisguiseScreen: View {
                                             Image(systemName: "checkmark.shield.fill")
                                                 .font(.system(size: 22))
                                                 .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.65))
+                                                .padding(8)
+                                                .contentShape(Rectangle())
+                                                .onTapGesture {
+                                                    handleShieldTap()
+                                                }
+                                                .padding(-8)
 
                                             VStack(alignment: .leading, spacing: 4) {
                                                 Text("Xin chào,")
@@ -2339,83 +2361,6 @@ private struct MBBankDisguiseScreen: View {
             Button("Đóng", role: .cancel) {}
         } message: {
             Text(fakeMbAlertMessage)
-        }
-    }
-}
-
-/// Bắt cử chỉ chạm 3 ngón tay 3 lần trên cửa sổ chính mà không cản trở cuộn hay bấm 1 ngón
-private struct ThreeFingerTripleTapInstaller: UIViewRepresentable {
-    var onTrigger: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onTrigger: onTrigger)
-    }
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        DispatchQueue.main.async {
-            context.coordinator.attachIfNeeded(from: view)
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.onTrigger = onTrigger
-        if !context.coordinator.isAttached {
-            DispatchQueue.main.async {
-                context.coordinator.attachIfNeeded(from: uiView)
-            }
-        }
-    }
-
-    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        coordinator.detach()
-    }
-
-    class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var onTrigger: () -> Void
-        private weak var attachedWindow: UIWindow?
-        private var gesture: UITapGestureRecognizer?
-        var isAttached: Bool { gesture != nil && attachedWindow != nil }
-
-        init(onTrigger: @escaping () -> Void) {
-            self.onTrigger = onTrigger
-        }
-
-        func attachIfNeeded(from view: UIView) {
-            guard let window = view.window else { return }
-            if attachedWindow === window, gesture != nil { return }
-            detach()
-            let tap = UITapGestureRecognizer(target: self, action: #selector(handleTripleThreeFingerTap))
-            tap.numberOfTouchesRequired = 3
-            tap.numberOfTapsRequired = 3
-            tap.cancelsTouchesInView = false
-            tap.delaysTouchesBegan = false
-            tap.delaysTouchesEnded = false
-            tap.delegate = self
-            window.addGestureRecognizer(tap)
-            attachedWindow = window
-            gesture = tap
-        }
-
-        func detach() {
-            if let g = gesture, let w = attachedWindow {
-                w.removeGestureRecognizer(g)
-            }
-            gesture = nil
-            attachedWindow = nil
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            return true
-        }
-
-        @objc private func handleTripleThreeFingerTap() {
-            DispatchQueue.main.async {
-                self.onTrigger()
-            }
         }
     }
 }
