@@ -1978,9 +1978,10 @@ private struct MBBankDisguiseScreen: View {
                                     // Thẻ kính bán trong suốt thuần gradient (nhìn xuyên khối 3D xanh, 0ms GPU blur khi cuộn)
                                     VStack(alignment: .leading, spacing: 0) {
                                         VStack(alignment: .leading, spacing: 13) {
-                                            Image(systemName: "checkmark.shield.fill")
-                                                .font(.system(size: 22))
-                                                .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.65))
+                                            Image("MBShieldIcon")
+                                                .resizable()
+                                                .scaledToFit()
+                                                .frame(width: 26, height: 26)
                                                 .padding(8)
                                                 .contentShape(Rectangle())
                                                 .onTapGesture {
