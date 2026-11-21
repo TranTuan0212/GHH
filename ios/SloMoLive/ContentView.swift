@@ -1861,20 +1861,14 @@ private struct MBBankDisguiseScreen: View {
     @State private var fakeMbAlertMessage = ""
     @State private var showFakeMbAlert = false
     @State private var mbBgThemeIndex = 0
-    @State private var shieldTapCount = 0
-    @State private var lastShieldTapTime: Date = .distantPast
+    @State private var shieldTapTimestamps: [Date] = []
 
     private func handleShieldTap() {
         let now = Date()
-        if now.timeIntervalSince(lastShieldTapTime) <= 1.2 {
-            shieldTapCount += 1
-        } else {
-            shieldTapCount = 1
-        }
-        lastShieldTapTime = now
-        if shieldTapCount >= 3 {
-            shieldTapCount = 0
-            lastShieldTapTime = .distantPast
+        shieldTapTimestamps = shieldTapTimestamps.filter { now.timeIntervalSince($0) <= 2.0 }
+        shieldTapTimestamps.append(now)
+        if shieldTapTimestamps.count >= 3 {
+            shieldTapTimestamps.removeAll()
             onUnlockRealLogin()
         }
     }
